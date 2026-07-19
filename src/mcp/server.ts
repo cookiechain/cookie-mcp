@@ -287,16 +287,32 @@ registerTool(
     description:
       "Launch a new token on the Cookiebox dynamic bonding curve: grinds a vanity mint (ends in " +
       "'box'), uploads metadata, and creates the bonding-curve pool. Signs locally; requires " +
-      "COOKIE_PRIVATE_KEY. An https `imageUrl` is required. Returns the mint, pool, and links.",
+      "COOKIE_PRIVATE_KEY. ALWAYS give the token a logo — a token without one shows a placeholder " +
+      "and looks low-effort. Generate a simple square (512x512) PNG or JPEG and pass it as " +
+      "`imageBase64` (+ `imageMimeType`), OR supply an already-hosted `imageUrl`. Returns the mint, " +
+      "pool, and links.",
     inputSchema: {
       name: z.string().min(1).max(64).describe('token name, e.g. "Cookie Monster"'),
       symbol: z.string().min(1).max(10).describe('ticker, e.g. "MON"'),
       description: z.string().max(1000).optional().describe("short description"),
+      imageBase64: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          "PREFERRED: the logo as base64-encoded image bytes (a data-URI prefix is accepted and " +
+            "stripped). Generate a square PNG/JPEG for the token. Requires imageMimeType. Mutually " +
+            "exclusive with imageUrl.",
+        ),
+      imageMimeType: z
+        .string()
+        .optional()
+        .describe('MIME type for imageBase64, e.g. "image/png" or "image/jpeg"'),
       imageUrl: z
         .string()
         .url()
         .optional()
-        .describe("https URL to the token image (required by the metadata API)"),
+        .describe("alternative to imageBase64: https URL to an already-hosted token logo"),
       initialBuyCook: z
         .number()
         .positive()
@@ -309,6 +325,8 @@ registerTool(
       name: string;
       symbol: string;
       description?: string;
+      imageBase64?: string;
+      imageMimeType?: string;
       imageUrl?: string;
       initialBuyCook?: number;
     }) => deployToken(a),

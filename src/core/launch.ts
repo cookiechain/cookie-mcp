@@ -25,6 +25,7 @@ export interface DeployTokenResult {
   metadataUri: string;
   imageUrl: string;
   links: { explorerTx: string; token: string; pool: string; cookiebox: string };
+  warning?: string;
 }
 
 export async function deployToken(args: {
@@ -32,6 +33,8 @@ export async function deployToken(args: {
   symbol: string;
   description?: string;
   imageUrl?: string;
+  imageBase64?: string;
+  imageMimeType?: string;
   initialBuyCook?: number;
 }): Promise<DeployTokenResult> {
   const { keypair } = requireWallet();
@@ -57,12 +60,15 @@ export async function deployToken(args: {
   const { keypair: mintKp, address: mint, vanity } = grindVanityMint(VANITY_SUFFIX);
 
   // Metadata upload uses the mint as its storage key, so grind the mint first.
+  const hasLogo = !!args.imageBase64?.trim() || !!args.imageUrl?.trim();
   const { uri, imageUrl } = await uploadMetadata(keypair, {
     mint,
     name,
     symbol,
     description: args.description,
     imageUrl: args.imageUrl,
+    imageBase64: args.imageBase64,
+    imageMimeType: args.imageMimeType,
   });
 
   const { ix, pool } = buildLaunchIx({
@@ -117,5 +123,12 @@ export async function deployToken(args: {
       pool: explorerAddressUrl(pool.toBase58()),
       cookiebox: `${COOKIEBOX_APP_URL}/token/${mint}`,
     },
+    ...(hasLogo
+      ? {}
+      : {
+          warning:
+            "Launched without a logo — the token will show a placeholder. Consider generating a " +
+            "square PNG/JPEG and re-uploading metadata, or supply imageBase64/imageUrl next time.",
+        }),
   };
 }

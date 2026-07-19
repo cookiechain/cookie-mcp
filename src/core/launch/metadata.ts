@@ -1,6 +1,7 @@
 // Upload DBC token metadata to Cookiebox's metadata API and return the Metaplex `uri` for the launch
 // tx. The API authorizes the upload with an ed25519 signature over a fixed message (a message
-// signature — moves no funds). Image is passed as an https URL (no file upload from a server).
+// signature — moves no funds). The image can be supplied two ways: raw bytes (base64 + mimeType,
+// what an image-generating agent produces) or an already-hosted https URL — not both.
 import type { Keypair } from "@solana/web3.js";
 import { ed25519 } from "@noble/curves/ed25519";
 
@@ -15,8 +16,31 @@ export interface UploadMetadataResult {
 
 export async function uploadMetadata(
   keypair: Keypair,
-  params: { mint: string; name: string; symbol: string; description?: string; imageUrl?: string },
+  params: {
+    mint: string;
+    name: string;
+    symbol: string;
+    description?: string;
+    imageUrl?: string;
+    imageBase64?: string;
+    imageMimeType?: string;
+  },
 ): Promise<UploadMetadataResult> {
+  const hasBytes = !!params.imageBase64?.trim();
+  const hasUrl = !!params.imageUrl?.trim();
+  if (hasBytes && hasUrl) {
+    throw new CookieMcpError(
+      "provide either image bytes or an image URL, not both",
+      "pass imageBase64 (+ imageMimeType) for a generated logo, OR imageUrl for a hosted one",
+    );
+  }
+  if (hasBytes && !params.imageMimeType?.trim()) {
+    throw new CookieMcpError(
+      "imageMimeType is required when passing imageBase64",
+      'set the image MIME type, e.g. "image/png" or "image/jpeg"',
+    );
+  }
+
   const timestamp = Date.now();
   const message = new TextEncoder().encode(
     `Token metadata upload.\n\n` +
@@ -34,7 +58,14 @@ export async function uploadMetadata(
     signature: Buffer.from(sig).toString("base64"),
     timestamp,
   };
-  if (params.imageUrl?.trim()) body.imageUrl = params.imageUrl.trim();
+  if (hasBytes) {
+    // Strip a data-URI prefix if the agent passed one (e.g. "data:image/png;base64,....").
+    const raw = params.imageBase64!.trim();
+    body.image = raw.replace(/^data:[^;]+;base64,/, "");
+    body.mimeType = params.imageMimeType!.trim();
+  } else if (hasUrl) {
+    body.imageUrl = params.imageUrl!.trim();
+  }
 
   let res: Response;
   try {
@@ -66,7 +97,7 @@ export async function uploadMetadata(
     throw new CookieMcpError(
       data.error ?? `metadata upload failed (HTTP ${res.status})`,
       data.reason ??
-        "provide a valid https `imageUrl` (image is required); check name/symbol and retry",
+        "provide a logo — imageBase64 (+ imageMimeType) or a valid https `imageUrl`; check name/symbol and retry",
     );
   }
   return { uri: data.uri, imageUrl: data.imageUrl };
