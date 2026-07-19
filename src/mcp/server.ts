@@ -17,6 +17,7 @@ import { ownPublicKey } from "../core/wallet";
 import { trade } from "../core/trade";
 import { transfer } from "../core/transfer";
 import { deployToken } from "../core/launch";
+import { claimCreatorFees } from "../core/launch/creatorFees";
 import {
   createPool,
   addLiquidity,
@@ -265,6 +266,21 @@ registerTool(
       initialBuyCook?: number;
     }) => deployToken(a),
   ),
+);
+
+registerTool(
+  "claim_creator_fees",
+  {
+    title: "Claim DBC creator fees",
+    description:
+      "Claim the creator trading fees a token you launched on the Cookiebox bonding curve (DBC) has " +
+      "accrued from its trades. Only the launch wallet can claim. Simulates before sending; returns the " +
+      "claimed base/quote amounts. Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      mint: z.string().min(32).max(44).describe("the base mint of a token you launched"),
+    },
+  },
+  tool(async (a: { mint: string }) => claimCreatorFees(a)),
 );
 
 // Liquidity — Cookiebox DAMM v2 + CookieSwap SAMM. Every op simulates before sending and honors the

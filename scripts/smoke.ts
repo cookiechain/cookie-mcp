@@ -23,6 +23,7 @@ const EXPECTED_TOOLS = [
   "trade",
   "transfer",
   "deploy_token",
+  "claim_creator_fees",
   "create_pool",
   "add_liquidity",
   "remove_liquidity",

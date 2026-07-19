@@ -12,7 +12,8 @@ it's non-custodial by design. Its tools let an agent:
 - **Swap** any Cookie Chain token pair through the [Candy Shop](https://swap.cookiescan.io) aggregator,
   which routes across all Cookie Chain DEX liquidity for the best fill.
 - **Transfer** COOK or any SPL / Token-2022 token.
-- **Launch tokens** on the Cookiebox bonding curve (`deploy_token`).
+- **Launch tokens** on the Cookiebox bonding curve (`deploy_token`) and claim the creator fees they earn
+  (`claim_creator_fees`).
 - **Manage liquidity** — create pools, add / remove liquidity, claim accrued fees, and permanently lock
   positions across Cookiebox DAMM v2 and CookieSwap SAMM (venue auto-detected).
 
@@ -68,7 +69,8 @@ file path) to enable swaps, transfers, and launches.
 **Reads** (no key): `chain_health`, `get_pools`, `get_token_info`, `get_quote`, `get_balance`.
 
 **Money** (need `COOKIE_PRIVATE_KEY`): `trade` (swap via Candy Shop), `transfer` (COOK or any token),
-`deploy_token` (launch on the Cookiebox bonding curve).
+`deploy_token` (launch on the Cookiebox bonding curve), `claim_creator_fees` (claim the creator trading
+fees a token you launched has earned).
 
 **Liquidity** (need `COOKIE_PRIVATE_KEY`): `create_pool`, `add_liquidity`, `remove_liquidity`,
 `claim_fees` (Cookiebox DAMM v2 + CookieSwap SAMM, venue auto-detected), `lock_liquidity` (Cookiebox
