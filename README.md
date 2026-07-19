@@ -15,7 +15,7 @@ it's non-custodial by design. Its tools let an agent:
 - **Launch tokens** on the Cookiebox bonding curve (`deploy_token`) and claim the creator fees they earn
   (`claim_creator_fees`).
 - **Manage liquidity** — create pools, add / remove liquidity, claim accrued fees, and permanently lock
-  positions across Cookiebox DAMM v2 and CookieSwap SAMM (venue auto-detected).
+  positions across Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM (venue auto-detected).
 - **Liquid-stake** COOK for bCOOK and redeem it instantly (`stake` / `unstake` / `stake_info`).
 
 Safe by default: read-only until you add a key, a hard per-trade spend cap, and every money-moving action
@@ -75,8 +75,9 @@ file path) to enable swaps, transfers, and launches.
 curve), `claim_creator_fees` (claim the creator trading fees a token you launched has earned).
 
 **Liquidity** (need `COOKIE_PRIVATE_KEY`): `create_pool`, `add_liquidity`, `remove_liquidity`,
-`claim_fees` (Cookiebox DAMM v2 + CookieSwap SAMM, venue auto-detected), `lock_liquidity` (Cookiebox
-DAMM v2, permanent).
+`claim_fees` (Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM, venue auto-detected),
+`lock_liquidity` (Cookiebox DAMM v2, permanent). Concentrated-liquidity venues (CLMM / SAMM) open a
+full-range position by default.
 
 Use the COOK / native mint `So11111111111111111111111111111111111111112` for COOK. Every tool returns
 JSON; failures return `{ error, hint }` — never a stack trace, never your key.
