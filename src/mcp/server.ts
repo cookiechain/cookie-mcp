@@ -17,7 +17,7 @@ import { ownPublicKey } from "../core/wallet";
 import { trade } from "../core/trade";
 import { transfer } from "../core/transfer";
 import { deployToken } from "../core/launch";
-import { LP_ENABLED, addLiquidity, removeLiquidity, lockLiquidity } from "../core/liquidity/damm";
+import { createPool, addLiquidity, removeLiquidity, lockLiquidity } from "../core/liquidity";
 
 type ToolContent = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
 
@@ -261,68 +261,109 @@ registerTool(
   ),
 );
 
-// DAMM v2 liquidity — UNVALIDATED, opt-in only (COOKIE_ENABLE_UNVALIDATED_LP=1). Hidden by default so
-// unvalidated fund-moving tools can't be called by accident.
-if (LP_ENABLED) {
-  registerTool(
-    "add_liquidity",
-    {
-      title: "Add liquidity (Cookiebox DAMM v2) — UNVALIDATED",
-      description:
-        "⚠️ UNVALIDATED. Add liquidity to a Cookiebox DAMM v2 pool (opens a new position). Simulates " +
-        "before sending; honors the spend cap. Requires COOKIE_PRIVATE_KEY.",
-      inputSchema: {
-        poolPk: z.string().min(32).max(44).describe("DAMM v2 pool address (see get_pools)"),
-        amountA: z
-          .union([z.number().positive(), z.string()])
-          .optional()
-          .describe("UI amount of token A"),
-        amountB: z
-          .union([z.number().positive(), z.string()])
-          .optional()
-          .describe("UI amount of token B"),
-      },
+// Liquidity — Cookiebox DAMM v2 + CookieSwap SAMM. Every op simulates before sending and honors the
+// spend cap; all are live-verified on Cookie Chain (see PLAN.md CP5/CP6).
+registerTool(
+  "create_pool",
+  {
+    title: "Create a pool",
+    description:
+      "Create a new pool for a token pair and seed it with an initial deposit (the deposit ratio sets " +
+      "the starting price). `dex` selects the venue: cookiebox-damm (default). cookieswap-samm creation " +
+      "is not supported yet. Simulates before sending; caps the COOK side. Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      dex: z
+        .enum(["cookiebox-damm", "cookieswap-samm"])
+        .optional()
+        .describe("venue (default cookiebox-damm)"),
+      tokenAMint: z.string().min(32).max(44).describe("first token mint"),
+      tokenBMint: z.string().min(32).max(44).describe("second token mint (e.g. the COOK mint)"),
+      amountA: z
+        .union([z.number().positive(), z.string()])
+        .describe("UI amount of token A to seed"),
+      amountB: z
+        .union([z.number().positive(), z.string()])
+        .describe("UI amount of token B to seed"),
+      config: z
+        .string()
+        .min(32)
+        .max(44)
+        .optional()
+        .describe("PoolConfig address (DAMM only); omit for the default"),
     },
-    tool(async (a: { poolPk: string; amountA?: string | number; amountB?: string | number }) =>
-      addLiquidity(a),
-    ),
-  );
+  },
+  tool(
+    async (a: {
+      dex?: "cookiebox-damm" | "cookieswap-samm";
+      tokenAMint: string;
+      tokenBMint: string;
+      amountA: string | number;
+      amountB: string | number;
+      config?: string;
+    }) => createPool(a),
+  ),
+);
 
-  registerTool(
-    "remove_liquidity",
-    {
-      title: "Remove liquidity (Cookiebox DAMM v2) — UNVALIDATED",
-      description:
-        "⚠️ UNVALIDATED. Remove liquidity from your position in a Cookiebox DAMM v2 pool. `bps` is the " +
-        "fraction to remove (default 10000 = all). Requires COOKIE_PRIVATE_KEY.",
-      inputSchema: {
-        poolPk: z.string().min(32).max(44).describe("DAMM v2 pool address"),
-        bps: z
-          .number()
-          .int()
-          .min(1)
-          .max(10_000)
-          .optional()
-          .describe("basis points to remove (default all)"),
-      },
+registerTool(
+  "add_liquidity",
+  {
+    title: "Add liquidity",
+    description:
+      "Add liquidity to a pool by opening a new position; the venue (Cookiebox DAMM v2 or CookieSwap " +
+      "SAMM) is auto-detected from the pool. Simulates before sending; honors the spend cap. Requires " +
+      "COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      poolPk: z.string().min(32).max(44).describe("pool address (see get_pools)"),
+      amountA: z
+        .union([z.number().positive(), z.string()])
+        .optional()
+        .describe("UI amount of token A"),
+      amountB: z
+        .union([z.number().positive(), z.string()])
+        .optional()
+        .describe("UI amount of token B"),
     },
-    tool(async (a: { poolPk: string; bps?: number }) => removeLiquidity(a)),
-  );
+  },
+  tool(async (a: { poolPk: string; amountA?: string | number; amountB?: string | number }) =>
+    addLiquidity(a),
+  ),
+);
 
-  registerTool(
-    "lock_liquidity",
-    {
-      title: "Permanently lock liquidity (Cookiebox DAMM v2) — UNVALIDATED",
-      description:
-        "⚠️ UNVALIDATED and IRREVERSIBLE. Permanently locks your unlocked liquidity in a Cookiebox " +
-        "DAMM v2 position. Requires COOKIE_PRIVATE_KEY.",
-      inputSchema: {
-        poolPk: z.string().min(32).max(44).describe("DAMM v2 pool address"),
-      },
+registerTool(
+  "remove_liquidity",
+  {
+    title: "Remove liquidity",
+    description:
+      "Remove liquidity from your position in a pool (venue auto-detected). `bps` is the fraction to " +
+      "remove for DAMM v2 (default 10000 = all); SAMM removes the whole position. Requires " +
+      "COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      poolPk: z.string().min(32).max(44).describe("pool address"),
+      bps: z
+        .number()
+        .int()
+        .min(1)
+        .max(10_000)
+        .optional()
+        .describe("basis points to remove (default all)"),
     },
-    tool(async (a: { poolPk: string }) => lockLiquidity(a)),
-  );
-}
+  },
+  tool(async (a: { poolPk: string; bps?: number }) => removeLiquidity(a)),
+);
+
+registerTool(
+  "lock_liquidity",
+  {
+    title: "Permanently lock liquidity (Cookiebox DAMM v2)",
+    description:
+      "⚠️ IRREVERSIBLE. Permanently locks your unlocked liquidity in a Cookiebox DAMM v2 position. " +
+      "Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      poolPk: z.string().min(32).max(44).describe("DAMM v2 pool address"),
+    },
+  },
+  tool(async (a: { poolPk: string }) => lockLiquidity(a)),
+);
 
 async function main() {
   const transport = new StdioServerTransport();

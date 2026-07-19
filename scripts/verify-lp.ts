@@ -1,13 +1,15 @@
 /**
- * CP5 LP scaffolding check (no funds). Run twice:
- *   npx tsx scripts/verify-lp.ts            # flag OFF → tools disabled
- *   COOKIE_ENABLE_UNVALIDATED_LP=1 npx tsx scripts/verify-lp.ts on   # flag ON, unfunded wallet
- * With an unfunded wallet: remove/lock cleanly report "no position", add reaches build/simulate.
+ * LP structural check with an UNFUNDED wallet (no funds spent). Confirms the fund-moving liquidity
+ * paths assemble and reach on-chain validation without a real deposit:
+ *   npx tsx scripts/verify-lp.ts
+ * Expected: remove/lock cleanly report "no position"; add/create reach build/simulate and fail only
+ * for lack of funds; SAMM routes by pool owner; SAMM create_pool reports "not supported yet".
  */
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 
-const POOL = "78e15qHtzR4nXFpSy8VSzSpDxqyzbKNtrjdTo5neBorq"; // Cookiebox DAMM COOK/MON
+const POOL = "5gXHQZvknu4tp6dT32G9m8aWups5aV8aCsYDAwfeV3np"; // Cookiebox DAMM wCOOK/bCOOK
+const SAMM_POOL = "DtK93bScUXhkn6edF8ATdL85DYyHqsavbWhpR9GuuAYB"; // CookieSwap SAMM wCOOK/bCOOK
 
 async function tryOp(label: string, fn: () => Promise<unknown>): Promise<void> {
   try {
@@ -22,24 +24,40 @@ async function tryOp(label: string, fn: () => Promise<unknown>): Promise<void> {
 
 async function main() {
   process.env.COOKIE_PRIVATE_KEY = bs58.encode(Keypair.generate().secretKey);
-  const { LP_ENABLED, addLiquidity, removeLiquidity, lockLiquidity } =
-    await import("../src/core/liquidity/damm");
-  console.log(`LP_ENABLED = ${LP_ENABLED}`);
+  const { createPool, addLiquidity, removeLiquidity, lockLiquidity } =
+    await import("../src/core/liquidity");
 
-  if (!LP_ENABLED) {
-    await tryOp("add_liquidity disabled without opt-in", () =>
-      addLiquidity({ poolPk: POOL, amountA: 1 }),
-    );
-  } else {
-    await tryOp("remove_liquidity → no position (unfunded)", () =>
-      removeLiquidity({ poolPk: POOL }),
-    );
-    await tryOp("lock_liquidity → no position (unfunded)", () => lockLiquidity({ poolPk: POOL }));
-    await tryOp("add_liquidity → reaches build/simulate (unfunded)", () =>
-      addLiquidity({ poolPk: POOL, amountA: 0.001 }),
-    );
-  }
-  console.log("\n✅ LP scaffolding behaves correctly");
+  const COOK = "So11111111111111111111111111111111111111112";
+  const MON = "6H7xnYfBFeEU8S8mhrZRkFNS5vEegRqEwv7h42WbntCL";
+
+  // Cookiebox DAMM v2.
+  await tryOp("remove_liquidity → no position (unfunded)", () => removeLiquidity({ poolPk: POOL }));
+  await tryOp("lock_liquidity → no position (unfunded)", () => lockLiquidity({ poolPk: POOL }));
+  await tryOp("add_liquidity → reaches build/simulate (unfunded)", () =>
+    addLiquidity({ poolPk: POOL, amountA: 0.001, amountB: 0.001 }),
+  );
+  await tryOp("create_pool (DAMM) → config fetch + prepare + build/simulate (unfunded)", () =>
+    createPool({ tokenAMint: MON, tokenBMint: COOK, amountA: 1, amountB: 0.001 }),
+  );
+
+  // CookieSwap SAMM (venue auto-detected from the pool owner).
+  await tryOp("remove_liquidity (SAMM) → no position (unfunded)", () =>
+    removeLiquidity({ poolPk: SAMM_POOL }),
+  );
+  await tryOp("add_liquidity (SAMM) → getPoolInfoFromRpc + openPosition build (unfunded)", () =>
+    addLiquidity({ poolPk: SAMM_POOL, amountB: 0.001 }),
+  );
+  await tryOp("create_pool (SAMM) → not supported yet", () =>
+    createPool({
+      dex: "cookieswap-samm",
+      tokenAMint: MON,
+      tokenBMint: COOK,
+      amountA: 1,
+      amountB: 1,
+    }),
+  );
+
+  console.log("\n✅ LP paths assemble and reach on-chain validation");
 }
 main().catch((e) => {
   console.error("❌", e);

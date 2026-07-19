@@ -1,7 +1,5 @@
 // Raw JSON-RPC to Cookie Chain. Reads are batched into one POST so a single round trip gets all
 // three commitment slots (the finalization-lag signal), and because getHealth isn't on web3.js's
-// Connection. Everything uses `confirmed`: Cookie Chain finalization can stall, and the web3.js
-// default of `finalized` then yields BlockhashNotFound.
 import { Connection } from "@solana/web3.js";
 
 import { COOKIE_RPC_URL, HTTP_TIMEOUT_MS } from "./config";

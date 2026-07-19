@@ -22,6 +22,11 @@ const EXPECTED_TOOLS = [
   "get_balance",
   "trade",
   "transfer",
+  "deploy_token",
+  "create_pool",
+  "add_liquidity",
+  "remove_liquidity",
+  "lock_liquidity",
 ];
 
 async function main() {

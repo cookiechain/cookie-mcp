@@ -1,14 +1,23 @@
 # cookie-mcp
 
-A local **[MCP](https://modelcontextprotocol.io) server for [Cookie Chain](https://cookiescan.io)** —
-give any AI agent (Claude Code, Claude Desktop, Cursor, …) the ability to read Cookie Chain market
-data and act on it: pools, prices, quotes, swaps, transfers, and token launches.
+A Model Context Protocol (MCP) server that provides onchain tools for any AI agent, allowing it to interact with the [Cookie Chain](https://www.cookiechain.wtf) blockchain through a standardized interface.
 
-A community project for the whole Cookie Chain ecosystem — contributions welcome.
+## Overview
 
-- **Local & non-custodial** — runs over stdio; your key signs locally and is never uploaded, logged, or sent to the model.
-- **Swaps via [Candy Shop](https://swap.cookiescan.io)** — aggregates all Cookie Chain DEX liquidity for the best route.
-- **Safe by default** — read-only until you add a key; a hard per-trade spend cap; every money-moving action is simulated first.
+A community project for the whole Cookie Chain ecosystem — give any AI agent the ability to read Cookie
+Chain market data and act on it. It runs locally over stdio and signs with your key on your machine, so
+it's non-custodial by design. Its tools let an agent:
+
+- **Read the market** — chain health, pools, token info, swap quotes, and wallet balances (no key needed).
+- **Swap** any Cookie Chain token pair through the [Candy Shop](https://swap.cookiescan.io) aggregator,
+  which routes across all Cookie Chain DEX liquidity for the best fill.
+- **Transfer** COOK or any SPL / Token-2022 token.
+- **Launch tokens** on the Cookiebox bonding curve (`deploy_token`).
+- **Manage liquidity** — create pools, add / remove liquidity, and permanently lock positions across
+  Cookiebox DAMM v2 and CookieSwap SAMM (venue auto-detected).
+
+Safe by default: read-only until you add a key, a hard per-trade spend cap, and every money-moving action
+is simulated before it's sent.
 
 ## Quickstart
 
@@ -16,7 +25,7 @@ Requires **Node ≥ 22**.
 
 ```bash
 yarn install
-COOKIE_RPC_URL=https://rpc.cookiescan.io yarn spike:quote   # live quote, no key needed
+npx tsx scripts/smoke-cores.ts   # live pools, a quote, chain health — no key needed
 ```
 
 ## Use it from an agent
@@ -46,13 +55,13 @@ file path) to enable swaps, transfers, and launches.
 
 ## Configuration
 
-| Variable                | Default                          | Purpose                                               |
-| ----------------------- | -------------------------------- | ----------------------------------------------------- |
-| `COOKIE_RPC_URL`        | `https://rpc.cookiescan.io`      | Cookie Chain RPC.                                     |
-| `COOKIE_PRIVATE_KEY`    | —                                | Wallet key for money-moving tools. Unset ⇒ read-only. |
-| `COOKIE_MAX_TRADE_COOK` | `100`                            | Per-transaction spend cap in COOK (`0` disables).     |
-| `COOKIE_SLIPPAGE_BPS`   | `500`                            | Default slippage (bps).                               |
-| `COOKIE_SWAP_API_URL`   | `https://swap.cookiescan.io/api` | Candy Shop aggregator base.                           |
+| Variable                | Default                          | Purpose                                                |
+| ----------------------- | -------------------------------- | ------------------------------------------------------ |
+| `COOKIE_RPC_URL`        | `https://rpc.cookiescan.io`      | Cookie Chain RPC.                                      |
+| `COOKIE_PRIVATE_KEY`    | —                                | Wallet key for money-moving tools. Read-only if unset. |
+| `COOKIE_MAX_TRADE_COOK` | `100`                            | Per-transaction spend cap in COOK (`0` disables).      |
+| `COOKIE_SLIPPAGE_BPS`   | `500`                            | Default slippage (bps).                                |
+| `COOKIE_SWAP_API_URL`   | `https://swap.cookiescan.io/api` | Candy Shop aggregator base.                            |
 
 ## Tools
 
@@ -61,8 +70,8 @@ file path) to enable swaps, transfers, and launches.
 **Money** (need `COOKIE_PRIVATE_KEY`): `trade` (swap via Candy Shop), `transfer` (COOK or any token),
 `deploy_token` (launch on the Cookiebox bonding curve).
 
-Liquidity tools (`add_liquidity`, `remove_liquidity`, `lock_liquidity`) are **opt-in and still being
-validated** — set `COOKIE_ENABLE_UNVALIDATED_LP=1` to expose them.
+**Liquidity** (need `COOKIE_PRIVATE_KEY`): `create_pool`, `add_liquidity`, `remove_liquidity` (Cookiebox
+DAMM v2 + CookieSwap SAMM, venue auto-detected), `lock_liquidity` (Cookiebox DAMM v2, permanent).
 
 Use the COOK / native mint `So11111111111111111111111111111111111111112` for COOK. Every tool returns
 JSON; failures return `{ error, hint }` — never a stack trace, never your key.
@@ -71,8 +80,7 @@ JSON; failures return `{ error, hint }` — never a stack trace, never your key.
 
 Non-custodial and local: no hosted server, no remote key storage. The key stays in `COOKIE_PRIVATE_KEY`,
 signs locally, and is redacted from all output. Read-only until a key is set; every trade/transfer is
-capped and simulated before sending. Cookie Chain finalization can stall — the server uses `confirmed`
-commitment throughout and surfaces a clear hint instead of an opaque `BlockhashNotFound`.
+capped and simulated before sending.
 
 ## Development
 
