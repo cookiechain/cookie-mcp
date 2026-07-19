@@ -348,19 +348,20 @@ registerTool(
   tool(async (a: { mint: string }) => claimCreatorFees(a)),
 );
 
-// Liquidity — Cookiebox DAMM v2 + CookieSwap SAMM. Every op simulates before sending and honors the
-// spend cap; all are live-verified on Cookie Chain (see PLAN.md CP5/CP6).
+// Liquidity — Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM. Every op simulates before
+// sending and honors the spend cap; all are live-verified on Cookie Chain (see PLAN.md CP5/CP6/CP9).
 registerTool(
   "create_pool",
   {
     title: "Create a pool",
     description:
       "Create a new pool for a token pair and seed it with an initial deposit (the deposit ratio sets " +
-      "the starting price). `dex` selects the venue: cookiebox-damm (default). cookieswap-samm creation " +
-      "is not supported yet. Simulates before sending; caps the COOK side. Requires COOKIE_PRIVATE_KEY.",
+      "the starting price). `dex` selects the venue: cookiebox-damm (default) or cookiebox-clmm " +
+      "(concentrated liquidity, full-range seed, default 0.25% fee tier). cookieswap-samm creation is " +
+      "not supported yet. Simulates before sending; caps the COOK side. Requires COOKIE_PRIVATE_KEY.",
     inputSchema: {
       dex: z
-        .enum(["cookiebox-damm", "cookieswap-samm"])
+        .enum(["cookiebox-damm", "cookiebox-clmm", "cookieswap-samm"])
         .optional()
         .describe("venue (default cookiebox-damm)"),
       tokenAMint: z.string().min(32).max(44).describe("first token mint"),
@@ -377,16 +378,28 @@ registerTool(
         .max(44)
         .optional()
         .describe("PoolConfig address (DAMM only); omit for the default"),
+      feeTier: z
+        .number()
+        .optional()
+        .describe("CLMM fee tier in bps: 25 (default), 30, 100, 200, or 400"),
+      initialPrice: z
+        .union([z.number().positive(), z.string()])
+        .optional()
+        .describe(
+          "CLMM only: starting price as tokenB per tokenA; omit to derive from the amounts",
+        ),
     },
   },
   tool(
     async (a: {
-      dex?: "cookiebox-damm" | "cookieswap-samm";
+      dex?: "cookiebox-damm" | "cookiebox-clmm" | "cookieswap-samm";
       tokenAMint: string;
       tokenBMint: string;
       amountA: string | number;
       amountB: string | number;
       config?: string;
+      feeTier?: number;
+      initialPrice?: string | number;
     }) => createPool(a),
   ),
 );
@@ -396,8 +409,9 @@ registerTool(
   {
     title: "Add liquidity",
     description:
-      "Add liquidity to a pool by opening a new position; the venue (Cookiebox DAMM v2 or CookieSwap " +
-      "SAMM) is auto-detected from the pool. Simulates before sending; honors the spend cap. Requires " +
+      "Add liquidity to a pool by opening a new position; the venue (Cookiebox DAMM v2, Cookiebox CLMM, " +
+      "or CookieSwap SAMM) is auto-detected from the pool. Concentrated-liquidity venues (CLMM/SAMM) " +
+      "open a full-range position by default. Simulates before sending; honors the spend cap. Requires " +
       "COOKIE_PRIVATE_KEY.",
     inputSchema: {
       poolPk: z.string().min(32).max(44).describe("pool address (see get_pools)"),
@@ -422,8 +436,8 @@ registerTool(
     title: "Remove liquidity",
     description:
       "Remove liquidity from your position in a pool (venue auto-detected). `bps` is the fraction to " +
-      "remove for DAMM v2 (default 10000 = all); SAMM removes the whole position. Requires " +
-      "COOKIE_PRIVATE_KEY.",
+      "remove for DAMM v2 and CLMM (default 10000 = all, which also closes a CLMM position); SAMM " +
+      "removes the whole position. Requires COOKIE_PRIVATE_KEY.",
     inputSchema: {
       poolPk: z.string().min(32).max(44).describe("pool address"),
       bps: z
@@ -458,8 +472,8 @@ registerTool(
     title: "Claim accrued LP fees",
     description:
       "Claim the swap fees your liquidity position has accrued in a pool (venue auto-detected: " +
-      "Cookiebox DAMM v2 or CookieSwap SAMM). Sweeps fees to your wallet without removing the position. " +
-      "Simulates before sending. Requires COOKIE_PRIVATE_KEY.",
+      "Cookiebox DAMM v2, Cookiebox CLMM, or CookieSwap SAMM). Sweeps fees to your wallet without " +
+      "removing the position. Simulates before sending. Requires COOKIE_PRIVATE_KEY.",
     inputSchema: {
       poolPk: z.string().min(32).max(44).describe("pool address you hold a position in"),
     },

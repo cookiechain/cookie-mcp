@@ -5,7 +5,7 @@
 // program id, which fails on the fork (ConstraintSeeds), so we build those instructions ourselves via
 // the Cookie anchor Program with Cookie-derived accounts (see ./cpAmm.ts). All ops are live-verified on
 // Cookie Chain. Simulate-before-send + spend cap on the COOK side.
-import { Keypair, PublicKey, Transaction, type Connection } from "@solana/web3.js";
+import { Keypair, PublicKey, type Connection } from "@solana/web3.js";
 import BN from "bn.js";
 
 import { COOK_MINT, explorerTxUrl } from "../config";
@@ -14,6 +14,7 @@ import { getConnection } from "../rpc";
 import { requireWallet, assertWithinSpendCap } from "../wallet";
 import { uiToRaw } from "../format";
 import { fetchTokens } from "../cookiescan";
+import { signSendConfirm, LP_NOTE } from "./send";
 import {
   buildCpAmmDeps,
   buildCreatePositionAndAddLiquidityTx,
@@ -106,42 +107,12 @@ async function priceCookOf(mint: string): Promise<number | null> {
   return t?.price?.native ?? null;
 }
 
-async function signSendConfirm(
-  conn: Connection,
-  tx: Transaction,
-  signers: Keypair[],
-): Promise<string> {
-  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
-  tx.recentBlockhash = blockhash;
-  tx.feePayer = signers[0]!.publicKey;
-  const sim = await conn.simulateTransaction(tx);
-  if (sim.value.err) {
-    const logs = sim.value.logs ?? [];
-    const blob = `${JSON.stringify(sim.value.err)} ${logs.join(" ")}`;
-    if (/BlockhashNotFound|blockhash/i.test(blob)) {
-      throw new CookieMcpError(
-        "simulation failed: blockhash not found",
-        "Cookie Chain finalization may be stalled — check chain_health; retry",
-      );
-    }
-    throw new CookieMcpError(
-      `simulation failed${logs.length ? `: ${logs.slice(-2).join(" | ")}` : ""}`,
-      "check your balances and the pool state; the transaction was not sent",
-    );
-  }
-  tx.sign(...signers);
-  const signature = await conn.sendRawTransaction(tx.serialize());
-  await conn.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
-  return signature;
-}
-
 export interface LpResult {
   signature: string;
   pool: string;
   explorerUrl: string;
   note: string;
 }
-const LP_NOTE = "verify the result on cookiescan.io";
 
 export async function addLiquidity(args: {
   poolPk: string;
