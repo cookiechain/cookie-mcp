@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "cookie-mcp": {
+      "command": "npx",
+      "args": ["tsx", "src/mcp/server.ts"],
+      "env": {
+        "COOKIE_RPC_URL": "https://rpc.cookiescan.io"
+      }
+    }
+  }
+}

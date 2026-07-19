@@ -1,0 +1,55 @@
+{
+  "name": "cookie-mcp",
+  "version": "0.0.0",
+  "description": "Local stdio MCP server for Cookie Chain — read market data, swap, launch tokens, and manage liquidity from any AI agent.",
+  "license": "MIT",
+  "author": "Cookie Chain community developers",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "yarn@1.22.22",
+  "bin": {
+    "cookie-mcp": "./dist/mcp/server.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "mcp": "tsx src/mcp/server.ts",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "vitest run --passWithNoTests",
+    "smoke": "tsx scripts/smoke.ts",
+    "test": "yarn lint && yarn format:check && yarn typecheck && yarn test:unit && yarn smoke"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.31.0",
+    "@meteora-ag/cp-amm-sdk": "^1.4.3",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "@noble/curves": "^1",
+    "@raydium-io/raydium-sdk-v2": "0.2.41-alpha",
+    "@solana/spl-token": "^0.4",
+    "@solana/web3.js": "^1.98.0",
+    "bn.js": "^5.2.1",
+    "bs58": "^6",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/bn.js": "^5.1.6",
+    "@types/node": "^22.10.0",
+    "eslint": "^9.17.0",
+    "eslint-config-prettier": "^9.1.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.0",
+    "vitest": "^3.0.0"
+  }
+}

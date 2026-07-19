@@ -1,0 +1,73 @@
+// Upload DBC token metadata to Cookiebox's metadata API and return the Metaplex `uri` for the launch
+// tx. The API authorizes the upload with an ed25519 signature over a fixed message (a message
+// signature — moves no funds). Image is passed as an https URL (no file upload from a server).
+import type { Keypair } from "@solana/web3.js";
+import { ed25519 } from "@noble/curves/ed25519";
+
+import { CookieMcpError } from "../errors";
+
+const UPLOAD_URL = "https://api.cookiebox.app/api/bonding/upload-metadata";
+
+export interface UploadMetadataResult {
+  uri: string;
+  imageUrl: string;
+}
+
+export async function uploadMetadata(
+  keypair: Keypair,
+  params: { mint: string; name: string; symbol: string; description?: string; imageUrl?: string },
+): Promise<UploadMetadataResult> {
+  const timestamp = Date.now();
+  const message = new TextEncoder().encode(
+    `Token metadata upload.\n\n` +
+      `This signature does not move funds or approve any transaction.\n\n` +
+      `Timestamp: ${timestamp}`,
+  );
+  const sig = ed25519.sign(message, keypair.secretKey.slice(0, 32));
+
+  const body: Record<string, unknown> = {
+    mint: params.mint,
+    name: params.name.trim(),
+    symbol: params.symbol.trim().toUpperCase(),
+    description: (params.description ?? "").trim(),
+    wallet: Buffer.from(keypair.publicKey.toBytes()).toString("base64"),
+    signature: Buffer.from(sig).toString("base64"),
+    timestamp,
+  };
+  if (params.imageUrl?.trim()) body.imageUrl = params.imageUrl.trim();
+
+  let res: Response;
+  try {
+    res = await fetch(UPLOAD_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new CookieMcpError(
+      "could not reach the metadata upload API",
+      "check connectivity to api.cookiebox.app and retry",
+    );
+  }
+
+  const text = await res.text();
+  let data: { error?: string; reason?: string; uri?: string; imageUrl?: string } = {};
+  if (text.trim()) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new CookieMcpError(
+        `metadata upload returned invalid JSON (HTTP ${res.status})`,
+        "the upload API may be down; retry shortly",
+      );
+    }
+  }
+  if (!res.ok || !data.uri || !data.imageUrl) {
+    throw new CookieMcpError(
+      data.error ?? `metadata upload failed (HTTP ${res.status})`,
+      data.reason ??
+        "provide a valid https `imageUrl` (image is required); check name/symbol and retry",
+    );
+  }
+  return { uri: data.uri, imageUrl: data.imageUrl };
+}
