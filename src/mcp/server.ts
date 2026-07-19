@@ -17,7 +17,13 @@ import { ownPublicKey } from "../core/wallet";
 import { trade } from "../core/trade";
 import { transfer } from "../core/transfer";
 import { deployToken } from "../core/launch";
-import { createPool, addLiquidity, removeLiquidity, lockLiquidity } from "../core/liquidity";
+import {
+  createPool,
+  addLiquidity,
+  removeLiquidity,
+  lockLiquidity,
+  claimFees,
+} from "../core/liquidity";
 
 type ToolContent = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
 
@@ -363,6 +369,21 @@ registerTool(
     },
   },
   tool(async (a: { poolPk: string }) => lockLiquidity(a)),
+);
+
+registerTool(
+  "claim_fees",
+  {
+    title: "Claim accrued LP fees",
+    description:
+      "Claim the swap fees your liquidity position has accrued in a pool (venue auto-detected: " +
+      "Cookiebox DAMM v2 or CookieSwap SAMM). Sweeps fees to your wallet without removing the position. " +
+      "Simulates before sending. Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      poolPk: z.string().min(32).max(44).describe("pool address you hold a position in"),
+    },
+  },
+  tool(async (a: { poolPk: string }) => claimFees(a)),
 );
 
 async function main() {

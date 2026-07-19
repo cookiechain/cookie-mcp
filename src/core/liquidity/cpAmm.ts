@@ -363,6 +363,45 @@ export async function buildRemoveLiquidityTx(p: RemoveLiquidityBuild): Promise<T
   return new Transaction().add(...pre, ix, ...post);
 }
 
+/**
+ * Build a claim-position-fee Transaction (sweeps a position's accrued swap fees to the owner) via the
+ * Cookie Program. Same account set as remove_liquidity, no args — cf. cookiebox's buildPositionCloseClaims.
+ */
+export async function buildClaimPositionFeeTx(
+  p: Omit<RemoveLiquidityBuild, "liquidityDelta">,
+): Promise<Transaction> {
+  const { program } = p.deps;
+  const aTa = ataWithCreateIx(p.tokenAMint, p.owner, p.tokenAProgram);
+  const bTa = ataWithCreateIx(p.tokenBMint, p.owner, p.tokenBProgram);
+  const pre: TransactionInstruction[] = [aTa.ix, bTa.ix];
+  const post: TransactionInstruction[] = [];
+  if (p.tokenAMint.equals(NATIVE_MINT) || p.tokenBMint.equals(NATIVE_MINT)) {
+    const wsol = getAssociatedTokenAddressSync(NATIVE_MINT, p.owner, true);
+    post.push(createCloseAccountInstruction(wsol, p.owner, p.owner));
+  }
+
+  const ix = await program.methods
+    .claimPositionFee()
+    .accountsPartial({
+      poolAuthority: p.deps.poolAuthority,
+      pool: p.pool,
+      position: p.position,
+      tokenAAccount: aTa.ata,
+      tokenBAccount: bTa.ata,
+      tokenAVault: p.tokenAVault,
+      tokenBVault: p.tokenBVault,
+      tokenAMint: p.tokenAMint,
+      tokenBMint: p.tokenBMint,
+      positionNftAccount: p.positionNftAccount,
+      owner: p.owner,
+      tokenAProgram: p.tokenAProgram,
+      tokenBProgram: p.tokenBProgram,
+    })
+    .instruction();
+
+  return new Transaction().add(...pre, ix, ...post);
+}
+
 /** Build a permanent-lock Transaction for a position's unlocked liquidity, via the Cookie Program. */
 export async function buildLockPositionTx(p: {
   deps: CpAmmDeps;

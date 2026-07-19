@@ -10,6 +10,7 @@ import {
   addLiquidity as addDammLiquidity,
   removeLiquidity as removeDammLiquidity,
   lockLiquidity as lockDammLiquidity,
+  claimFees as claimDammFees,
   type LpResult,
 } from "./damm";
 import { CP_AMM_PROGRAM_ID } from "./cpAmm";
@@ -17,6 +18,7 @@ import {
   SAMM_PROGRAM_ID,
   addSammLiquidity,
   removeSammLiquidity,
+  claimSammFees,
   createSammPool,
   type SammLpResult,
 } from "./cookieswap";
@@ -74,6 +76,14 @@ export async function lockLiquidity(args: { poolPk: string }): Promise<LpResult>
     );
   }
   return lockDammLiquidity(args);
+}
+
+export async function claimFees(args: { poolPk: string }): Promise<AnyLpResult> {
+  if ((await detectVenue(args.poolPk)) === "cookieswap-samm") {
+    const { keypair } = requireWallet();
+    return claimSammFees(getConnection(), keypair, args);
+  }
+  return claimDammFees(args);
 }
 
 export async function createPool(args: {

@@ -27,6 +27,7 @@ const EXPECTED_TOOLS = [
   "add_liquidity",
   "remove_liquidity",
   "lock_liquidity",
+  "claim_fees",
 ];
 
 async function main() {

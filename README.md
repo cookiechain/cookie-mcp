@@ -13,8 +13,8 @@ it's non-custodial by design. Its tools let an agent:
   which routes across all Cookie Chain DEX liquidity for the best fill.
 - **Transfer** COOK or any SPL / Token-2022 token.
 - **Launch tokens** on the Cookiebox bonding curve (`deploy_token`).
-- **Manage liquidity** — create pools, add / remove liquidity, and permanently lock positions across
-  Cookiebox DAMM v2 and CookieSwap SAMM (venue auto-detected).
+- **Manage liquidity** — create pools, add / remove liquidity, claim accrued fees, and permanently lock
+  positions across Cookiebox DAMM v2 and CookieSwap SAMM (venue auto-detected).
 
 Safe by default: read-only until you add a key, a hard per-trade spend cap, and every money-moving action
 is simulated before it's sent.
@@ -70,8 +70,9 @@ file path) to enable swaps, transfers, and launches.
 **Money** (need `COOKIE_PRIVATE_KEY`): `trade` (swap via Candy Shop), `transfer` (COOK or any token),
 `deploy_token` (launch on the Cookiebox bonding curve).
 
-**Liquidity** (need `COOKIE_PRIVATE_KEY`): `create_pool`, `add_liquidity`, `remove_liquidity` (Cookiebox
-DAMM v2 + CookieSwap SAMM, venue auto-detected), `lock_liquidity` (Cookiebox DAMM v2, permanent).
+**Liquidity** (need `COOKIE_PRIVATE_KEY`): `create_pool`, `add_liquidity`, `remove_liquidity`,
+`claim_fees` (Cookiebox DAMM v2 + CookieSwap SAMM, venue auto-detected), `lock_liquidity` (Cookiebox
+DAMM v2, permanent).
 
 Use the COOK / native mint `So11111111111111111111111111111111111111112` for COOK. Every tool returns
 JSON; failures return `{ error, hint }` — never a stack trace, never your key.

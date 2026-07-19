@@ -24,7 +24,7 @@ async function tryOp(label: string, fn: () => Promise<unknown>): Promise<void> {
 
 async function main() {
   process.env.COOKIE_PRIVATE_KEY = bs58.encode(Keypair.generate().secretKey);
-  const { createPool, addLiquidity, removeLiquidity, lockLiquidity } =
+  const { createPool, addLiquidity, removeLiquidity, lockLiquidity, claimFees } =
     await import("../src/core/liquidity");
 
   const COOK = "So11111111111111111111111111111111111111112";
@@ -33,6 +33,7 @@ async function main() {
   // Cookiebox DAMM v2.
   await tryOp("remove_liquidity → no position (unfunded)", () => removeLiquidity({ poolPk: POOL }));
   await tryOp("lock_liquidity → no position (unfunded)", () => lockLiquidity({ poolPk: POOL }));
+  await tryOp("claim_fees → no position (unfunded)", () => claimFees({ poolPk: POOL }));
   await tryOp("add_liquidity → reaches build/simulate (unfunded)", () =>
     addLiquidity({ poolPk: POOL, amountA: 0.001, amountB: 0.001 }),
   );
@@ -44,6 +45,7 @@ async function main() {
   await tryOp("remove_liquidity (SAMM) → no position (unfunded)", () =>
     removeLiquidity({ poolPk: SAMM_POOL }),
   );
+  await tryOp("claim_fees (SAMM) → no position (unfunded)", () => claimFees({ poolPk: SAMM_POOL }));
   await tryOp("add_liquidity (SAMM) → getPoolInfoFromRpc + openPosition build (unfunded)", () =>
     addLiquidity({ poolPk: SAMM_POOL, amountB: 0.001 }),
   );

@@ -19,6 +19,7 @@ import {
   buildCreatePositionAndAddLiquidityTx,
   buildCreatePoolTx,
   buildRemoveLiquidityTx,
+  buildClaimPositionFeeTx,
   buildLockPositionTx,
   getUserPositions,
   deriveTokenVault,
@@ -237,6 +238,35 @@ export async function removeLiquidity(args: { poolPk: string; bps?: number }): P
     tokenAProgram: ctx.aProgram,
     tokenBProgram: ctx.bProgram,
     liquidityDelta: bps >= 10_000 ? null : unlocked.mul(new BN(bps)).div(new BN(10_000)),
+  });
+
+  const signature = await signSendConfirm(conn, tx, [keypair]);
+  return {
+    signature,
+    pool: ctx.pool.toBase58(),
+    explorerUrl: explorerTxUrl(signature),
+    note: LP_NOTE,
+  };
+}
+
+export async function claimFees(args: { poolPk: string }): Promise<LpResult> {
+  const { keypair } = requireWallet();
+  const conn = getConnection();
+  const ctx = await loadPool(conn, args.poolPk);
+  const pos = await firstPosition(ctx, keypair.publicKey);
+
+  const tx = await buildClaimPositionFeeTx({
+    deps: ctx.deps,
+    owner: keypair.publicKey,
+    pool: ctx.pool,
+    position: pos.position,
+    positionNftAccount: pos.positionNftAccount,
+    tokenAMint: ctx.state.tokenAMint,
+    tokenBMint: ctx.state.tokenBMint,
+    tokenAVault: deriveTokenVault(ctx.state.tokenAMint, ctx.pool),
+    tokenBVault: deriveTokenVault(ctx.state.tokenBMint, ctx.pool),
+    tokenAProgram: ctx.aProgram,
+    tokenBProgram: ctx.bProgram,
   });
 
   const signature = await signSendConfirm(conn, tx, [keypair]);

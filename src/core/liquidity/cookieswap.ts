@@ -145,6 +145,42 @@ export async function removeSammLiquidity(
   return { signature, pool: args.poolPk, explorerUrl: explorerTxUrl(signature), note: NOTE };
 }
 
+export async function claimSammFees(
+  conn: Connection,
+  keypair: Keypair,
+  args: { poolPk: string },
+): Promise<SammLpResult> {
+  const raydium = await loadRaydium(conn, keypair);
+  const { poolInfo, poolKeys } = await raydium.clmm.getPoolInfoFromRpc(args.poolPk);
+
+  const positions = await raydium.clmm.getOwnerPositionInfo({ programId: SAMM_PROGRAM_ID });
+  const pos = (positions as Array<{ poolId: { toBase58(): string }; liquidity: BN }>).find(
+    (p) => p.poolId.toBase58() === args.poolPk,
+  );
+  if (!pos) {
+    throw new CookieMcpError(
+      "no SAMM position found for this wallet in that pool",
+      "add liquidity first, or check the pool address",
+    );
+  }
+
+  // CLMM has no dedicated fee-collect ix: decreaseLiquidity by 0 sweeps accrued swap fees (+ rewards)
+  // to the owner without touching principal, and keeps the position open.
+  const built = await raydium.clmm.decreaseLiquidity({
+    poolInfo,
+    poolKeys,
+    ownerPosition: pos,
+    ownerInfo: { useSOLBalance: true, closePosition: false },
+    liquidity: new BN(0),
+    amountMinA: new BN(0),
+    amountMinB: new BN(0),
+    txVersion: TxVersion.V0,
+  } as never);
+
+  const signature = await execTx(built as never);
+  return { signature, pool: args.poolPk, explorerUrl: explorerTxUrl(signature), note: NOTE };
+}
+
 export function createSammPool(): never {
   throw new CookieMcpError(
     "creating a CookieSwap SAMM pool is not supported yet",
