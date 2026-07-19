@@ -15,8 +15,8 @@ async function tryOp(label: string, fn: () => Promise<unknown>): Promise<void> {
     const r = await fn();
     console.log(`  ✗ ${label}: expected an error, got`, r);
   } catch (e) {
-    const m = e instanceof Error ? e.message : String(e);
-    const h = (e as { hint?: string }).hint;
+    const m = e instanceof Error ? e.message : JSON.stringify(e);
+    const h = (e as { hint?: string } | null)?.hint;
     console.log(`  ✓ ${label}\n      ${m}${h ? `\n      hint: ${h}` : ""}`);
   }
 }

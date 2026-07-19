@@ -119,8 +119,12 @@ export async function createPool(args: {
   config?: string;
   feeTier?: number;
   initialPrice?: string | number;
+  ammConfig?: string;
 }): Promise<AnyLpResult> {
-  if (args.dex === "cookieswap-samm") return createSammPool();
+  if (args.dex === "cookieswap-samm") {
+    const { keypair } = requireWallet();
+    return createSammPool(getConnection(), keypair, args);
+  }
   if (args.dex === "cookiebox-clmm") {
     const { keypair } = requireWallet();
     return createClmmPool(getConnection(), keypair, args);

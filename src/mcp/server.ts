@@ -349,16 +349,17 @@ registerTool(
 );
 
 // Liquidity — Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM. Every op simulates before
-// sending and honors the spend cap; all are live-verified on Cookie Chain (see PLAN.md CP5/CP6/CP9).
+// sending and honors the spend cap; all are live-verified on Cookie Chain.
 registerTool(
   "create_pool",
   {
     title: "Create a pool",
     description:
       "Create a new pool for a token pair and seed it with an initial deposit (the deposit ratio sets " +
-      "the starting price). `dex` selects the venue: cookiebox-damm (default) or cookiebox-clmm " +
-      "(concentrated liquidity, full-range seed, default 0.25% fee tier). cookieswap-samm creation is " +
-      "not supported yet. Simulates before sending; caps the COOK side. Requires COOKIE_PRIVATE_KEY.",
+      "the starting price). `dex` selects the venue: cookiebox-damm (default), cookiebox-clmm " +
+      "(concentrated liquidity, full-range seed, default 0.25% fee tier), or cookieswap-samm " +
+      "(concentrated liquidity; fee tier/tick spacing chosen by `ammConfig`, full-range seed). " +
+      "Simulates before sending; caps the COOK side. Requires COOKIE_PRIVATE_KEY.",
     inputSchema: {
       dex: z
         .enum(["cookiebox-damm", "cookiebox-clmm", "cookieswap-samm"])
@@ -386,7 +387,15 @@ registerTool(
         .union([z.number().positive(), z.string()])
         .optional()
         .describe(
-          "CLMM only: starting price as tokenB per tokenA; omit to derive from the amounts",
+          "CLMM/SAMM only: starting price as tokenB per tokenA; omit to derive from the amounts",
+        ),
+      ammConfig: z
+        .string()
+        .min(32)
+        .max(44)
+        .optional()
+        .describe(
+          "SAMM only: AmmConfig address (selects fee tier/tick spacing); omit for the default",
         ),
     },
   },
@@ -400,6 +409,7 @@ registerTool(
       config?: string;
       feeTier?: number;
       initialPrice?: string | number;
+      ammConfig?: string;
     }) => createPool(a),
   ),
 );
