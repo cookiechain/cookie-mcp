@@ -18,6 +18,7 @@ import { trade } from "../core/trade";
 import { transfer } from "../core/transfer";
 import { deployToken } from "../core/launch";
 import { claimCreatorFees } from "../core/launch/creatorFees";
+import { getStakeInfo, stake, unstake } from "../core/stake";
 import {
   createPool,
   addLiquidity,
@@ -174,6 +175,18 @@ registerTool(
 );
 
 registerTool(
+  "stake_info",
+  {
+    title: "bCOOK liquid staking info",
+    description:
+      "Live bCOOK (liquid-staked COOK) stats: the COOK-per-bCOOK exchange rate (only ever rises), TVL, " +
+      "bCOOK supply, deposit/withdraw fees, and an estimated APY. Use before `stake`/`unstake`. No key needed.",
+    inputSchema: {},
+  },
+  tool(async () => getStakeInfo()),
+);
+
+registerTool(
   "trade",
   {
     title: "Swap (Candy Shop)",
@@ -231,6 +244,40 @@ registerTool(
     },
   },
   tool(async (a: { to: string; mint?: string; amount: string | number }) => transfer(a)),
+);
+
+registerTool(
+  "stake",
+  {
+    title: "Stake COOK for bCOOK",
+    description:
+      "Stake COOK into the bCOOK liquid-staking pool (SPL Stake Pool): deposits COOK and mints bCOOK to " +
+      "your wallet (≈ amount × 0.995 / rate, after the 0.5% deposit fee). bCOOK keeps earning as the rate " +
+      "rises and stays liquid/transferable. Simulates first; honors the spend cap. Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      amount: z
+        .union([z.number().positive(), z.string()])
+        .describe("UI amount of COOK to stake, e.g. 10"),
+    },
+  },
+  tool(async (a: { amount: string | number }) => stake(a)),
+);
+
+registerTool(
+  "unstake",
+  {
+    title: "Unstake bCOOK for COOK",
+    description:
+      "Redeem bCOOK back to COOK instantly from the pool's liquid reserve (≈ amount × rate × 0.98, after " +
+      "the 2% withdrawal fee). Burns bCOOK and pays COOK to your wallet. Simulates first; honors the spend " +
+      "cap (valued in COOK). Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      amount: z
+        .union([z.number().positive(), z.string()])
+        .describe("UI amount of bCOOK to unstake, e.g. 5"),
+    },
+  },
+  tool(async (a: { amount: string | number }) => unstake(a)),
 );
 
 registerTool(

@@ -16,6 +16,7 @@ it's non-custodial by design. Its tools let an agent:
   (`claim_creator_fees`).
 - **Manage liquidity** — create pools, add / remove liquidity, claim accrued fees, and permanently lock
   positions across Cookiebox DAMM v2 and CookieSwap SAMM (venue auto-detected).
+- **Liquid-stake** COOK for bCOOK and redeem it instantly (`stake` / `unstake` / `stake_info`).
 
 Safe by default: read-only until you add a key, a hard per-trade spend cap, and every money-moving action
 is simulated before it's sent.
@@ -66,11 +67,12 @@ file path) to enable swaps, transfers, and launches.
 
 ## Tools
 
-**Reads** (no key): `chain_health`, `get_pools`, `get_token_info`, `get_quote`, `get_balance`.
+**Reads** (no key): `chain_health`, `get_pools`, `get_token_info`, `get_quote`, `get_balance`,
+`stake_info` (bCOOK liquid-staking rate / TVL / APY / fees).
 
 **Money** (need `COOKIE_PRIVATE_KEY`): `trade` (swap via Candy Shop), `transfer` (COOK or any token),
-`deploy_token` (launch on the Cookiebox bonding curve), `claim_creator_fees` (claim the creator trading
-fees a token you launched has earned).
+`stake` / `unstake` (COOK ⇄ bCOOK liquid staking), `deploy_token` (launch on the Cookiebox bonding
+curve), `claim_creator_fees` (claim the creator trading fees a token you launched has earned).
 
 **Liquidity** (need `COOKIE_PRIVATE_KEY`): `create_pool`, `add_liquidity`, `remove_liquidity`,
 `claim_fees` (Cookiebox DAMM v2 + CookieSwap SAMM, venue auto-detected), `lock_liquidity` (Cookiebox
