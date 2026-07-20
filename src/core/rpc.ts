@@ -2,7 +2,7 @@
 // three commitment slots (the finalization-lag signal), and because getHealth isn't on web3.js's
 import { Connection } from "@solana/web3.js";
 
-import { COOKIE_RPC_URL, HTTP_TIMEOUT_MS } from "./config";
+import { COOKIE_RPC_URL, SOLANA_RPC_URL, HTTP_TIMEOUT_MS } from "./config";
 import { CookieMcpError } from "./errors";
 
 export interface RpcReq {
@@ -74,4 +74,20 @@ let _conn: Connection | null = null;
 export function getConnection(): Connection {
   if (!_conn) _conn = new Connection(COOKIE_RPC_URL, "confirmed");
   return _conn;
+}
+
+// Solana mainnet connection — used only by the bridge tool (the far side of the Hyperlane warp
+// route). Lazily created so read-only/Cookie-only usage never opens it.
+let _solConn: Connection | null = null;
+
+export function getSolanaConnection(): Connection {
+  // disableRetryOnRateLimit: the default public endpoint (api.mainnet-beta.solana.com) is heavily
+  // throttled — without this, a 429 makes web3.js do a ~15s internal backoff and the bridge tool
+  // appears to hang. Fail fast instead; set SOLANA_RPC_URL to a dedicated RPC for reliable sends.
+  if (!_solConn)
+    _solConn = new Connection(SOLANA_RPC_URL, {
+      commitment: "confirmed",
+      disableRetryOnRateLimit: true,
+    });
+  return _solConn;
 }

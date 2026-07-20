@@ -40,6 +40,7 @@ import {
   cancelOffer,
   acceptOffer,
 } from "../core/nft";
+import { bridge, bridgeStatus, type BridgeDirection } from "../core/bridge";
 
 type ToolContent = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
 
@@ -707,6 +708,70 @@ registerTool(
     },
   },
   tool(async (a: { mint: string; buyer?: string }) => acceptOffer(a)),
+);
+
+// Bridge — move COOK 1:1 between Cookie Chain and Solana mainnet over the Hyperlane warp route.
+// One source-chain signature dispatches the transfer; a relayer delivers on the far side in a few
+// minutes. Requires COOKIE_PRIVATE_KEY and the warp route program ids (COOKIE_WARP_PROGRAM_ID /
+// SOLANA_WARP_PROGRAM_ID) in the environment.
+registerTool(
+  "bridge",
+  {
+    title: "Bridge COOK (Cookie Chain ⇄ Solana)",
+    description:
+      "Bridge COOK 1:1 between Cookie Chain and Solana mainnet via Hyperlane. `direction` is " +
+      "'cookie-to-solana' (locks native COOK on Cookie, credits SPL COOK to the recipient's Solana " +
+      "account) or 'solana-to-cookie' (locks SPL COOK on Solana, credits native COOK on Cookie). " +
+      "`to` is the recipient on the DESTINATION chain (base58; both chains share your keypair, so it " +
+      "defaults to your own wallet). `amount` is a UI amount of COOK. Signs and sends one transaction " +
+      "on the source chain; a relayer delivers on the far side in a few minutes. Enforces the spend " +
+      "cap and simulates first. Requires COOKIE_PRIVATE_KEY plus COOKIE_WARP_PROGRAM_ID / " +
+      "SOLANA_WARP_PROGRAM_ID. Returns the source tx signature and the Hyperlane message id (use " +
+      "bridge_status to confirm delivery); pass waitForDelivery to poll up to ~3 min inline. A wait " +
+      "that times out is not a failure — the transfer is still in flight; re-check with bridge_status.",
+    inputSchema: {
+      direction: z.enum(["cookie-to-solana", "solana-to-cookie"]).describe("bridge direction"),
+      to: z
+        .string()
+        .min(32)
+        .max(44)
+        .optional()
+        .describe("recipient on the destination chain (base58); omit to bridge to your own wallet"),
+      amount: z
+        .union([z.number().positive(), z.string()])
+        .describe("UI amount of COOK to bridge, e.g. 5"),
+      waitForDelivery: z
+        .boolean()
+        .optional()
+        .describe("poll the destination chain for delivery (up to ~3 min) before returning"),
+    },
+  },
+  tool(
+    async (a: {
+      direction: BridgeDirection;
+      to?: string;
+      amount: string | number;
+      waitForDelivery?: boolean;
+    }) => bridge(a),
+  ),
+);
+
+registerTool(
+  "bridge_status",
+  {
+    title: "Bridge delivery status",
+    description:
+      "Check whether a bridged COOK transfer has been delivered on the destination chain, by its " +
+      "Hyperlane message id (returned by `bridge`). `direction` must match the original transfer. " +
+      "Returns delivered true/false and the destination-chain delivery tx once relayed. No wallet needed.",
+    inputSchema: {
+      messageId: z.string().describe("the Hyperlane message id from bridge (0x… 64 hex chars)"),
+      direction: z
+        .enum(["cookie-to-solana", "solana-to-cookie"])
+        .describe("the direction of the original transfer"),
+    },
+  },
+  tool(async (a: { messageId: string; direction: BridgeDirection }) => bridgeStatus(a)),
 );
 
 async function main() {

@@ -44,8 +44,56 @@ export const PROGRAM_IDS = {
 
 export const HTTP_TIMEOUT_MS = 12_000;
 
+// --- Hyperlane COOK bridge (Cookie Chain ⇄ Solana mainnet) --------------------------------------
+// Moves COOK 1:1 over Hyperlane warp routes: Cookie side is a `native` warp (locks native COOK),
+// Solana side is a `collateral` warp (locks SPL COOK). Addresses below are the mainnet Hyperlane
+// core/IGP identifiers from the hyperlane-cookies deploy (configs/agents/agent-config.json +
+// configs/warp-routes/cookie-sol/token-config.json); all overridable via env.
+export const SOLANA_RPC_URL =
+  process.env.SOLANA_RPC_URL?.trim() || "https://api.mainnet-beta.solana.com";
+export const SOLANA_EXPLORER_URL =
+  process.env.SOLANA_EXPLORER_URL?.trim().replace(/\/$/, "") || "https://solscan.io";
+
+export const COOKIE_DOMAIN = Number(process.env.COOKIE_DOMAIN?.trim() || "420042004");
+export const SOLANA_DOMAIN = Number(process.env.SOLANA_DOMAIN?.trim() || "1399811149");
+
+// Warp route program IDs (mainnet). Verified against the on-chain collateral accounts published in
+// hyperlane-cookies/defillama/README.md: deriveNativeCollateralPda(cookie warp) ==
+// CL2JoQ5jdTpRNKshWhaTihuooT4qrKdLUiPsqKj3yAKz and deriveEscrowPda(solana warp) ==
+// 88q7zoKctwAQRsoTxkMJy95sNE3tntuyEhSrhvR1eZwq. Overridable via env.
+export const COOKIE_WARP_PROGRAM_ID =
+  process.env.COOKIE_WARP_PROGRAM_ID?.trim() || "Aa9wq46NB7qkg1amnBuMRsV1DunmkPHuoRLWZgWiBKdn";
+export const SOLANA_WARP_PROGRAM_ID =
+  process.env.SOLANA_WARP_PROGRAM_ID?.trim() || "B1C91jLcqXYYz57bBWR8dSEjBrJDhWSeNokZ5SDEopu3";
+
+export const BRIDGE = {
+  cookie: {
+    mailbox: process.env.COOKIE_MAILBOX?.trim() || "DhiHgUY8Y6mJ4D3MoRnZWAjTBEtSaFFn4CYgc6eDzZ8r",
+    igpProgramId:
+      process.env.COOKIE_IGP_PROGRAM_ID?.trim() || "F93J1LCWZVZGtiv2yWu1mZeyCbFJNUh9aWEonWN6eSRp",
+    overheadIgp:
+      process.env.COOKIE_OVERHEAD_IGP_ACCOUNT?.trim() ||
+      "B47yFLwnEGxp3oFHyy2LdGCmAe6kTbFmzSjkVoFaod9q",
+    decimals: 9,
+  },
+  solana: {
+    mailbox: process.env.SOLANA_MAILBOX?.trim() || "E588QtVUvresuXq2KoNEwAmoifCzYGpRBdHByN9KQMbi",
+    igpProgramId:
+      process.env.SOLANA_IGP_PROGRAM_ID?.trim() || "BhNcatUDC2D5JTyeaqrdSukiVFsEHK7e3hVmKMztwefv",
+    overheadIgp:
+      process.env.SOLANA_OVERHEAD_IGP_ACCOUNT?.trim() ||
+      "Dg5FAhqNaRfQPc3HwW9fXr7Bj4nrnszoQspoSLgysqfY",
+    // Solana mainnet COOK is a Token-2022 mint with 6 decimals (Cookie native COOK has 9).
+    splMint: process.env.COOK_SPL_MINT?.trim() || "36ZrtQoab5MhhySaP1YSTwUahSk6GRVUTtZ6cuVfm9e1",
+    decimals: 6,
+  },
+} as const;
+
 export function explorerTxUrl(sig: string): string {
   return `${EXPLORER_URL}/tx/${sig}`;
+}
+export function solanaExplorerTxUrl(sig: string): string {
+  return `${SOLANA_EXPLORER_URL}/tx/${sig}`;
 }
 export function explorerTokenUrl(mint: string): string {
   return `${EXPLORER_URL}/token/${mint}`;
