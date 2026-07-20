@@ -17,6 +17,8 @@ it's non-custodial by design. Its tools let an agent:
 - **Manage liquidity** — create pools, add / remove liquidity, claim accrued fees, and permanently lock
   positions across Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM (venue auto-detected).
 - **Liquid-stake** COOK for bCOOK and redeem it instantly (`stake` / `unstake` / `stake_info`).
+- **Trade NFTs** on [Baked Bazaar](https://bakedbazaar.art) — browse listings, buy, list, make / accept /
+  cancel offers (Cookie Chain's Metaplex Auction House marketplace).
 
 Safe by default: read-only until you add a key, a hard per-trade spend cap, and every money-moving action
 is simulated before it's sent.
@@ -57,18 +59,20 @@ file path) to enable swaps, transfers, and launches.
 
 ## Configuration
 
-| Variable                | Default                          | Purpose                                                |
-| ----------------------- | -------------------------------- | ------------------------------------------------------ |
-| `COOKIE_RPC_URL`        | `https://rpc.cookiescan.io`      | Cookie Chain RPC.                                      |
-| `COOKIE_PRIVATE_KEY`    | —                                | Wallet key for money-moving tools. Read-only if unset. |
-| `COOKIE_MAX_TRADE_COOK` | `100`                            | Per-transaction spend cap in COOK (`0` disables).      |
-| `COOKIE_SLIPPAGE_BPS`   | `500`                            | Default slippage (bps).                                |
-| `COOKIE_SWAP_API_URL`   | `https://swap.cookiescan.io/api` | Candy Shop aggregator base.                            |
+| Variable                | Default                          | Purpose                                                 |
+| ----------------------- | -------------------------------- | ------------------------------------------------------- |
+| `COOKIE_RPC_URL`        | `https://rpc.cookiescan.io`      | Cookie Chain RPC.                                       |
+| `COOKIE_PRIVATE_KEY`    | —                                | Wallet key for money-moving tools. Read-only if unset.  |
+| `COOKIE_MAX_TRADE_COOK` | `100`                            | Per-transaction spend cap in COOK (`0` disables).       |
+| `COOKIE_SLIPPAGE_BPS`   | `500`                            | Default slippage (bps).                                 |
+| `COOKIE_SWAP_API_URL`   | `https://swap.cookiescan.io/api` | Candy Shop aggregator base.                             |
+| `BAKED_BAZAAR_API_URL`  | `https://bakedbazaar.art/api`    | Baked Bazaar NFT marketplace backend (listings/offers). |
 
 ## Tools
 
 **Reads** (no key): `chain_health`, `get_pools`, `get_token_info`, `get_quote`, `get_balance`,
-`stake_info` (bCOOK liquid-staking rate / TVL / APY / fees).
+`stake_info` (bCOOK liquid-staking rate / TVL / APY / fees), and NFT reads `get_nft_listings`, `get_nft`,
+`get_wallet_nfts`, `get_nft_offers`, `get_nft_market_stats`.
 
 **Money** (need `COOKIE_PRIVATE_KEY`): `trade` (swap via Candy Shop), `transfer` (COOK or any token),
 `stake` / `unstake` (COOK ⇄ bCOOK liquid staking), `deploy_token` (launch on the Cookiebox bonding
@@ -78,6 +82,11 @@ curve), `claim_creator_fees` (claim the creator trading fees a token you launche
 `claim_fees` (Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM, venue auto-detected),
 `lock_liquidity` (Cookiebox DAMM v2, permanent). Concentrated-liquidity venues (CLMM / SAMM) open a
 full-range position by default.
+
+**NFT marketplace** (need `COOKIE_PRIVATE_KEY`, [Baked Bazaar](https://bakedbazaar.art)): `buy_nft`,
+`list_nft`, `cancel_listing`, `make_offer`, `accept_offer`, `cancel_offer`. Built on the Cookie Chain
+Metaplex Auction House (1% marketplace fee + creator royalties); every action is built and signed
+locally. `buy_nft` / `make_offer` honor the spend cap.
 
 Use the COOK / native mint `So11111111111111111111111111111111111111112` for COOK. Every tool returns
 JSON; failures return `{ error, hint }` — never a stack trace, never your key.

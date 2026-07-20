@@ -9,6 +9,12 @@ export const COOKIE_SWAP_API_URL =
 export const COOKIESCAN_API_URL =
   process.env.COOKIESCAN_API_URL?.trim().replace(/\/$/, "") || "https://api.cookiescan.io";
 
+// Baked Bazaar (NFT marketplace) backend. The only source of active listings/offers/collections —
+// Cookie Chain RPC has no getProgramAccounts on the auction-house program and the DAS API indexes no
+// listings, so on-chain enumeration isn't viable. Configurable in case the host changes.
+export const BAKED_BAZAAR_API_URL =
+  process.env.BAKED_BAZAAR_API_URL?.trim().replace(/\/$/, "") || "https://bakedbazaar.art/api";
+
 export const EXPLORER_URL =
   process.env.COOKIE_EXPLORER_URL?.trim().replace(/\/$/, "") || "https://cookiescan.io";
 

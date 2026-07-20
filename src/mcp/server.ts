@@ -26,6 +26,20 @@ import {
   lockLiquidity,
   claimFees,
 } from "../core/liquidity";
+import {
+  getNftListings,
+  getNft,
+  getWalletNfts,
+  getNftOffers,
+  getMarketStats,
+  getCollection,
+  listNft,
+  cancelListing,
+  buyNft,
+  makeOffer,
+  cancelOffer,
+  acceptOffer,
+} from "../core/nft";
 
 type ToolContent = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
 
@@ -489,6 +503,210 @@ registerTool(
     },
   },
   tool(async (a: { poolPk: string }) => claimFees(a)),
+);
+
+// NFT marketplace — Baked Bazaar (Metaplex Auction House on Cookie Chain). Reads use the marketplace
+// indexer; every write builds the auction-house tx, simulates, signs locally, and confirms. COOK-
+// spending tools (buy_nft, make_offer) honor the spend cap. Requires COOKIE_PRIVATE_KEY for writes.
+registerTool(
+  "get_nft_listings",
+  {
+    title: "List NFT listings (Baked Bazaar)",
+    description:
+      "Active NFT listings on Baked Bazaar with prices in COOK, seller, and collection. Filter by " +
+      "`collection` (symbol or collection key) or `seller`, and sort by price (cheapest first) or " +
+      "recency. No wallet needed. Use to find NFTs to buy.",
+    inputSchema: {
+      collection: z
+        .string()
+        .optional()
+        .describe("filter by collection symbol (e.g. GORI) or collection key"),
+      seller: z.string().min(32).max(44).optional().describe("filter by seller wallet"),
+      sort: z.enum(["price", "recent"]).optional().describe("sort key (default recent)"),
+      limit: z.number().int().min(1).max(100).optional().describe("max listings (default 20)"),
+    },
+  },
+  tool(
+    async (a: {
+      collection?: string;
+      seller?: string;
+      sort?: "price" | "recent";
+      limit?: number;
+    }) => getNftListings(a),
+  ),
+);
+
+registerTool(
+  "get_nft",
+  {
+    title: "NFT details (Baked Bazaar)",
+    description:
+      "Full detail for one NFT mint: metadata (name, image, attributes, collection), whether it's " +
+      "listed and at what price, the best current offer, and the collection floor. No wallet needed.",
+    inputSchema: {
+      mint: z.string().min(32).max(44).describe("the NFT mint address (base58)"),
+    },
+  },
+  tool(async (a: { mint: string }) => getNft(a.mint)),
+);
+
+registerTool(
+  "get_wallet_nfts",
+  {
+    title: "Wallet NFTs (Baked Bazaar)",
+    description:
+      "NFTs held by a wallet, each with any active Baked Bazaar listing. Defaults to the configured " +
+      "wallet (COOKIE_PRIVATE_KEY); pass `wallet` to inspect any address (required in read-only mode).",
+    inputSchema: {
+      wallet: z
+        .string()
+        .min(32)
+        .max(44)
+        .optional()
+        .describe("wallet address (base58); omit to use the configured wallet"),
+    },
+  },
+  tool(async (a: { wallet?: string }) => getWalletNfts(a.wallet)),
+);
+
+registerTool(
+  "get_nft_offers",
+  {
+    title: "NFT offers (Baked Bazaar)",
+    description:
+      "Offers a wallet has made and offers it has received (bids on NFTs it holds), with prices in " +
+      "COOK. Defaults to the configured wallet; pass `wallet` to inspect any address. Use before " +
+      "accept_offer / cancel_offer.",
+    inputSchema: {
+      wallet: z
+        .string()
+        .min(32)
+        .max(44)
+        .optional()
+        .describe("wallet address (base58); omit to use the configured wallet"),
+    },
+  },
+  tool(async (a: { wallet?: string }) => getNftOffers(a.wallet)),
+);
+
+registerTool(
+  "get_nft_market_stats",
+  {
+    title: "NFT market stats (Baked Bazaar)",
+    description:
+      "Marketplace-wide Baked Bazaar stats: active listing count, floor price, total and 24h volume, " +
+      "and sales counts (COOK). Optionally pass `collection` for a collection's supply and holder " +
+      "count. No wallet needed.",
+    inputSchema: {
+      collection: z
+        .string()
+        .optional()
+        .describe("collection symbol (e.g. GORI) for collection-level stats"),
+    },
+  },
+  tool(async (a: { collection?: string }) =>
+    a.collection ? getCollection(a.collection) : getMarketStats(),
+  ),
+);
+
+registerTool(
+  "list_nft",
+  {
+    title: "List an NFT for sale (Baked Bazaar)",
+    description:
+      "List an NFT you own for sale on Baked Bazaar at `price` COOK (creates the auction-house sell " +
+      "order). Simulates before sending; signs locally. Requires COOKIE_PRIVATE_KEY. The 1% " +
+      "marketplace fee and creator royalties are taken from the sale proceeds when it sells.",
+    inputSchema: {
+      mint: z.string().min(32).max(44).describe("the NFT mint you own"),
+      price: z.union([z.number().positive(), z.string()]).describe("sale price in COOK, e.g. 12.5"),
+    },
+  },
+  tool(async (a: { mint: string; price: string | number }) => listNft(a)),
+);
+
+registerTool(
+  "cancel_listing",
+  {
+    title: "Cancel an NFT listing (Baked Bazaar)",
+    description:
+      "Cancel your active Baked Bazaar listing for an NFT and reclaim it. Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      mint: z.string().min(32).max(44).describe("the listed NFT mint"),
+    },
+  },
+  tool(async (a: { mint: string }) => cancelListing(a)),
+);
+
+registerTool(
+  "buy_nft",
+  {
+    title: "Buy a listed NFT (Baked Bazaar)",
+    description:
+      "Buy a listed NFT at its current listing price: funds escrow, bids, and settles the sale in one " +
+      "transaction; the NFT lands in your wallet. Optionally pass `maxPrice` (COOK) as a guard. " +
+      "Simulates before sending; enforces the per-trade spend cap (COOKIE_MAX_TRADE_COOK). Requires " +
+      "COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      mint: z.string().min(32).max(44).describe("the listed NFT mint to buy"),
+      maxPrice: z
+        .union([z.number().positive(), z.string()])
+        .optional()
+        .describe("refuse if the listing price (COOK) is above this"),
+    },
+  },
+  tool(async (a: { mint: string; maxPrice?: string | number }) => buyNft(a)),
+);
+
+registerTool(
+  "make_offer",
+  {
+    title: "Make an offer on an NFT (Baked Bazaar)",
+    description:
+      "Place a public offer (bid) on an NFT at `price` COOK. The COOK is escrowed with the auction " +
+      "house until the offer is accepted or you cancel it. Simulates before sending; enforces the " +
+      "spend cap. Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      mint: z.string().min(32).max(44).describe("the NFT mint to bid on"),
+      price: z.union([z.number().positive(), z.string()]).describe("offer price in COOK"),
+    },
+  },
+  tool(async (a: { mint: string; price: string | number }) => makeOffer(a)),
+);
+
+registerTool(
+  "cancel_offer",
+  {
+    title: "Cancel an NFT offer (Baked Bazaar)",
+    description:
+      "Cancel your active offer on an NFT and withdraw the escrowed COOK back to your wallet. Requires " +
+      "COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      mint: z.string().min(32).max(44).describe("the NFT mint you bid on"),
+    },
+  },
+  tool(async (a: { mint: string }) => cancelOffer(a)),
+);
+
+registerTool(
+  "accept_offer",
+  {
+    title: "Accept an offer on your NFT (Baked Bazaar)",
+    description:
+      "Accept an offer on an NFT you own, selling it to the bidder for the escrowed COOK (minus the 1% " +
+      "fee and royalties). Takes the highest active offer unless you pass `buyer`. Simulates before " +
+      "sending. Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      mint: z.string().min(32).max(44).describe("the NFT mint you own"),
+      buyer: z
+        .string()
+        .min(32)
+        .max(44)
+        .optional()
+        .describe("bidder wallet, if multiple offers exist"),
+    },
+  },
+  tool(async (a: { mint: string; buyer?: string }) => acceptOffer(a)),
 );
 
 async function main() {
