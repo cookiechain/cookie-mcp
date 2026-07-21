@@ -56,16 +56,13 @@ file path) to enable swaps, transfers, and launches.
 
 ## Configuration
 
-| Variable                                            | Default                               | Purpose                                                                                    |
-| --------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `COOKIE_RPC_URL`                                    | `https://rpc.cookiescan.io`           | Cookie Chain RPC.                                                                          |
-| `COOKIE_PRIVATE_KEY`                                | —                                     | Wallet key for money-moving tools. Read-only if unset.                                     |
-| `COOKIE_MAX_TRADE_COOK`                             | `100`                                 | Per-transaction spend cap in COOK (`0` disables).                                          |
-| `COOKIE_SLIPPAGE_BPS`                               | `500`                                 | Default slippage (bps).                                                                    |
-| `COOKIE_SWAP_API_URL`                               | `https://swap.cookiescan.io/api`      | Candy Shop aggregator base.                                                                |
-| `BAKED_BAZAAR_API_URL`                              | `https://bakedbazaar.art/api`         | Baked Bazaar NFT marketplace backend (listings/offers).                                    |
-| `SOLANA_RPC_URL`                                    | `https://api.mainnet-beta.solana.com` | Solana mainnet RPC (bridge only).                                                          |
-| `COOKIE_WARP_PROGRAM_ID` / `SOLANA_WARP_PROGRAM_ID` | —                                     | Hyperlane warp route program ids — **required for `bridge`** (deploy output, not shipped). |
+| Variable                | Default                               | Purpose                                                |
+| ----------------------- | ------------------------------------- | ------------------------------------------------------ |
+| `COOKIE_RPC_URL`        | `https://rpc.cookiescan.io`           | Cookie Chain RPC.                                      |
+| `COOKIE_PRIVATE_KEY`    | —                                     | Wallet key for money-moving tools. Read-only if unset. |
+| `COOKIE_MAX_TRADE_COOK` | `100`                                 | Per-transaction spend cap in COOK (`0` disables).      |
+| `COOKIE_SLIPPAGE_BPS`   | `500`                                 | Default slippage (bps).                                |
+| `SOLANA_RPC_URL`        | `https://api.mainnet-beta.solana.com` | Solana mainnet RPC (bridge only).                      |
 
 ## Tools
 
@@ -87,13 +84,14 @@ full-range position by default.
 Metaplex Auction House (1% marketplace fee + creator royalties); every action is built and signed
 locally. `buy_nft` / `make_offer` honor the spend cap.
 
-**Bridge** (need `COOKIE_PRIVATE_KEY` + `COOKIE_WARP_PROGRAM_ID` / `SOLANA_WARP_PROGRAM_ID`): `bridge`
+**Bridge** (need `COOKIE_PRIVATE_KEY`): `bridge`
 moves COOK 1:1 between Cookie Chain and Solana mainnet over the [Hyperlane](https://hyperlane.cookiescan.io)
 warp route (`direction` = `cookie-to-solana` | `solana-to-cookie`). One source-chain signature dispatches
 the transfer; a relayer delivers on the far side in a few minutes — check with `bridge_status` (a read,
 by Hyperlane message id). Cookie native COOK is 9-decimal; Solana COOK is a 6-decimal Token-2022 mint —
-amounts are in COOK either way. Honors the spend cap and simulates first. The warp route program ids are
-the bridge operator's deploy output (not shipped in the repo), so both must be supplied.
+amounts are in COOK either way. Honors the spend cap and simulates first. The mainnet warp-route program
+ids ship as defaults, so `bridge` works out of the box — override `COOKIE_WARP_PROGRAM_ID` /
+`SOLANA_WARP_PROGRAM_ID` only for a different deployment.
 
 Use the COOK / native mint `So11111111111111111111111111111111111111112` for COOK. Every tool returns
 JSON; failures return `{ error, hint }` — never a stack trace, never your key.
