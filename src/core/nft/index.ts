@@ -190,6 +190,57 @@ export async function getNftListings(args: {
   return { count: listings.length, listings: listings.slice(0, limit).map(toListingView) };
 }
 
+// Match an active listing against a lowercased query, best-match-first. 0 = no match. Collection and
+// symbol exact beat name exact beat prefixes beat substrings; a full mint match is treated as exact.
+function listingMatchScore(l: BazaarListing, q: string): number {
+  const name = (l.metadata?.name ?? "").toLowerCase();
+  const sym = (l.metadata?.symbol ?? "").toLowerCase();
+  const coll = (l.metadata?.collection?.key ?? "").toLowerCase();
+  const mint = l.nftMint.toLowerCase();
+  if (mint === q) return 100;
+  if (sym === q || coll === q) return 90;
+  if (name === q) return 85;
+  if (sym.startsWith(q) || coll.startsWith(q)) return 70;
+  if (name.startsWith(q)) return 60;
+  if (mint.startsWith(q)) return 55;
+  if (sym.includes(q) || coll.includes(q)) return 40;
+  if (name.includes(q)) return 30;
+  return 0;
+}
+
+// Pure: search active listings by name/symbol/collection/mint. Ties break cheapest-first. Only listed
+// NFTs are searchable — the bazaar indexer exposes no all-NFTs-by-name feed, and you can only buy a listing.
+export function searchListings(
+  all: BazaarListing[],
+  query: string,
+  limit: number,
+): NftListingView[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  return all
+    .filter((l) => (l.status ?? "").toLowerCase() === "active")
+    .map((l) => ({ l, score: listingMatchScore(l, q) }))
+    .filter((x) => x.score > 0)
+    .sort((a, b) =>
+      b.score !== a.score ? b.score - a.score : BigInt(a.l.price) < BigInt(b.l.price) ? -1 : 1,
+    )
+    .slice(0, limit)
+    .map((x) => toListingView(x.l));
+}
+
+/** Resolve an NFT/collection name to listed mints by searching active Baked Bazaar listings. */
+export async function searchNfts(
+  query: string,
+  limit = 20,
+): Promise<{ query: string; count: number; results: NftListingView[]; note?: string }> {
+  const bounded = Math.min(Math.max(limit, 1), 100);
+  const results = searchListings(await fetchListings(), query, bounded);
+  const note = results.length
+    ? undefined
+    : "no active listings matched — only listed NFTs are searchable; try a collection symbol or browse get_nft_listings";
+  return { query, count: results.length, results, note };
+}
+
 /** Full detail for one NFT: metadata, current listing/price, best offer, collection floor. */
 export async function getNft(mint: string): Promise<unknown> {
   const nft = await fetchNft(mint);

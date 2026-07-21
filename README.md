@@ -6,41 +6,102 @@
 [![node](https://img.shields.io/node/v/cookie-mcp.svg)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/cookie-mcp.svg)](./LICENSE)
 
-A Model Context Protocol (MCP) server that provides onchain tools for any AI agent, allowing it to interact with the [Cookie Chain](https://www.cookiechain.wtf) blockchain through a standardized interface.
+A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that gives any AI agent
+onchain tools for the [Cookie Chain](https://www.cookiechain.wtf) blockchain — read the market, swap,
+launch tokens, manage liquidity, stake, trade NFTs, and bridge to Solana.
 
-## Overview
+It runs **locally over stdio** and **signs with your key on your machine**, so it is non-custodial by
+design. It is a community project for the whole Cookie Chain ecosystem.
 
-A community project for the whole Cookie Chain ecosystem — give any AI agent the ability to read Cookie
-Chain market data and act on it. It runs locally over stdio and signs with your key on your machine, so
-it's non-custodial by design. Its tools let an agent:
+## Contents
 
-- **Read the market** — chain health, pools, token info, swap quotes, and wallet balances (no key needed).
+- [What it can do](#what-it-can-do)
+- [Install](#install) — [Claude Code](#claude-code) · [Claude Desktop](#claude-desktop) · [Cursor](#cursor)
+- [Enable trading (add a key)](#enable-trading-add-a-key)
+- [Try it](#try-it)
+- [Configuration](#configuration)
+- [Tools](#tools)
+- [Safety](#safety)
+- [Development](#development)
+
+## What it can do
+
+- **Read the market** — chain health, pools, token info, token search, swap quotes, and wallet
+  balances. No key needed.
 - **Swap** any Cookie Chain token pair through the [Candy Shop](https://swap.cookiescan.io) aggregator,
   which routes across all Cookie Chain DEX liquidity for the best fill.
 - **Transfer** COOK or any SPL / Token-2022 token.
-- **Launch tokens** on the Cookiebox bonding curve (`deploy_token`) and claim the creator fees they earn
-  (`claim_creator_fees`).
-- **Manage liquidity** — create pools, add / remove liquidity, claim accrued fees, and permanently lock
+- **Launch tokens** on the Cookiebox bonding curve and claim the creator fees they earn.
+- **Manage liquidity** — create pools, add / remove liquidity, claim fees, and permanently lock
   positions across Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM (venue auto-detected).
-- **Liquid-stake** COOK for bCOOK and redeem it instantly (`stake` / `unstake` / `stake_info`).
-- **Trade NFTs** on [Baked Bazaar](https://bakedbazaar.art) — browse listings, buy, list, make / accept /
-  cancel offers (Cookie Chain's Metaplex Auction House marketplace).
-- **Bridge** COOK 1:1 between Cookie Chain and Solana mainnet over [Hyperlane](https://hyperlane.cookiescan.io)
-  (`bridge` / `bridge_status`).
+- **Liquid-stake** COOK for bCOOK and redeem it instantly.
+- **Trade NFTs** on [Baked Bazaar](https://bakedbazaar.art) — search, browse, buy, list, and make /
+  accept offers (Cookie Chain's Metaplex Auction House marketplace).
+- **Bridge** COOK 1:1 between Cookie Chain and Solana mainnet over [Hyperlane](https://hyperlane.cookiescan.io).
 
-Safe by default: read-only until you add a key, a hard per-trade spend cap, and every money-moving action
-is simulated before it's sent.
+Safe by default: read-only until you add a key, a hard per-transaction spend cap, and every
+money-moving action is simulated before it is sent.
 
-## Use it from an agent
+## Install
 
-Requires **Node ≥ 22**. No install needed — `npx` fetches the published package on first run.
+Requires **Node ≥ 22**. There is nothing to install or build — `npx` fetches the published package on
+first run. Pick your client below. All three use the same server; the only difference is where the
+config lives.
 
-Register the server with your agent:
+### Claude Code
+
+The quickest way — one command, available in **every** project:
+
+```bash
+claude mcp add --scope user --transport stdio cookie-mcp -- npx -y cookie-mcp
+```
+
+This registers the server read-only (no key). See [Enable trading](#enable-trading-add-a-key) to add a
+wallet.
+
+**Scopes** — `claude mcp add` writes to one of three places; choose with `--scope`:
+
+| `--scope`           | Available in             | Stored in                     |
+| ------------------- | ------------------------ | ----------------------------- |
+| `user`              | all your projects        | `~/.claude.json`              |
+| _(omitted)_ `local` | the current project dir  | `~/.claude.json` (per-folder) |
+| `project`           | anyone who clones a repo | `.mcp.json` at the repo root  |
+
+Use `--scope project` only when you want the server **committed into a specific repo** — it writes a
+`.mcp.json` that teammates must approve on first use. For a general-purpose tool like this, `--scope
+user` is the right default.
+
+Verify it registered:
+
+```bash
+claude mcp list          # all servers
+claude mcp get cookie-mcp # this one's details
+# or run /mcp inside a Claude Code session
+```
+
+### Claude Desktop
+
+Edit the config file (create it if missing), then restart Claude Desktop:
+
+- **macOS** — `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows** — `%APPDATA%\Claude\claude_desktop_config.json`
+
+Add the [server block](#server-block) below under `mcpServers`.
+
+### Cursor
+
+Edit `~/.cursor/mcp.json` (applies everywhere) or `.cursor/mcp.json` in a project (project wins if
+both exist), then add the [server block](#server-block).
+
+### Server block
+
+Claude Desktop, Cursor, and a Claude Code `.mcp.json` all use the identical shape:
 
 ```json
 {
   "mcpServers": {
     "cookie-mcp": {
+      "type": "stdio",
       "command": "npx",
       "args": ["-y", "cookie-mcp"],
       "env": {
@@ -52,11 +113,39 @@ Register the server with your agent:
 }
 ```
 
-- **Claude Code** — `claude mcp add cookie-mcp -- npx -y cookie-mcp`.
-- **Claude Desktop / Cursor** — add the block above to `claude_desktop_config.json` / `~/.cursor/mcp.json`.
+## Enable trading (add a key)
 
-Leave `COOKIE_PRIVATE_KEY` empty for read-only. Set it (base58 secret, keygen JSON array, or keypair
-file path) to enable swaps, transfers, and launches.
+Reads work with no key. To let the agent **swap, transfer, launch, stake, LP, buy NFTs, or bridge**,
+provide a wallet via `COOKIE_PRIVATE_KEY` — a base58 secret, a `solana-keygen` JSON byte array, or a
+path to a keypair file.
+
+- **Config-file clients (Desktop / Cursor / `.mcp.json`):** put it in the `env` block above.
+- **Claude Code:** re-run the add with `--env` (note: this is saved to `~/.claude.json`; avoid leaving
+  the raw secret in your shell history):
+
+  ```bash
+  claude mcp add --scope user --transport stdio cookie-mcp \
+    --env COOKIE_RPC_URL=https://rpc.cookiescan.io \
+    --env COOKIE_PRIVATE_KEY=<your-key-or-path> \
+    -- npx -y cookie-mcp
+  ```
+
+Your key never leaves your machine, is used only to sign locally, and is redacted from all output. The
+per-transaction spend cap (`COOKIE_MAX_TRADE_COOK`, default 100 COOK) limits how much any single action
+can spend.
+
+## Try it
+
+Once it's registered, just talk to your agent naturally:
+
+- _"What's the health of Cookie Chain right now?"_ → `chain_health`
+- _"Find the cookhouse token and show me its price and liquidity."_ → `search_tokens` → `get_token_info`
+- _"Quote swapping 10 COOK for bCOOK."_ → `get_quote`
+- _"Swap 10 COOK for bCOOK."_ → `get_quote` → `trade` (needs a key; capped + simulated first)
+- _"What COOKHOUSE NFTs are listed, and buy the cheapest under 50 COOK."_ → `search_nfts` → `buy_nft`
+
+The agent resolves names to mint addresses with `search_tokens` / `search_nfts`, then acts on the mint —
+it never turns a name straight into a trade.
 
 ## Configuration
 
@@ -68,11 +157,16 @@ file path) to enable swaps, transfers, and launches.
 | `COOKIE_SLIPPAGE_BPS`   | `500`                                 | Default slippage (bps).                                |
 | `SOLANA_RPC_URL`        | `https://api.mainnet-beta.solana.com` | Solana mainnet RPC (bridge only).                      |
 
+The Candy Shop API, Baked Bazaar API, and the Hyperlane warp-route program ids all ship with working
+mainnet defaults, so you never need to set them — override via env only to target a different
+deployment (see `src/core/config.ts`).
+
 ## Tools
 
-**Reads** (no key): `chain_health`, `get_pools`, `get_token_info`, `get_quote`, `get_balance`,
-`stake_info` (bCOOK liquid-staking rate / TVL / APY / fees), and NFT reads `get_nft_listings`, `get_nft`,
-`get_wallet_nfts`, `get_nft_offers`, `get_nft_market_stats`.
+**Reads** (no key): `chain_health`, `get_pools`, `get_token_info`, `search_tokens` (resolve a token
+name/ticker to its mint), `get_quote`, `get_balance`, `stake_info` (bCOOK liquid-staking rate / TVL /
+APY / fees), and NFT reads `get_nft_listings`, `search_nfts` (resolve an NFT/collection name to a listed
+mint), `get_nft`, `get_wallet_nfts`, `get_nft_offers`, `get_nft_market_stats`.
 
 **Money** (need `COOKIE_PRIVATE_KEY`): `trade` (swap via Candy Shop), `transfer` (COOK or any token),
 `stake` / `unstake` (COOK ⇄ bCOOK liquid staking), `deploy_token` (launch on the Cookiebox bonding
@@ -88,14 +182,14 @@ full-range position by default.
 Metaplex Auction House (1% marketplace fee + creator royalties); every action is built and signed
 locally. `buy_nft` / `make_offer` honor the spend cap.
 
-**Bridge** (need `COOKIE_PRIVATE_KEY`): `bridge`
-moves COOK 1:1 between Cookie Chain and Solana mainnet over the [Hyperlane](https://hyperlane.cookiescan.io)
-warp route (`direction` = `cookie-to-solana` | `solana-to-cookie`). One source-chain signature dispatches
-the transfer; a relayer delivers on the far side in a few minutes — check with `bridge_status` (a read,
-by Hyperlane message id). Cookie native COOK is 9-decimal; Solana COOK is a 6-decimal Token-2022 mint —
-amounts are in COOK either way. Honors the spend cap and simulates first. The mainnet warp-route program
-ids ship as defaults, so `bridge` works out of the box — override `COOKIE_WARP_PROGRAM_ID` /
-`SOLANA_WARP_PROGRAM_ID` only for a different deployment.
+**Bridge** (need `COOKIE_PRIVATE_KEY`): `bridge` moves COOK 1:1 between Cookie Chain and Solana mainnet
+over the [Hyperlane](https://hyperlane.cookiescan.io) warp route (`direction` = `cookie-to-solana` |
+`solana-to-cookie`). One source-chain signature dispatches the transfer; a relayer delivers on the far
+side in a few minutes — check with `bridge_status` (a read, by Hyperlane message id). Cookie native COOK
+is 9-decimal; Solana COOK is a 6-decimal Token-2022 mint — amounts are in COOK either way. Honors the
+spend cap and simulates first. The mainnet warp-route program ids ship as defaults, so `bridge` works
+out of the box — override `COOKIE_WARP_PROGRAM_ID` / `SOLANA_WARP_PROGRAM_ID` only for a different
+deployment.
 
 Use the COOK / native mint `So11111111111111111111111111111111111111112` for COOK. Every tool returns
 JSON; failures return `{ error, hint }` — never a stack trace, never your key.
@@ -104,7 +198,7 @@ JSON; failures return `{ error, hint }` — never a stack trace, never your key.
 
 Non-custodial and local: no hosted server, no remote key storage. The key stays in `COOKIE_PRIVATE_KEY`,
 signs locally, and is redacted from all output. Read-only until a key is set; every trade/transfer is
-capped and simulated before sending.
+capped (`COOKIE_MAX_TRADE_COOK`) and simulated before sending.
 
 ## Development
 
@@ -115,5 +209,9 @@ yarn mcp     # run the server on stdio from source (tsx)
 yarn build   # bundle to dist/mcp/server.js (what gets published)
 ```
 
-To point an agent at a local checkout instead of the published package, use
-`"command": "npx", "args": ["tsx", "/ABS/PATH/cookie-mcp/src/mcp/server.ts"]`.
+To point an agent at a local checkout instead of the published package, set the command to
+`npx tsx /ABS/PATH/cookie-mcp/src/mcp/server.ts`.
+
+## License
+
+[MIT](./LICENSE).

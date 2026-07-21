@@ -2,6 +2,26 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+# [0.2.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.2.0)
+
+_July 21, 2026_
+
+### Added
+
+- **Search by name** — resolve a named asset to its mint so an agent can act on "buy cookhouse"
+  without being handed an address:
+  - `search_tokens` — searches the Cookiescan token registry by symbol/name (partial,
+    case-insensitive) or mint prefix, returning candidates ranked most-liquid-first. Flags when
+    multiple tokens share a symbol so the agent confirms the mint before trading.
+  - `search_nfts` — searches active Baked Bazaar listings by name/symbol/collection or mint prefix
+    (only currently-listed NFTs are searchable).
+  - Tool surface 30 → 32.
+
+### Changed
+
+- Rewrote the README with clearer per-client install (Claude Code, Claude Desktop, Cursor), MCP scope
+  guidance (`local` / `user` / `project` and when to use `.mcp.json`), and example prompts.
+
 # [0.1.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.1.0)
 
 _July 21, 2026_

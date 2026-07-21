@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { PublicKey, Keypair } from "@solana/web3.js";
 
-import { filterSortListings, toListingView, decodeMetadataCreators } from "./index";
+import { filterSortListings, searchListings, toListingView, decodeMetadataCreators } from "./index";
 import type { BazaarListing } from "./bazaar";
 
 function listing(over: Partial<BazaarListing>): BazaarListing {
@@ -47,6 +47,46 @@ describe("filterSortListings", () => {
     ];
     const out = filterSortListings(withColl, { collection: "GORI" });
     expect(out.map((l) => l.nftMint).sort()).toEqual(["c1", "c2"]);
+  });
+});
+
+describe("searchListings", () => {
+  const listings = [
+    listing({
+      nftMint: "n1",
+      price: "3000000000",
+      metadata: { name: "Cookhouse #1", symbol: "COOKHOUSE", collection: { key: "COOKHOUSE" } },
+    }),
+    listing({
+      nftMint: "n2",
+      price: "1000000000",
+      metadata: { name: "Cookhouse #2", symbol: "COOKHOUSE", collection: { key: "COOKHOUSE" } },
+    }),
+    listing({
+      nftMint: "n3",
+      price: "500000000",
+      status: "Sold",
+      metadata: { name: "Cookhouse #3", symbol: "COOKHOUSE" },
+    }),
+    listing({ nftMint: "n4", metadata: { name: "Gorbhouse", symbol: "GORB" } }),
+  ];
+
+  it("finds active listings by collection/symbol and returns cheapest-first on ties", () => {
+    const out = searchListings(listings, "cookhouse", 10);
+    expect(out.map((l) => l.mint)).toEqual(["n2", "n1"]); // n3 Sold dropped; 1 COOK before 3 COOK
+  });
+
+  it("matches a name substring case-insensitively", () => {
+    expect(
+      searchListings(listings, "house", 10)
+        .map((l) => l.mint)
+        .sort(),
+    ).toEqual(["n1", "n2", "n4"]);
+  });
+
+  it("honors the limit and returns [] for a blank query", () => {
+    expect(searchListings(listings, "cookhouse", 1)).toHaveLength(1);
+    expect(searchListings(listings, "  ", 10)).toEqual([]);
   });
 });
 

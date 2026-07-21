@@ -18,6 +18,7 @@ const EXPECTED_TOOLS = [
   "chain_health",
   "get_pools",
   "get_token_info",
+  "search_tokens",
   "get_quote",
   "get_balance",
   "trade",
@@ -32,6 +33,7 @@ const EXPECTED_TOOLS = [
   "remove_liquidity",
   "lock_liquidity",
   "claim_fees",
+  "search_nfts",
 ];
 
 async function main() {

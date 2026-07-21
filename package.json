@@ -1,6 +1,6 @@
 {
   "name": "cookie-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local stdio MCP server for Cookie Chain — read market data, swap, launch tokens, and manage liquidity from any AI agent.",
   "license": "MIT",
   "author": "Cookie Chain community developers",

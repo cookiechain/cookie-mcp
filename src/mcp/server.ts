@@ -10,7 +10,7 @@ import { DEFAULT_SLIPPAGE_BPS, MAX_TRADE_COOK } from "../core/config";
 import { CookieMcpError, toToolError } from "../core/errors";
 import { getChainHealth } from "../core/health";
 import { getPools } from "../core/pools";
-import { getTokenInfo } from "../core/token";
+import { getTokenInfo, searchTokens } from "../core/token";
 import { getQuote } from "../core/quote";
 import { getBalances } from "../core/balances";
 import { ownPublicKey } from "../core/wallet";
@@ -28,6 +28,7 @@ import {
 } from "../core/liquidity";
 import {
   getNftListings,
+  searchNfts,
   getNft,
   getWalletNfts,
   getNftOffers,
@@ -64,7 +65,7 @@ function tool<A>(fn: (args: A) => Promise<unknown>) {
   };
 }
 
-const server = new McpServer({ name: "cookie-mcp", version: "0.1.0" });
+const server = new McpServer({ name: "cookie-mcp", version: "0.2.0" });
 
 // Simply-typed alias for registerTool. The SDK's generic signature infers handler args from the zod
 // inputSchema via deep conditional types that TS reports as TS2589 ("excessively deep") and OOMs on;
@@ -121,6 +122,25 @@ registerTool(
     },
   },
   tool(async (a: { mint: string }) => getTokenInfo(a.mint)),
+);
+
+registerTool(
+  "search_tokens",
+  {
+    title: "Search tokens by name",
+    description:
+      "Resolve a token name or ticker to its mint by searching the Cookiescan registry (every Cookie " +
+      "Chain token) by symbol/name — partial and case-insensitive — or by mint prefix. Returns ranked " +
+      "candidates (most liquid first) with mint, price, liquidity, 24h volume, and holders. Use this " +
+      "FIRST whenever the user names a token but you don't have its mint, then pass the chosen mint to " +
+      "get_token_info / get_quote / trade. Multiple tokens can share a symbol — compare liquidity and " +
+      "confirm the mint before trading. No wallet needed.",
+    inputSchema: {
+      query: z.string().min(1).describe('token name, ticker, or mint prefix, e.g. "cookhouse"'),
+      limit: z.number().int().min(1).max(50).optional().describe("max results (default 20)"),
+    },
+  },
+  tool(async (a: { query: string; limit?: number }) => searchTokens(a.query, a.limit)),
 );
 
 registerTool(
@@ -535,6 +555,27 @@ registerTool(
       limit?: number;
     }) => getNftListings(a),
   ),
+);
+
+registerTool(
+  "search_nfts",
+  {
+    title: "Search NFTs by name",
+    description:
+      "Resolve an NFT or collection name to a mint by searching active Baked Bazaar listings by name, " +
+      "symbol, or collection — partial and case-insensitive — or by mint prefix. Returns matching " +
+      "listed NFTs (cheapest first) with mint, collection, price in COOK, and seller. Use this FIRST " +
+      "whenever the user names an NFT or collection to buy but you don't have its mint, then pass the " +
+      "chosen mint to get_nft / buy_nft. Only currently-listed NFTs are searchable. No wallet needed.",
+    inputSchema: {
+      query: z
+        .string()
+        .min(1)
+        .describe('NFT name, collection symbol, or mint prefix, e.g. "cookhouse"'),
+      limit: z.number().int().min(1).max(100).optional().describe("max results (default 20)"),
+    },
+  },
+  tool(async (a: { query: string; limit?: number }) => searchNfts(a.query, a.limit)),
 );
 
 registerTool(
