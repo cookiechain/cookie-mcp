@@ -64,6 +64,36 @@ interface DbcPoolState {
   creatorQuoteFee: BN;
 }
 
+/** Parse the base mint arg, with a claim-specific hint on failure. */
+export function parseClaimMint(mint: string): PublicKey {
+  try {
+    return new PublicKey(mint);
+  } catch {
+    throw new CookieMcpError(
+      `invalid mint address: ${mint}`,
+      "pass the base mint of a token you launched with deploy_token",
+    );
+  }
+}
+
+/** Only the launching wallet may claim a token's creator fees. */
+export function isCreator(stateCreator: PublicKey, owner: PublicKey): boolean {
+  return stateCreator.equals(owner);
+}
+
+/** There is something to claim only when at least one accrued fee side is non-zero. */
+export function hasClaimableFees(baseFee: BN, quoteFee: BN): boolean {
+  return !(baseFee.isZero() && quoteFee.isZero());
+}
+
+/** Format the claimed amounts: base in the DBC token's decimals, quote in COOK's. */
+export function formatClaimed(baseFee: BN, quoteFee: BN): { base: string; quote: string } {
+  return {
+    base: rawToUi(BigInt(baseFee.toString()), DBC_TOKEN_DECIMALS),
+    quote: rawToUi(BigInt(quoteFee.toString()), COOK_DECIMALS),
+  };
+}
+
 export interface ClaimCreatorFeesResult {
   signature: string;
   mint: string;
@@ -78,15 +108,7 @@ export async function claimCreatorFees(args: { mint: string }): Promise<ClaimCre
   const owner = keypair.publicKey;
   const conn = getConnection();
 
-  let baseMint: PublicKey;
-  try {
-    baseMint = new PublicKey(args.mint);
-  } catch {
-    throw new CookieMcpError(
-      `invalid mint address: ${args.mint}`,
-      "pass the base mint of a token you launched with deploy_token",
-    );
-  }
+  const baseMint = parseClaimMint(args.mint);
   const quoteMint = new PublicKey(COOK_MINT); // Cookiebox DBC launches quote in wCOOK.
   const pool = deriveDbcPoolAddress(DBC_LAUNCH_CONFIG, baseMint, quoteMint);
 
@@ -101,7 +123,7 @@ export async function claimCreatorFees(args: { mint: string }): Promise<ClaimCre
       "pass the mint of a token launched via deploy_token",
     );
   }
-  if (!state.creator.equals(owner)) {
+  if (!isCreator(state.creator, owner)) {
     throw new CookieMcpError(
       "you are not the creator of this token",
       "only the wallet that launched the token can claim its creator fees",
@@ -110,7 +132,7 @@ export async function claimCreatorFees(args: { mint: string }): Promise<ClaimCre
 
   const baseFee = new BN(state.creatorBaseFee.toString());
   const quoteFee = new BN(state.creatorQuoteFee.toString());
-  if (baseFee.isZero() && quoteFee.isZero()) {
+  if (!hasClaimableFees(baseFee, quoteFee)) {
     throw new CookieMcpError(
       "no creator fees to claim yet",
       "creator fees accrue as your token trades on the bonding curve — try again after some volume",
@@ -180,10 +202,7 @@ export async function claimCreatorFees(args: { mint: string }): Promise<ClaimCre
     signature,
     mint: baseMint.toBase58(),
     pool: pool.toBase58(),
-    claimed: {
-      base: rawToUi(BigInt(baseFee.toString()), DBC_TOKEN_DECIMALS),
-      quote: rawToUi(BigInt(quoteFee.toString()), COOK_DECIMALS),
-    },
+    claimed: formatClaimed(baseFee, quoteFee),
     explorerUrl: explorerTxUrl(signature),
     links: {
       explorerTx: explorerTxUrl(signature),

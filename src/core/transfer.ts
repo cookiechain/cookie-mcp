@@ -14,12 +14,17 @@ import { getConnection } from "./rpc";
 import { requireWallet, assertWithinSpendCap } from "./wallet";
 import { rawToUi, uiToRaw } from "./format";
 
-function parsePubkey(addr: string, label: string): PublicKey {
+export function parsePubkey(addr: string, label: string): PublicKey {
   try {
     return new PublicKey(addr);
   } catch {
     throw new CookieMcpError(`invalid ${label} address: ${addr}`, "pass a valid base58 pubkey");
   }
+}
+
+/** A transfer is "native" (SystemProgram COOK) when no mint is given or it is the COOK mint. */
+export function isNativeTransfer(mint?: string): boolean {
+  return !mint || mint === COOK_MINT;
 }
 
 export interface TransferResult {
@@ -41,7 +46,7 @@ export async function transfer(args: {
   const from = keypair.publicKey;
   const to = parsePubkey(args.to, "recipient");
   const amountUi = Number(args.amount);
-  const isNative = !args.mint || args.mint === COOK_MINT;
+  const isNative = isNativeTransfer(args.mint);
 
   const tx = new Transaction();
   let mint = COOK_MINT;

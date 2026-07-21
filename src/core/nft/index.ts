@@ -141,7 +141,7 @@ export interface NftListingView {
   url: string;
 }
 
-function toListingView(l: BazaarListing): NftListingView {
+export function toListingView(l: BazaarListing): NftListingView {
   return {
     mint: l.nftMint,
     name: l.metadata?.name,
@@ -156,15 +156,13 @@ function toListingView(l: BazaarListing): NftListingView {
   };
 }
 
-/** Active listings, newest-first by default; filterable by collection symbol/key or seller. */
-export async function getNftListings(args: {
-  collection?: string;
-  seller?: string;
-  sort?: "price" | "recent";
-  limit?: number;
-}): Promise<{ count: number; listings: NftListingView[] }> {
-  const limit = Math.min(Math.max(args.limit ?? 20, 1), 100);
-  let listings = (await fetchListings()).filter((l) => (l.status ?? "").toLowerCase() === "active");
+// Keep only Active listings, apply the seller/collection filters, and sort (cheapest-first for
+// "price", newest-first otherwise). Pure — the network fetch is the caller's concern.
+export function filterSortListings(
+  all: BazaarListing[],
+  args: { collection?: string; seller?: string; sort?: "price" | "recent" },
+): BazaarListing[] {
+  let listings = all.filter((l) => (l.status ?? "").toLowerCase() === "active");
   if (args.seller) listings = listings.filter((l) => l.seller === args.seller);
   if (args.collection) {
     const c = args.collection;
@@ -177,6 +175,18 @@ export async function getNftListings(args: {
   } else {
     listings.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
   }
+  return listings;
+}
+
+/** Active listings, newest-first by default; filterable by collection symbol/key or seller. */
+export async function getNftListings(args: {
+  collection?: string;
+  seller?: string;
+  sort?: "price" | "recent";
+  limit?: number;
+}): Promise<{ count: number; listings: NftListingView[] }> {
+  const limit = Math.min(Math.max(args.limit ?? 20, 1), 100);
+  const listings = filterSortListings(await fetchListings(), args);
   return { count: listings.length, listings: listings.slice(0, limit).map(toListingView) };
 }
 

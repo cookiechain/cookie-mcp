@@ -30,19 +30,23 @@ import { requireWallet, assertWithinSpendCap } from "./wallet";
 import { rawToUi, uiToRaw } from "./format";
 
 // --- Cookie Chain bCOOK stake pool (canonical SPL Stake Pool program) ---------------------------
-const STAKE_POOL_PROGRAM = new PublicKey("GZgs5uREPp6BvDt8eysmhavQPAHBAtjePgV4zfhgd9pH");
-const STAKE_POOL = new PublicKey("GxbNKNYdtNXQkhDkpHdLDAMX64GxaECgANqdfp6cUGH4");
+export const STAKE_POOL_PROGRAM = new PublicKey("GZgs5uREPp6BvDt8eysmhavQPAHBAtjePgV4zfhgd9pH");
+export const STAKE_POOL = new PublicKey("GxbNKNYdtNXQkhDkpHdLDAMX64GxaECgANqdfp6cUGH4");
 export const BCOOK_MINT = new PublicKey("EkPafx58mgwkEnGwo62jXhXDAdJ37Z8G8MFBRPsr9uhz");
 const RESERVE_STAKE = new PublicKey("GAw1vRQ8R3ohDsSgGZV58dc32W7jYhHtc8DzuiVdvm8F");
 const MANAGER_FEE = new PublicKey("6ay8hjir4VZJ38x9sfL44Su8bvDEXmc5FrNyErHyv7G8");
 
-const BCOOK_DECIMALS = 9;
-const DEPOSIT_FEE_BPS = 50; // 0.5% on deposit
-const WITHDRAW_FEE_BPS = 200; // 2% on withdrawal
+export const BCOOK_DECIMALS = 9;
+export const DEPOSIT_FEE_BPS = 50; // 0.5% on deposit
+export const WITHDRAW_FEE_BPS = 200; // 2% on withdrawal
 const RATE_HISTORY_URL = "https://bakeyourstake.xyz/rate-history.json";
 const HTTP_TIMEOUT_MS = 8_000;
 
-const WITHDRAW_AUTHORITY = PublicKey.findProgramAddressSync(
+// SPL StakePool instruction tags.
+export const IX_DEPOSIT_SOL = 14;
+export const IX_WITHDRAW_SOL = 16;
+
+export const WITHDRAW_AUTHORITY = PublicKey.findProgramAddressSync(
   [STAKE_POOL.toBuffer(), Buffer.from("withdraw")],
   STAKE_POOL_PROGRAM,
 )[0];
@@ -57,6 +61,11 @@ function u64LE(n: bigint): Buffer {
   return b;
 }
 
+/** `tag(u8) + amount(u64 LE)` — the SPL StakePool ix data layout for DepositSol/WithdrawSol. */
+export function encodeStakeIxData(tag: number, amount: bigint): Buffer {
+  return Buffer.concat([Buffer.from([tag]), u64LE(amount)]);
+}
+
 interface StakePoolState {
   totalLamports: bigint;
   poolTokenSupply: bigint;
@@ -64,18 +73,43 @@ interface StakePoolState {
   rate: number;
 }
 
-async function fetchStakePool(conn: Connection): Promise<StakePoolState> {
-  const acc = await conn.getAccountInfo(STAKE_POOL);
-  if (!acc || acc.data.length < OFF_POOL_TOKEN_SUPPLY + 8 || acc.data[0] !== 1) {
+/** COOK per bCOOK from the pool's two u64s (1 when the pool is empty). */
+export function poolRate(totalLamports: bigint, poolTokenSupply: bigint): number {
+  return poolTokenSupply === 0n ? 1 : Number(totalLamports) / Number(poolTokenSupply);
+}
+
+/** Decode a raw SPL StakePool account into its exchange-rate state (validates the account tag/size). */
+export function decodeStakePool(data: Buffer): StakePoolState {
+  if (data.length < OFF_POOL_TOKEN_SUPPLY + 8 || data[0] !== 1) {
     throw new CookieMcpError(
       "could not read the bCOOK stake pool",
       "the stake pool account was not found or has an unexpected layout; retry",
     );
   }
-  const totalLamports = acc.data.readBigUInt64LE(OFF_TOTAL_LAMPORTS);
-  const poolTokenSupply = acc.data.readBigUInt64LE(OFF_POOL_TOKEN_SUPPLY);
-  const rate = poolTokenSupply === 0n ? 1 : Number(totalLamports) / Number(poolTokenSupply);
-  return { totalLamports, poolTokenSupply, rate };
+  const totalLamports = data.readBigUInt64LE(OFF_TOTAL_LAMPORTS);
+  const poolTokenSupply = data.readBigUInt64LE(OFF_POOL_TOKEN_SUPPLY);
+  return { totalLamports, poolTokenSupply, rate: poolRate(totalLamports, poolTokenSupply) };
+}
+
+/** bCOOK received for staking `cookUi` COOK, after the deposit fee. */
+export function estimateBcookOut(cookUi: number, rate: number): number {
+  return (cookUi * (1 - DEPOSIT_FEE_BPS / 10_000)) / rate;
+}
+
+/** COOK received for unstaking `bcookUi` bCOOK, after the withdrawal fee. */
+export function estimateCookOut(bcookUi: number, rate: number): number {
+  return bcookUi * rate * (1 - WITHDRAW_FEE_BPS / 10_000);
+}
+
+async function fetchStakePool(conn: Connection): Promise<StakePoolState> {
+  const acc = await conn.getAccountInfo(STAKE_POOL);
+  if (!acc) {
+    throw new CookieMcpError(
+      "could not read the bCOOK stake pool",
+      "the stake pool account was not found or has an unexpected layout; retry",
+    );
+  }
+  return decodeStakePool(acc.data);
 }
 
 // APY from the public hourly rate-history (JSONL) — best-effort; null if unreachable.
@@ -195,7 +229,7 @@ export async function stake(args: { amount: string | number }): Promise<StakeRes
 
   const depositIx = new TransactionInstruction({
     programId: STAKE_POOL_PROGRAM,
-    data: Buffer.concat([Buffer.from([14]), u64LE(lamports)]), // 14 = DepositSol
+    data: encodeStakeIxData(IX_DEPOSIT_SOL, lamports),
     keys: [
       { pubkey: STAKE_POOL, isSigner: false, isWritable: true },
       { pubkey: WITHDRAW_AUTHORITY, isSigner: false, isWritable: false },
@@ -217,7 +251,7 @@ export async function stake(args: { amount: string | number }): Promise<StakeRes
   );
 
   const signature = await signSendConfirm(conn, tx, [keypair, ephemeral], "stake");
-  const estBcook = (amountUi * (1 - DEPOSIT_FEE_BPS / 10_000)) / pool.rate;
+  const estBcook = estimateBcookOut(amountUi, pool.rate);
   return {
     signature,
     staked: { amount: String(args.amount), symbol: COOK_SYMBOL },
@@ -259,7 +293,7 @@ export async function unstake(args: { amount: string | number }): Promise<Unstak
 
   const withdrawIx = new TransactionInstruction({
     programId: STAKE_POOL_PROGRAM,
-    data: Buffer.concat([Buffer.from([16]), u64LE(poolTokens)]), // 16 = WithdrawSol
+    data: encodeStakeIxData(IX_WITHDRAW_SOL, poolTokens),
     keys: [
       { pubkey: STAKE_POOL, isSigner: false, isWritable: true },
       { pubkey: WITHDRAW_AUTHORITY, isSigner: false, isWritable: false },
@@ -282,7 +316,7 @@ export async function unstake(args: { amount: string | number }): Promise<Unstak
   );
 
   const signature = await signSendConfirm(conn, tx, [keypair, transferAuthority], "unstake");
-  const estCook = amountUi * pool.rate * (1 - WITHDRAW_FEE_BPS / 10_000);
+  const estCook = estimateCookOut(amountUi, pool.rate);
   return {
     signature,
     unstaked: { amount: String(args.amount), symbol: "bCOOK" },

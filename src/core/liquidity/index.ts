@@ -31,8 +31,17 @@ import {
   type ClmmLpResult,
 } from "./clmm";
 
-type Venue = "cookiebox-damm" | "cookiebox-clmm" | "cookieswap-samm";
+export type Venue = "cookiebox-damm" | "cookiebox-clmm" | "cookieswap-samm";
 type AnyLpResult = LpResult | SammLpResult | ClmmLpResult;
+
+// Map a pool account's on-chain owner (program id) to its venue, or null if unsupported. Pure —
+// this is the routing decision every add/remove/lock/claim depends on, so it is worth guarding.
+export function venueForOwner(owner: string): Venue | null {
+  if (owner === CP_AMM_PROGRAM_ID.toBase58()) return "cookiebox-damm";
+  if (owner === CLMM_PROGRAM_ID.toBase58()) return "cookiebox-clmm";
+  if (owner === SAMM_PROGRAM_ID) return "cookieswap-samm";
+  return null;
+}
 
 async function detectVenue(poolPk: string): Promise<Venue> {
   let pk: PublicKey;
@@ -45,13 +54,14 @@ async function detectVenue(poolPk: string): Promise<Venue> {
   if (!info)
     throw new CookieMcpError(`pool ${poolPk} not found on-chain`, "check the pool address");
   const owner = info.owner.toBase58();
-  if (owner === CP_AMM_PROGRAM_ID.toBase58()) return "cookiebox-damm";
-  if (owner === CLMM_PROGRAM_ID.toBase58()) return "cookiebox-clmm";
-  if (owner === SAMM_PROGRAM_ID) return "cookieswap-samm";
-  throw new CookieMcpError(
-    `pool ${poolPk} is not a supported liquidity venue (owner ${owner})`,
-    "liquidity tools support Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM pools",
-  );
+  const venue = venueForOwner(owner);
+  if (!venue) {
+    throw new CookieMcpError(
+      `pool ${poolPk} is not a supported liquidity venue (owner ${owner})`,
+      "liquidity tools support Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM pools",
+    );
+  }
+  return venue;
 }
 
 export async function addLiquidity(args: {

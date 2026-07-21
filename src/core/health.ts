@@ -4,8 +4,8 @@
 import { COOKIE_RPC_URL } from "./config";
 import { rpcBatch, type RpcRes } from "./rpc";
 
-const FINALIZATION_WARN_SLOTS = 150;
-const FINALIZATION_STALL_SLOTS = 1000;
+export const FINALIZATION_WARN_SLOTS = 150;
+export const FINALIZATION_STALL_SLOTS = 1000;
 
 export interface ChainHealth {
   healthy: boolean;
@@ -46,8 +46,12 @@ export async function getChainHealth(): Promise<ChainHealth> {
     { id: "votes", method: "getVoteAccounts", params: [{ commitment: "confirmed" }] },
     { id: "nodes", method: "getClusterNodes" },
   ]);
-  const latencyMs = performance.now() - start;
+  return deriveChainHealth(map, performance.now() - start);
+}
 
+// Pure derivation of the health snapshot from a batched RPC response — no I/O, so it's unit-testable
+// against hand-built response maps (thresholds, lag, epoch progress, version/perf parsing).
+export function deriveChainHealth(map: Map<string, RpcRes>, latencyMs: number): ChainHealth {
   const health = map.get("health");
   const rpcHealthy = health?.result === "ok" && !health.error;
 

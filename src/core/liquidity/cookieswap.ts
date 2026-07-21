@@ -20,11 +20,41 @@ export const SAMM_PROGRAM_ID = "WTzkPUoprVx7PDc1tfKA5sS7k1ynCgU89WtwZhksHX5";
 // Default fork AmmConfig for create_pool (the canonical COOK config: tickSpacing 100, 1% trade fee).
 // Override per call with `ammConfig`. A pool is keyed by (ammConfig, mintA, mintB) — creating a pair
 // that already exists on this config fails, so pick a different config for a duplicate pair.
-const SAMM_DEFAULT_AMM_CONFIG = "JDjWtzVe7TXHjjSqFoL1QSfv8arrCqHPPoBXaUqbe9X4";
+export const SAMM_DEFAULT_AMM_CONFIG = "JDjWtzVe7TXHjjSqFoL1QSfv8arrCqHPPoBXaUqbe9X4";
 
 // Raydium CLMM hard tick bounds; a full-range position spans these (aligned to the pool's tickSpacing).
-const MIN_TICK = -443636;
-const MAX_TICK = 443636;
+export const MIN_TICK = -443636;
+export const MAX_TICK = 443636;
+
+/** The widest tick range aligned to a pool's tick spacing (a full-range position). */
+export function fullRangeTicks(spacing: number): { tickLower: number; tickUpper: number } {
+  return {
+    tickLower: Math.ceil(MIN_TICK / spacing) * spacing,
+    tickUpper: Math.floor(MAX_TICK / spacing) * spacing,
+  };
+}
+
+/**
+ * Initial pool price (mintB per mintA, canonical order): explicit `initialPrice` if given, else the
+ * deposit ratio bUi/aUi. Throws when neither yields a positive, finite price.
+ */
+export function resolveInitialPrice(
+  initialPrice: string | number | undefined,
+  aUi: number,
+  bUi: number,
+): Decimal {
+  const price =
+    initialPrice != null
+      ? new Decimal(initialPrice.toString())
+      : new Decimal(bUi || 0).div(aUi || 1);
+  if (!price.isFinite() || price.lte(0)) {
+    throw new CookieMcpError(
+      "cannot determine an initial price",
+      "provide `initialPrice`, or non-zero amountA and amountB",
+    );
+  }
+  return price;
+}
 
 export interface SammLpResult {
   signature: string;
@@ -82,9 +112,7 @@ export async function addSammLiquidity(
   const price = await priceCookOf(sideMint);
   if (price != null) assertWithinSpendCap(uiAmount, price);
 
-  const spacing = poolInfo.config.tickSpacing;
-  const tickLower = Math.ceil(MIN_TICK / spacing) * spacing;
-  const tickUpper = Math.floor(MAX_TICK / spacing) * spacing;
+  const { tickLower, tickUpper } = fullRangeTicks(poolInfo.config.tickSpacing);
 
   // Compute the slippage-adjusted paired amount for otherAmountMax. Must be a real bound: for a
   // native-COOK side Raydium wraps exactly this many lamports, so a u64-max sentinel overflows.
@@ -281,16 +309,7 @@ export async function createSammPool(
     if (price != null) assertWithinSpendCap(side.ui, price);
   }
 
-  const price =
-    args.initialPrice != null
-      ? new Decimal(args.initialPrice.toString())
-      : new Decimal(b.ui || 0).div(a.ui || 1);
-  if (!price.isFinite() || price.lte(0)) {
-    throw new CookieMcpError(
-      "cannot determine an initial price",
-      "provide `initialPrice`, or non-zero amountA and amountB",
-    );
-  }
+  const price = resolveInitialPrice(args.initialPrice, a.ui, b.ui);
 
   const token = (addr: string, decimals: number, program: string) => ({
     chainId: 101,
