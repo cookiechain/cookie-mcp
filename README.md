@@ -25,25 +25,18 @@ it's non-custodial by design. Its tools let an agent:
 Safe by default: read-only until you add a key, a hard per-trade spend cap, and every money-moving action
 is simulated before it's sent.
 
-## Quickstart
-
-Requires **Node ≥ 22**.
-
-```bash
-yarn install
-npx tsx scripts/smoke-cores.ts   # live pools, a quote, chain health — no key needed
-```
-
 ## Use it from an agent
 
-Register the server (replace `/ABS/PATH` with this repo's absolute path):
+Requires **Node ≥ 22**. No install needed — `npx` fetches the published package on first run.
+
+Register the server with your agent:
 
 ```json
 {
   "mcpServers": {
     "cookie-mcp": {
       "command": "npx",
-      "args": ["tsx", "/ABS/PATH/cookie-mcp/src/mcp/server.ts"],
+      "args": ["-y", "cookie-mcp"],
       "env": {
         "COOKIE_RPC_URL": "https://rpc.cookiescan.io",
         "COOKIE_PRIVATE_KEY": ""
@@ -53,7 +46,7 @@ Register the server (replace `/ABS/PATH` with this repo's absolute path):
 }
 ```
 
-- **Claude Code** — a project `.mcp.json` is included, or run `claude mcp add cookie-mcp -- npx tsx /ABS/PATH/cookie-mcp/src/mcp/server.ts`.
+- **Claude Code** — `claude mcp add cookie-mcp -- npx -y cookie-mcp`.
 - **Claude Desktop / Cursor** — add the block above to `claude_desktop_config.json` / `~/.cursor/mcp.json`.
 
 Leave `COOKIE_PRIVATE_KEY` empty for read-only. Set it (base58 secret, keygen JSON array, or keypair
@@ -112,6 +105,11 @@ capped and simulated before sending.
 ## Development
 
 ```bash
+yarn install
 yarn test    # lint + format + typecheck + unit tests + boot smoke
-yarn mcp     # run the server on stdio
+yarn mcp     # run the server on stdio from source (tsx)
+yarn build   # bundle to dist/mcp/server.js (what gets published)
 ```
+
+To point an agent at a local checkout instead of the published package, use
+`"command": "npx", "args": ["tsx", "/ABS/PATH/cookie-mcp/src/mcp/server.ts"]`.

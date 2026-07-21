@@ -1,10 +1,28 @@
 {
   "name": "cookie-mcp",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Local stdio MCP server for Cookie Chain — read market data, swap, launch tokens, and manage liquidity from any AI agent.",
   "license": "MIT",
   "author": "Cookie Chain community developers",
   "type": "module",
+  "homepage": "https://github.com/cookiechain/cookie-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cookiechain/cookie-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cookiechain/cookie-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "cookie-chain",
+    "solana",
+    "defi",
+    "ai-agents",
+    "trading",
+    "stdio"
+  ],
   "engines": {
     "node": ">=22"
   },
@@ -18,6 +36,7 @@
   ],
   "scripts": {
     "mcp": "tsx src/mcp/server.ts",
+    "build": "tsup",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
@@ -25,7 +44,8 @@
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run --passWithNoTests",
     "smoke": "tsx scripts/smoke.ts",
-    "test": "yarn lint && yarn format:check && yarn typecheck && yarn test:unit && yarn smoke"
+    "test": "yarn lint && yarn format:check && yarn typecheck && yarn test:unit && yarn smoke",
+    "prepublishOnly": "yarn build"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.31.0",
@@ -50,6 +70,7 @@
     "eslint-config-prettier": "^9.1.0",
     "globals": "^15.14.0",
     "prettier": "^3.4.2",
+    "tsup": "^8.5.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.0",
