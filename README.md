@@ -1,6 +1,10 @@
 # cookie-mcp
 
 [![npm version](https://img.shields.io/npm/v/cookie-mcp.svg)](https://www.npmjs.com/package/cookie-mcp)
+[![npm downloads](https://img.shields.io/npm/dm/cookie-mcp.svg)](https://www.npmjs.com/package/cookie-mcp)
+[![CI](https://github.com/cookiechain/cookie-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/cookiechain/cookie-mcp/actions/workflows/ci.yml)
+[![node](https://img.shields.io/node/v/cookie-mcp.svg)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/cookie-mcp.svg)](./LICENSE)
 
 A Model Context Protocol (MCP) server that provides onchain tools for any AI agent, allowing it to interact with the [Cookie Chain](https://www.cookiechain.wtf) blockchain through a standardized interface.
 
