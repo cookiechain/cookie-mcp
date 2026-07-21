@@ -8,5 +8,6 @@ coverage/
 
 *.log
 .DS_Store
+*.tgz
 
 .claude/
