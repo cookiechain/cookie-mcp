@@ -11,7 +11,9 @@ export interface PoolSummary {
   base: { mint: string; symbol: string | null };
   quote: { mint: string; symbol: string | null };
   tvlUsd: number | null;
-  volume24hUsd: number | null;
+  // Joined from the token registry; unit unverified (Cookiescan /api/tokens only reliably gives USD via
+  // `price.usd`), so not asserted as USD. Still a valid relative key for sort=volume.
+  volume24h: number | null;
   liquidityDisplay: string | null;
 }
 
@@ -35,10 +37,10 @@ export function mapPools(
     base: { mint: m.baseToken?.mint, symbol: m.baseToken?.symbol ?? null },
     quote: { mint: m.quoteToken?.mint, symbol: m.quoteToken?.symbol ?? null },
     tvlUsd: typeof m.liquidityUsd === "number" ? m.liquidityUsd : null,
-    volume24hUsd: volumeByMint.get(nonCookMint(m)) ?? null,
+    volume24h: volumeByMint.get(nonCookMint(m)) ?? null,
     liquidityDisplay: m.liquidityDisplay ?? null,
   }));
-  const key = (p: PoolSummary) => (opts.sort === "volume" ? p.volume24hUsd : p.tvlUsd) ?? -1;
+  const key = (p: PoolSummary) => (opts.sort === "volume" ? p.volume24h : p.tvlUsd) ?? -1;
   rows.sort((a, b) => key(b) - key(a));
   return rows.slice(0, opts.limit);
 }

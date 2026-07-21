@@ -1,7 +1,7 @@
 // get_token_info — metadata + market data for a mint from the Cookiescan registry.
 import { COOK_MINT, COOK_SYMBOL, explorerTokenUrl } from "./config";
 import { CookieMcpError } from "./errors";
-import { fetchToken, fetchTokens, type CookiescanToken } from "./cookiescan";
+import { fetchToken, fetchTokens, fetchCookPriceUsd, type CookiescanToken } from "./cookiescan";
 
 export interface TokenInfo {
   mint: string;
@@ -14,8 +14,9 @@ export interface TokenInfo {
   priceCook: number | null;
   change24hPct: number | null;
   marketCapUsd: number | null;
+  liquidityCook: number | null;
   liquidityUsd: number | null;
-  volume24hUsd: number | null;
+  volume24h: number | null;
   holderCount: number | null;
   supply: number | null;
   updateAuthority: string | null;
@@ -25,9 +26,12 @@ export interface TokenInfo {
   note?: string;
 }
 
-export function mapTokenInfo(t: CookiescanToken): TokenInfo {
+export function mapTokenInfo(t: CookiescanToken, cookPriceUsd?: number | null): TokenInfo {
   const logo = t.metadata?.logo ?? null;
   const usd = t.price?.usd != null ? Number(t.price.usd) : null;
+  // Cookiescan reports `marketData.liquidity` in native COOK (NOT USD, unlike marketCap). Convert to
+  // USD via the COOK price when we have it; always surface the raw COOK figure too.
+  const liqCook = t.marketData?.liquidity ?? null;
   return {
     mint: t.mint,
     name: t.metadata?.name ?? null,
@@ -39,8 +43,11 @@ export function mapTokenInfo(t: CookiescanToken): TokenInfo {
     priceCook: t.price?.native ?? null,
     change24hPct: t.price?.change24h ?? null,
     marketCapUsd: t.marketData?.marketCap ?? null,
-    liquidityUsd: t.marketData?.liquidity ?? null,
-    volume24hUsd: t.marketData?.volume24h ?? null,
+    liquidityCook: liqCook,
+    liquidityUsd: liqCook != null && cookPriceUsd != null ? liqCook * cookPriceUsd : null,
+    // Cookiescan reports this figure but its unit is unverified (only `price.usd` is a reliable USD
+    // value from /api/tokens) — surfaced unit-neutral, not asserted as USD.
+    volume24h: t.marketData?.volume24h ?? null,
     holderCount: t.marketData?.holderCount ?? null,
     supply: t.marketData?.supply ?? null,
     updateAuthority: t.metadata?.updateAuthority ?? null,
@@ -53,9 +60,13 @@ export function mapTokenInfo(t: CookiescanToken): TokenInfo {
 }
 
 export async function getTokenInfo(mint: string): Promise<TokenInfo> {
-  const t = await fetchToken(mint);
+  const [t, cookPriceUsd] = await Promise.all([fetchToken(mint), fetchCookPriceUsd()]);
   if (mint === COOK_MINT && t) {
-    return { ...mapTokenInfo(t), name: t.metadata?.name ?? "Cookie", symbol: COOK_SYMBOL };
+    return {
+      ...mapTokenInfo(t, cookPriceUsd),
+      name: t.metadata?.name ?? "Cookie",
+      symbol: COOK_SYMBOL,
+    };
   }
   if (!t) {
     throw new CookieMcpError(
@@ -63,7 +74,7 @@ export async function getTokenInfo(mint: string): Promise<TokenInfo> {
       "check the mint address; brand-new tokens can take a moment to be indexed",
     );
   }
-  return mapTokenInfo(t);
+  return mapTokenInfo(t, cookPriceUsd);
 }
 
 // --- search --------------------------------------------------------------------------------------
@@ -74,8 +85,9 @@ export interface TokenSearchResult {
   name: string | null;
   priceUsd: number | null;
   priceCook: number | null;
+  liquidityCook: number | null;
   liquidityUsd: number | null;
-  volume24hUsd: number | null;
+  volume24h: number | null;
   holderCount: number | null;
   explorerUrl: string;
 }
@@ -97,16 +109,18 @@ function tokenMatchScore(t: CookiescanToken, q: string): number {
   return 0;
 }
 
-function toSearchResult(t: CookiescanToken): TokenSearchResult {
+function toSearchResult(t: CookiescanToken, cookPriceUsd?: number | null): TokenSearchResult {
   const usd = t.price?.usd != null ? Number(t.price.usd) : null;
+  const liqCook = t.marketData?.liquidity ?? null; // native COOK, not USD — see mapTokenInfo
   return {
     mint: t.mint,
     symbol: t.metadata?.symbol ?? null,
     name: t.metadata?.name ?? null,
     priceUsd: usd != null && Number.isFinite(usd) ? usd : null,
     priceCook: t.price?.native ?? null,
-    liquidityUsd: t.marketData?.liquidity ?? null,
-    volume24hUsd: t.marketData?.volume24h ?? null,
+    liquidityCook: liqCook,
+    liquidityUsd: liqCook != null && cookPriceUsd != null ? liqCook * cookPriceUsd : null,
+    volume24h: t.marketData?.volume24h ?? null,
     holderCount: t.marketData?.holderCount ?? null,
     explorerUrl: explorerTokenUrl(t.mint),
   };
@@ -118,6 +132,7 @@ export function searchTokenRegistry(
   tokens: CookiescanToken[],
   query: string,
   limit: number,
+  cookPriceUsd?: number | null,
 ): TokenSearchResult[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
@@ -126,13 +141,14 @@ export function searchTokenRegistry(
     .filter((x) => x.score > 0)
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
+      // liquidity is native COOK, but COOK price is constant across the set → still a valid ranking key
       const lb = b.t.marketData?.liquidity ?? 0;
       const la = a.t.marketData?.liquidity ?? 0;
       if (lb !== la) return lb - la;
       return (b.t.marketData?.volume24h ?? 0) - (a.t.marketData?.volume24h ?? 0);
     })
     .slice(0, limit)
-    .map((x) => toSearchResult(x.t));
+    .map((x) => toSearchResult(x.t, cookPriceUsd));
 }
 
 /** Resolve a token name/ticker/mint-prefix to candidate mints via the Cookiescan registry. */
@@ -141,7 +157,8 @@ export async function searchTokens(
   limit = 20,
 ): Promise<{ query: string; count: number; results: TokenSearchResult[]; note?: string }> {
   const bounded = Math.min(Math.max(limit, 1), 50);
-  const results = searchTokenRegistry(await fetchTokens(), query, bounded);
+  const [tokens, cookPriceUsd] = await Promise.all([fetchTokens(), fetchCookPriceUsd()]);
+  const results = searchTokenRegistry(tokens, query, bounded, cookPriceUsd);
   const seen = new Set<string>();
   let ambiguous = false;
   for (const r of results) {

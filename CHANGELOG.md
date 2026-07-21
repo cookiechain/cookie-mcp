@@ -2,6 +2,17 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+# [0.2.1](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.2.1)
+
+_July 21, 2026_
+
+### Fixed
+
+- `get_token_info` / `search_tokens` reported pool **liquidity in USD when the value was actually native
+  COOK** (Cookiescan's `/api/tokens` `marketData.liquidity` is COOK-denominated, unlike `marketCap`),
+  overstating it by ~10,000×. Liquidity is now converted to USD via the COOK price (`/api/price/cook`),
+  and the raw `liquidityCook` figure is surfaced alongside `liquidityUsd`.
+
 # [0.2.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.2.0)
 
 _July 21, 2026_

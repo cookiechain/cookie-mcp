@@ -64,3 +64,18 @@ export async function fetchMarkets(): Promise<CookiescanMarket[]> {
   const json = await fetchJson<unknown>(`${COOKIESCAN_API_URL}/api/markets`);
   return unwrap<CookiescanMarket>(json, ["data", "markets"]);
 }
+
+// COOK's USD price, from Cookiescan's dedicated endpoint. Needed to value COOK-denominated fields
+// (e.g. `/api/tokens` `marketData.liquidity`, which is in native COOK, NOT USD). Best-effort: returns
+// null on any failure so a read still succeeds (the USD figure just shows null).
+export async function fetchCookPriceUsd(): Promise<number | null> {
+  try {
+    const json = await fetchJson<{ data?: { price?: { usd?: number } } }>(
+      `${COOKIESCAN_API_URL}/api/price/cook`,
+    );
+    const usd = json?.data?.price?.usd;
+    return typeof usd === "number" && Number.isFinite(usd) && usd > 0 ? usd : null;
+  } catch {
+    return null;
+  }
+}

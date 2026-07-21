@@ -35,6 +35,15 @@ describe("mapTokenInfo", () => {
     expect(t.cookieboxHosted).toBe(true);
     expect(t.bondingProgress).toBeNull();
     expect(t.explorerUrl).toContain("/token/6H7xnYfBFeEU8S8mhrZRkFNS5vEegRqEwv7h42WbntCL");
+    // liquidity is native COOK; USD is null unless a COOK price is supplied.
+    expect(t.liquidityCook).toBe(1234690.64);
+    expect(t.liquidityUsd).toBeNull();
+  });
+
+  it("converts COOK liquidity to USD when given the COOK price", () => {
+    const t = mapTokenInfo(token, 0.00009072209);
+    expect(t.liquidityCook).toBe(1234690.64);
+    expect(t.liquidityUsd).toBeCloseTo(112.01, 2); // 1234690.64 COOK × $0.00009072209
   });
 
   it("flags non-cookiebox-hosted logos", () => {
@@ -70,7 +79,15 @@ describe("searchTokenRegistry", () => {
   it("finds a token by exact symbol and ranks the most-liquid namesake first", () => {
     const out = searchTokenRegistry(registry, "cookhouse", 10);
     expect(out.map((r) => r.mint)).toEqual(["Dmint", "Cmint"]); // liquidity tiebreak
-    expect(out[0]!.liquidityUsd).toBe(120_000);
+    // Cookiescan liquidity is native COOK; with no COOK price passed, USD is null.
+    expect(out[0]!.liquidityCook).toBe(120_000);
+    expect(out[0]!.liquidityUsd).toBeNull();
+  });
+
+  it("values liquidity in USD via the COOK price when supplied", () => {
+    const out = searchTokenRegistry(registry, "cookhouse", 10, 0.0001);
+    expect(out[0]!.liquidityCook).toBe(120_000);
+    expect(out[0]!.liquidityUsd).toBeCloseTo(12, 9); // 120000 COOK × $0.0001
   });
 
   it("matches case-insensitively on a name substring", () => {

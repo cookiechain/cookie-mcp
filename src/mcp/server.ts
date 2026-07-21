@@ -65,7 +65,7 @@ function tool<A>(fn: (args: A) => Promise<unknown>) {
   };
 }
 
-const server = new McpServer({ name: "cookie-mcp", version: "0.2.0" });
+const server = new McpServer({ name: "cookie-mcp", version: "0.2.1" });
 
 // Simply-typed alias for registerTool. The SDK's generic signature infers handler args from the zod
 // inputSchema via deep conditional types that TS reports as TS2589 ("excessively deep") and OOMs on;

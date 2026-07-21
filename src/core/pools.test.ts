@@ -46,9 +46,9 @@ describe("mapPools", () => {
     const out = mapPools(markets, volumeByMint, { limit: 3, sort: "volume" });
     expect(out.map((p) => p.poolId)).toEqual(["poolB", "poolC", "poolA"]);
     // poolB's non-COOK side is MintB (quote), volume 999
-    expect(out[0].volume24hUsd).toBe(999);
+    expect(out[0].volume24h).toBe(999);
     // poolA's non-COOK side is MintA (base), volume 5
-    expect(out[2].volume24hUsd).toBe(5);
+    expect(out[2].volume24h).toBe(5);
   });
 
   it("maps venue + symbols", () => {

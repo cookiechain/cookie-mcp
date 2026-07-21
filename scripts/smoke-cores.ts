@@ -25,7 +25,7 @@ async function main() {
   console.log({ totalPools: p.totalPools });
   for (const pool of p.pools)
     console.log(
-      `  ${pool.venue} ${pool.base.symbol}/${pool.quote.symbol} tvl=$${pool.tvlUsd?.toFixed(2)} vol24h=$${pool.volume24hUsd?.toFixed(2) ?? "?"}`,
+      `  ${pool.venue} ${pool.base.symbol}/${pool.quote.symbol} tvl=$${pool.tvlUsd?.toFixed(2)} vol24h=${pool.volume24h?.toFixed(2) ?? "?"}`,
     );
 
   const topNonCook = p.pools
