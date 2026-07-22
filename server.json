@@ -1,0 +1,53 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.cookiechain/cookie-mcp",
+  "description": "Cookie Chain tools for AI agents: swap, launch, liquidity, staking, NFTs, and a Solana bridge.",
+  "repository": {
+    "url": "https://github.com/cookiechain/cookie-mcp",
+    "source": "github"
+  },
+  "version": "0.2.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "cookie-mcp",
+      "version": "0.2.2",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "description": "Cookie Chain RPC endpoint. Defaults to the public Cookiescan RPC (https://rpc.cookiescan.io).",
+          "isRequired": false,
+          "isSecret": false,
+          "name": "COOKIE_RPC_URL"
+        },
+        {
+          "description": "Wallet key for money-moving tools (base58 secret, solana-keygen JSON array, or a path to a keypair file). Optional — without it the server runs read-only and money-moving tools return a clear error. The key is used only to sign locally and is redacted from all output.",
+          "isRequired": false,
+          "isSecret": true,
+          "name": "COOKIE_PRIVATE_KEY"
+        },
+        {
+          "description": "Hard per-transaction spend cap in COOK; money-moving tools refuse inputs valued above it (0 disables). Defaults to 100.",
+          "isRequired": false,
+          "isSecret": false,
+          "name": "COOKIE_MAX_TRADE_COOK"
+        },
+        {
+          "description": "Default slippage tolerance in basis points (500 = 5%). Defaults to 500.",
+          "isRequired": false,
+          "isSecret": false,
+          "name": "COOKIE_SLIPPAGE_BPS"
+        },
+        {
+          "description": "Solana mainnet RPC endpoint, used only by the bridge tool. Defaults to the public endpoint, which is rate-limited; a dedicated RPC is recommended for reliable bridging.",
+          "isRequired": false,
+          "isSecret": false,
+          "name": "SOLANA_RPC_URL"
+        }
+      ]
+    }
+  ]
+}

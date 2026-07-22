@@ -1,6 +1,7 @@
 {
   "name": "cookie-mcp",
-  "version": "0.2.1",
+  "version": "0.2.2",
+  "mcpName": "io.github.cookiechain/cookie-mcp",
   "description": "Local stdio MCP server for Cookie Chain — read market data, swap, launch tokens, and manage liquidity from any AI agent.",
   "license": "MIT",
   "author": "Cookie Chain community developers",
@@ -28,7 +29,7 @@
   },
   "packageManager": "yarn@1.22.22",
   "bin": {
-    "cookie-mcp": "./dist/mcp/server.js"
+    "cookie-mcp": "dist/mcp/server.js"
   },
   "files": [
     "dist",

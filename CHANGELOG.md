@@ -2,6 +2,16 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+# [0.2.2](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.2.2)
+
+_July 22, 2026_
+
+### Added
+
+- Published to the [MCP Registry](https://registry.modelcontextprotocol.io) as
+  `io.github.cookiechain/cookie-mcp` — added `server.json` metadata and the `mcpName` package marker
+  used to verify npm ownership.
+
 # [0.2.1](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.2.1)
 
 _July 21, 2026_
