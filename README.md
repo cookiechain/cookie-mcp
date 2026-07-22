@@ -2,6 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/cookie-mcp.svg)](https://www.npmjs.com/package/cookie-mcp)
 [![npm downloads](https://img.shields.io/npm/dm/cookie-mcp.svg)](https://www.npmjs.com/package/cookie-mcp)
+[![MCP Registry](https://img.shields.io/badge/mcp--registry-listed-4b0)](https://registry.modelcontextprotocol.io/v0/servers?search=cookie-mcp)
 [![CI](https://github.com/cookiechain/cookie-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/cookiechain/cookie-mcp/actions/workflows/ci.yml)
 [![node](https://img.shields.io/node/v/cookie-mcp.svg)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/cookie-mcp.svg)](./LICENSE)
@@ -12,6 +13,10 @@ launch tokens, manage liquidity, stake, trade NFTs, and bridge to Solana.
 
 It runs **locally over stdio** and **signs with your key on your machine**, so it is non-custodial by
 design. It is a community project for the whole Cookie Chain ecosystem.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/cookiechain/cookie-mcp/main/docs/demo.gif" alt="An AI agent using cookie-mcp: checking chain health, bridging COOK from Solana, buying COOKHOUSE, staking for bCOOK, and bridging back to Solana" width="820">
+</p>
 
 ## Contents
 
@@ -214,4 +219,4 @@ To point an agent at a local checkout instead of the published package, set the 
 
 ## License
 
-[MIT](./LICENSE).
+This project is licensed under the terms of the MIT license. See the [LICENSE](./LICENSE) file.
