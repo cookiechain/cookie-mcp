@@ -2,6 +2,17 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+# [0.3.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.3.0)
+
+_July 23, 2026_
+
+### Changed
+
+- **Deprecated dynamic bonding curve.** `deploy_token` and `claim_creator_fees` are now
+  coming-soon stubs (registered, take no arguments, return a coming-soon notice) pending MomoSwap
+  launchpad support. Dropped the bonding-curve implementation, the `dynamic_bonding_curve` IDL, and
+  the `cookieboxHosted` / `bondingProgress` fields from `get_token_info`.
+
 # [0.2.2](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.2.2)
 
 _July 22, 2026_

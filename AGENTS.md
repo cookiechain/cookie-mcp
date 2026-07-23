@@ -17,10 +17,9 @@ src/
     errors.ts          #   CookieMcpError — the one error type surfaced to agents
     format.ts          #   rawToUi / uiToRaw / shortAddr — always go through these
     http.ts            #   fetchJson with retry policy
-    launch/            #   deploy_token (dbc), creator fees, vanity, metadata
     liquidity/         #   create/add/remove/lock/claim across damm, cpAmm, clmm, cookieswap
     nft/               #   Baked Bazaar: auctionHouse (writes) + bazaar (reads)
-  idl/                 # committed IDLs (cp_amm, whirlpool, dynamic_bonding_curve)
+  idl/                 # committed IDLs (cp_amm, whirlpool)
 scripts/               # smoke.ts (boots server, asserts tool count) + verify-*.ts (live checks)
 ```
 
@@ -69,9 +68,8 @@ No key needed for read-only work: `npx tsx scripts/smoke-cores.ts` hits live poo
 
 Tests are **unit tests on `src/core/` modules** (Vitest), focused on pure logic — instruction-data
 byte layouts, PDA derivation, quote/response parsing, amount math. Prefer **golden-bytes / golden-PDA
-assertions** for anything that encodes an on-chain instruction (see `core/bridge.test.ts`,
-`core/launch/dbc.test.ts`): they guard discriminators and seed strings against silent drift without
-needing a live cluster or a key.
+assertions** for anything that encodes an on-chain instruction (see `core/bridge.test.ts`): they
+guard discriminators and seed strings against silent drift without needing a live cluster or a key.
 
 When a tool's logic sits inside a network-bound `async` function, **extract the pure part into an
 exported helper** and test that (e.g. `deriveChainHealth`, `mapBalances`, `encodeStakeIxData`,

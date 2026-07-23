@@ -35,7 +35,6 @@ export const COOK_DECIMALS = 9;
 export const COOK_SYMBOL = "COOK";
 
 export const PROGRAM_IDS = {
-  dbc: "DBCg4ugDEztk6MbqHEJvx5a5YGJTj45Jb5NvtQ48Rvsf",
   cookieboxDamm: "DAMMjDCEFTDkt7ywazZS8GoaLtjb3HaJo3pLbf64xrPY",
   cookieboxClmm: "CLMMmWqTtyNSomqXP3kETJy2SGKPdr31USsm4GfbLyKs",
   cookieswapSamm: "WTzkPUoprVx7PDc1tfKA5sS7k1ynCgU89WtwZhksHX5",

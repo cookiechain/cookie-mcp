@@ -36,7 +36,8 @@ design. It is a community project for the whole Cookie Chain ecosystem.
 - **Swap** any Cookie Chain token pair through the [Candy Shop](https://swap.cookiescan.io) aggregator,
   which routes across all Cookie Chain DEX liquidity for the best fill.
 - **Transfer** COOK or any SPL / Token-2022 token.
-- **Launch tokens** on the Cookiebox bonding curve and claim the creator fees they earn.
+- **Launch tokens** — _coming soon_. Launchpad support is being migrated to MomoSwap; `deploy_token`
+  and `claim_creator_fees` are registered but return a coming-soon notice for now.
 - **Manage liquidity** — create pools, add / remove liquidity, claim fees, and permanently lock
   positions across Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM (venue auto-detected).
 - **Liquid-stake** COOK for bCOOK and redeem it instantly.
@@ -174,8 +175,11 @@ APY / fees), and NFT reads `get_nft_listings`, `search_nfts` (resolve an NFT/col
 mint), `get_nft`, `get_wallet_nfts`, `get_nft_offers`, `get_nft_market_stats`.
 
 **Money** (need `COOKIE_PRIVATE_KEY`): `trade` (swap via Candy Shop), `transfer` (COOK or any token),
-`stake` / `unstake` (COOK ⇄ bCOOK liquid staking), `deploy_token` (launch on the Cookiebox bonding
-curve), `claim_creator_fees` (claim the creator trading fees a token you launched has earned).
+`stake` / `unstake` (COOK ⇄ bCOOK liquid staking).
+
+**Launchpad** (_coming soon_): `deploy_token` (launch a token) and `claim_creator_fees` (claim the
+creator trading fees a token you launched has earned) are registered but not yet functional —
+launchpad support is being migrated to MomoSwap.
 
 **Liquidity** (need `COOKIE_PRIVATE_KEY`): `create_pool`, `add_liquidity`, `remove_liquidity`,
 `claim_fees` (Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM, venue auto-detected),

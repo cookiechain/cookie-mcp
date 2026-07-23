@@ -11,7 +11,6 @@ import bs58 from "bs58";
 
 import { trade } from "../src/core/trade";
 import { transfer } from "../src/core/transfer";
-import { deployToken } from "../src/core/launch";
 import { _resetWalletCache, ownPublicKey } from "../src/core/wallet";
 
 const COOK = "So11111111111111111111111111111111111111112";
@@ -36,9 +35,6 @@ async function main() {
     trade({ inputMint: COOK, outputMint: MON, amount: 1 }),
   );
   await expectError("transfer refuses without a wallet", () => transfer({ to: MON, amount: 1 }));
-  await expectError("deploy_token refuses without a wallet", () =>
-    deployToken({ name: "Test", symbol: "TST", imageUrl: "https://x/i.png" }),
-  );
 
   console.log("\n== B. with a random unfunded key ==");
   const dummy = Keypair.generate();
@@ -48,9 +44,6 @@ async function main() {
 
   await expectError("cap: 999999 COOK exceeds the per-trade cap", () =>
     trade({ inputMint: COOK, outputMint: MON, amount: 999999 }),
-  );
-  await expectError("deploy_token rejects initialBuyCook (not yet supported)", () =>
-    deployToken({ name: "Test", symbol: "TST", imageUrl: "https://x/i.png", initialBuyCook: 1 }),
   );
 
   await expectError("within-cap trade runs quote→build→simulate, fails at sim (unfunded)", () =>

@@ -32,8 +32,6 @@ describe("mapTokenInfo", () => {
     expect(t.priceCook).toBeCloseTo(0.00112185, 8);
     expect(t.marketCapUsd).toBe(87.0);
     expect(t.holderCount).toBe(17);
-    expect(t.cookieboxHosted).toBe(true);
-    expect(t.bondingProgress).toBeNull();
     expect(t.explorerUrl).toContain("/token/6H7xnYfBFeEU8S8mhrZRkFNS5vEegRqEwv7h42WbntCL");
     // liquidity is native COOK; USD is null unless a COOK price is supplied.
     expect(t.liquidityCook).toBe(1234690.64);
@@ -44,14 +42,6 @@ describe("mapTokenInfo", () => {
     const t = mapTokenInfo(token, 0.00009072209);
     expect(t.liquidityCook).toBe(1234690.64);
     expect(t.liquidityUsd).toBeCloseTo(112.01, 2); // 1234690.64 COOK × $0.00009072209
-  });
-
-  it("flags non-cookiebox-hosted logos", () => {
-    const t = mapTokenInfo({
-      ...token,
-      metadata: { ...token.metadata, logo: "https://evil.example/x.png" },
-    });
-    expect(t.cookieboxHosted).toBe(false);
   });
 
   it("tolerates missing fields", () => {

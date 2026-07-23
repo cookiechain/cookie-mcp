@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // cookie-mcp — local stdio MCP server for Cookie Chain. Reads work with no key; money-moving tools
-// (trade, transfer, deploy_token, and the opt-in liquidity tools) need COOKIE_PRIVATE_KEY. Every tool
+// (trade, transfer, and the opt-in liquidity tools) need COOKIE_PRIVATE_KEY. Every tool
 // returns JSON; failures return a structured { error, hint } — never a stack trace, never a secret.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -16,8 +16,6 @@ import { getBalances } from "../core/balances";
 import { ownPublicKey } from "../core/wallet";
 import { trade } from "../core/trade";
 import { transfer } from "../core/transfer";
-import { deployToken } from "../core/launch";
-import { claimCreatorFees } from "../core/launch/creatorFees";
 import { getStakeInfo, stake, unstake } from "../core/stake";
 import {
   createPool,
@@ -65,7 +63,7 @@ function tool<A>(fn: (args: A) => Promise<unknown>) {
   };
 }
 
-const server = new McpServer({ name: "cookie-mcp", version: "0.2.2" });
+const server = new McpServer({ name: "cookie-mcp", version: "0.3.0" });
 
 // Simply-typed alias for registerTool. The SDK's generic signature infers handler args from the zod
 // inputSchema via deep conditional types that TS reports as TS2589 ("excessively deep") and OOMs on;
@@ -94,7 +92,7 @@ registerTool(
   {
     title: "List Cookie Chain pools",
     description:
-      "Liquidity pools across every Cookie Chain DEX (Cookiebox DAMM/CLMM/DBC, CookieSwap SAMM/xYBN) " +
+      "Liquidity pools across every Cookie Chain DEX (Cookiebox DAMM/CLMM, CookieSwap SAMM/xYBN) " +
       "with TVL (USD) and 24h volume, sorted by TVL or volume. Use to find the most liquid markets.",
     inputSchema: {
       limit: z
@@ -315,72 +313,39 @@ registerTool(
   tool(async (a: { amount: string | number }) => unstake(a)),
 );
 
+// Launchpad — the Cookiebox DBC launchpad has been removed; MomoSwap launchpad support is coming.
+// These tools stay registered so callers can discover them, but they return a coming-soon notice.
+const LAUNCHPAD_COMING_SOON = {
+  status: "coming_soon",
+  message:
+    "Token launches are temporarily unavailable. The Cookiebox launchpad has been retired and " +
+    "MomoSwap launchpad support is on the way — this tool will start working once it ships.",
+} as const;
+
 registerTool(
   "deploy_token",
   {
-    title: "Launch a token (Cookiebox DBC)",
+    title: "Launch a token (coming soon)",
     description:
-      "Launch a new token on the Cookiebox dynamic bonding curve: grinds a vanity mint (ends in " +
-      "'box'), uploads metadata, and creates the bonding-curve pool. Signs locally; requires " +
-      "COOKIE_PRIVATE_KEY. ALWAYS give the token a logo — a token without one shows a placeholder " +
-      "and looks low-effort. Generate a simple square (512x512) PNG or JPEG and pass it as " +
-      "`imageBase64` (+ `imageMimeType`), OR supply an already-hosted `imageUrl`. Returns the mint, " +
-      "pool, and links.",
-    inputSchema: {
-      name: z.string().min(1).max(64).describe('token name, e.g. "Cookie Monster"'),
-      symbol: z.string().min(1).max(10).describe('ticker, e.g. "MON"'),
-      description: z.string().max(1000).optional().describe("short description"),
-      imageBase64: z
-        .string()
-        .min(1)
-        .optional()
-        .describe(
-          "PREFERRED: the logo as base64-encoded image bytes (a data-URI prefix is accepted and " +
-            "stripped). Generate a square PNG/JPEG for the token. Requires imageMimeType. Mutually " +
-            "exclusive with imageUrl.",
-        ),
-      imageMimeType: z
-        .string()
-        .optional()
-        .describe('MIME type for imageBase64, e.g. "image/png" or "image/jpeg"'),
-      imageUrl: z
-        .string()
-        .url()
-        .optional()
-        .describe("alternative to imageBase64: https URL to an already-hosted token logo"),
-      initialBuyCook: z
-        .number()
-        .positive()
-        .optional()
-        .describe("NOT yet supported — launch-time pre-buy arrives later"),
-    },
+      "Launch a new token on a Cookie Chain launchpad. ⚠️ COMING SOON — token launches are " +
+      "temporarily unavailable while the launchpad migrates to MomoSwap. Not functional yet; " +
+      "takes no arguments and returns a coming-soon notice.",
+    inputSchema: {},
   },
-  tool(
-    async (a: {
-      name: string;
-      symbol: string;
-      description?: string;
-      imageBase64?: string;
-      imageMimeType?: string;
-      imageUrl?: string;
-      initialBuyCook?: number;
-    }) => deployToken(a),
-  ),
+  tool(async () => LAUNCHPAD_COMING_SOON),
 );
 
 registerTool(
   "claim_creator_fees",
   {
-    title: "Claim DBC creator fees",
+    title: "Claim creator fees (coming soon)",
     description:
-      "Claim the creator trading fees a token you launched on the Cookiebox bonding curve (DBC) has " +
-      "accrued from its trades. Only the launch wallet can claim. Simulates before sending; returns the " +
-      "claimed base/quote amounts. Requires COOKIE_PRIVATE_KEY.",
-    inputSchema: {
-      mint: z.string().min(32).max(44).describe("the base mint of a token you launched"),
-    },
+      "Claim the creator trading fees a token you launched has earned. ⚠️ COMING SOON — creator-fee " +
+      "claiming is unavailable while the launchpad migrates to MomoSwap. Not functional yet; takes " +
+      "no arguments and returns a coming-soon notice.",
+    inputSchema: {},
   },
-  tool(async (a: { mint: string }) => claimCreatorFees(a)),
+  tool(async () => LAUNCHPAD_COMING_SOON),
 );
 
 // Liquidity — Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM. Every op simulates before

@@ -20,10 +20,7 @@ export interface TokenInfo {
   holderCount: number | null;
   supply: number | null;
   updateAuthority: string | null;
-  cookieboxHosted: boolean;
-  bondingProgress: null;
   explorerUrl: string;
-  note?: string;
 }
 
 export function mapTokenInfo(t: CookiescanToken, cookPriceUsd?: number | null): TokenInfo {
@@ -51,11 +48,7 @@ export function mapTokenInfo(t: CookiescanToken, cookPriceUsd?: number | null): 
     holderCount: t.marketData?.holderCount ?? null,
     supply: t.marketData?.supply ?? null,
     updateAuthority: t.metadata?.updateAuthority ?? null,
-    // Image hosted on Cookiebox's metadata CDN ⇒ launched via the Cookiebox DBC launchpad.
-    cookieboxHosted: typeof logo === "string" && logo.startsWith("https://metadata.cookiebox.app"),
-    bondingProgress: null,
     explorerUrl: explorerTokenUrl(t.mint),
-    note: "bondingProgress/migrated not populated yet (needs an on-chain DBC read)",
   };
 }
 
