@@ -15,6 +15,17 @@ export const COOKIESCAN_API_URL =
 export const BAKED_BAZAAR_API_URL =
   process.env.BAKED_BAZAAR_API_URL?.trim().replace(/\/$/, "") || "https://bakedbazaar.art/api";
 
+// MomoSwap launchpad (momoswap.fun) — Cookie Chain's bonding-curve launchpad. Its API serves the
+// pool reads and BUILDS + partial-signs every launchpad transaction: it leases a pre-ground `momo`
+// mint (create_pool enforces that suffix on-chain — ~11.3M keypairs to grind), pins the token
+// metadata to IPFS, and wraps/unwraps COOK. We simulate on our RPC, sign locally and send, so the
+// flow stays non-custodial. Configurable in case the host changes.
+export const MOMOSWAP_API_URL =
+  process.env.MOMOSWAP_API_URL?.trim().replace(/\/$/, "") || "https://api.momoswap.fun";
+
+export const MOMOSWAP_SITE_URL =
+  process.env.MOMOSWAP_SITE_URL?.trim().replace(/\/$/, "") || "https://momoswap.fun";
+
 export const EXPLORER_URL =
   process.env.COOKIE_EXPLORER_URL?.trim().replace(/\/$/, "") || "https://cookiescan.io";
 
@@ -39,6 +50,7 @@ export const PROGRAM_IDS = {
   cookieboxClmm: "CLMMmWqTtyNSomqXP3kETJy2SGKPdr31USsm4GfbLyKs",
   cookieswapSamm: "WTzkPUoprVx7PDc1tfKA5sS7k1ynCgU89WtwZhksHX5",
   cookieswapXybn: "xYBN2zddsqSy41tg1yD9nJScCmqquZnHUyzXBfLEqC8",
+  momoswapLaunchpad: "7tLQV8D6uUyG9r1nEtQuBMqDb5Nfi9TXxsdVZUtsct2M",
 } as const;
 
 export const HTTP_TIMEOUT_MS = 12_000;
@@ -99,4 +111,10 @@ export function explorerTokenUrl(mint: string): string {
 }
 export function explorerAddressUrl(addr: string): string {
   return `${EXPLORER_URL}/address/${addr}`;
+}
+export function launchpadTokenUrl(mint: string): string {
+  return `${MOMOSWAP_SITE_URL}/token/${mint}`;
+}
+export function launchpadPoolUrl(pool: string): string {
+  return `${MOMOSWAP_SITE_URL}/pool/${pool}`;
 }

@@ -2,6 +2,8 @@
 import { COOK_MINT, COOK_SYMBOL, explorerTokenUrl } from "./config";
 import { CookieMcpError } from "./errors";
 import { fetchToken, fetchTokens, fetchCookPriceUsd, type CookiescanToken } from "./cookiescan";
+import { fetchPoolByMint } from "./launchpad/api";
+import { launchpadRouteMessage } from "./launchpad";
 
 export interface TokenInfo {
   mint: string;
@@ -21,6 +23,16 @@ export interface TokenInfo {
   supply: number | null;
   updateAuthority: string | null;
   explorerUrl: string;
+  /**
+   * Present only when the mint has no market because it lives on the MomoSwap launchpad — a
+   * pre-graduation curve has no DEX pool, so price/liquidity read as 0 and swaps find no route.
+   */
+  launchpad?: { pool: string; status: string; note: string };
+}
+
+/** A token with no price AND no liquidity may simply be on a launchpad curve — worth a lookup. */
+export function looksUnpriced(info: TokenInfo): boolean {
+  return !info.priceUsd && !info.priceCook && !info.liquidityCook;
 }
 
 export function mapTokenInfo(t: CookiescanToken, cookPriceUsd?: number | null): TokenInfo {
@@ -67,7 +79,19 @@ export async function getTokenInfo(mint: string): Promise<TokenInfo> {
       "check the mint address; brand-new tokens can take a moment to be indexed",
     );
   }
-  return mapTokenInfo(t, cookPriceUsd);
+  const info = mapTokenInfo(t, cookPriceUsd);
+  // Only pay for the launchpad lookup when the market data is empty — otherwise every call would hit
+  // a second API for nothing. Best-effort: a launchpad outage must not fail a plain token read.
+  if (looksUnpriced(info)) {
+    try {
+      const { pool } = await fetchPoolByMint(mint);
+      const msg = launchpadRouteMessage(pool);
+      if (msg) info.launchpad = { pool: pool.pubkey, status: pool.status, note: msg.hint };
+    } catch {
+      /* not a launchpad token, or the launchpad API is unreachable */
+    }
+  }
+  return info;
 }
 
 // --- search --------------------------------------------------------------------------------------

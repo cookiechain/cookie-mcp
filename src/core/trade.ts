@@ -21,6 +21,7 @@ import {
 import { getConnection } from "./rpc";
 import { requireWallet, assertWithinSpendCap } from "./wallet";
 import { rawToUi, uiToRaw } from "./format";
+import { noRouteError } from "./launchpad";
 
 interface TokenMeta {
   dec: number;
@@ -126,17 +127,21 @@ export async function trade(args: {
     );
   }
 
-  const { multiRoute } = await quoteMultiRoute(
-    args.inputMint,
-    args.outputMint,
-    amountRaw.toString(),
-    slippageBps,
-  );
+  // "No route" for a launchpad token that hasn't graduated is expected — it trades on its bonding
+  // curve, not a pool — so point the caller at the launchpad tools rather than at liquidity.
+  let multiRoute;
+  try {
+    ({ multiRoute } = await quoteMultiRoute(
+      args.inputMint,
+      args.outputMint,
+      amountRaw.toString(),
+      slippageBps,
+    ));
+  } catch (e) {
+    throw await noRouteError([args.inputMint, args.outputMint], e);
+  }
   if (!multiRoute?.segments?.length) {
-    throw new CookieMcpError(
-      "no route found for this pair",
-      "the pair may lack liquidity; try a smaller amount or a more liquid token",
-    );
+    throw await noRouteError([args.inputMint, args.outputMint]);
   }
   if (multiRoute.lowLiquidity) {
     throw new CookieMcpError(

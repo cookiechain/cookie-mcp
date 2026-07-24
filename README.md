@@ -36,8 +36,8 @@ design. It is a community project for the whole Cookie Chain ecosystem.
 - **Swap** any Cookie Chain token pair through the [Candy Shop](https://swap.cookiescan.io) aggregator,
   which routes across all Cookie Chain DEX liquidity for the best fill.
 - **Transfer** COOK or any SPL / Token-2022 token.
-- **Launch tokens** — _coming soon_. Launchpad support is being migrated to MomoSwap; `deploy_token`
-  and `claim_creator_fees` are registered but return a coming-soon notice for now.
+- **Launch tokens** on the [MomoSwap launchpad](https://momoswap.fun) — create a token on a COOK
+  bonding curve, buy / sell the curve, claim after graduation, and sweep your creator fees.
 - **Manage liquidity** — create pools, add / remove liquidity, claim fees, and permanently lock
   positions across Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM (venue auto-detected).
 - **Liquid-stake** COOK for bCOOK and redeem it instantly.
@@ -163,23 +163,42 @@ it never turns a name straight into a trade.
 | `COOKIE_SLIPPAGE_BPS`   | `500`                                 | Default slippage (bps).                                |
 | `SOLANA_RPC_URL`        | `https://api.mainnet-beta.solana.com` | Solana mainnet RPC (bridge only).                      |
 
-The Candy Shop API, Baked Bazaar API, and the Hyperlane warp-route program ids all ship with working
-mainnet defaults, so you never need to set them — override via env only to target a different
-deployment (see `src/core/config.ts`).
+The Candy Shop API, Baked Bazaar API, MomoSwap launchpad API, and the Hyperlane warp-route program ids
+all ship with working mainnet defaults, so you never need to set them — override via env only to target
+a different deployment (see `src/core/config.ts`).
 
 ## Tools
 
 **Reads** (no key): `chain_health`, `get_pools`, `get_token_info`, `search_tokens` (resolve a token
 name/ticker to its mint), `get_quote`, `get_balance`, `stake_info` (bCOOK liquid-staking rate / TVL /
-APY / fees), and NFT reads `get_nft_listings`, `search_nfts` (resolve an NFT/collection name to a listed
-mint), `get_nft`, `get_wallet_nfts`, `get_nft_offers`, `get_nft_market_stats`.
+APY / fees), launchpad reads `get_launchpad_pools` / `get_launchpad_token` /
+`get_launchpad_positions`, and NFT reads
+`get_nft_listings`, `search_nfts` (resolve an NFT/collection name to a listed mint), `get_nft`,
+`get_wallet_nfts`, `get_nft_offers`, `get_nft_market_stats`.
 
 **Money** (need `COOKIE_PRIVATE_KEY`): `trade` (swap via Candy Shop), `transfer` (COOK or any token),
 `stake` / `unstake` (COOK ⇄ bCOOK liquid staking).
 
-**Launchpad** (_coming soon_): `deploy_token` (launch a token) and `claim_creator_fees` (claim the
-creator trading fees a token you launched has earned) are registered but not yet functional —
-launchpad support is being migrated to MomoSwap.
+**Launchpad** (need `COOKIE_PRIVATE_KEY`, [MomoSwap](https://momoswap.fun)): `deploy_token` launches a
+token on a COOK bonding curve (pass `imageBase64` for the logo — it is pinned to IPFS; costs the
+launchpad creation fee, **2,000 COOK**, so raise `COOKIE_MAX_TRADE_COOK` accordingly), `launchpad_buy` /
+`launchpad_sell` trade that curve, `claim_launchpad` settles a position (the real SPL token after
+graduation, a Fair-mode refund, or a Jackpot/Survivor payout), and `claim_creator_fees` sweeps the
+creator's share of trading fees from a launch you created.
+
+> ⚠️ **Before graduation, holdings are program-tracked curve shares, not SPL tokens** — they do not
+> appear in `get_balance` and `trade` cannot route them. Exit with `launchpad_sell`, or claim the real
+> token with `claim_launchpad` once the pool graduates; from then on it trades like any other token.
+
+Because those shares are invisible to `get_balance`, **`get_launchpad_positions`** is the portfolio
+view: every launch a wallet has a position in, what it is worth on a live curve, and what is unclaimed
+(tokens after graduation, a Fair-mode refund, a settlement payout, creator fees or vesting). It reads
+the `UserPosition` accounts straight from the chain in batches, so it costs about one RPC round trip
+per 100 launches. Pass `owner` for any wallet, or omit it for your own.
+
+A pre-graduation token also has no DEX pool at all, so `get_quote` / `trade` would just report "no
+route". They now recognise that case and point at the launchpad tools instead, and `get_token_info`
+adds a `launchpad` field when a mint shows no price or liquidity because it is still on a curve.
 
 **Liquidity** (need `COOKIE_PRIVATE_KEY`): `create_pool`, `add_liquidity`, `remove_liquidity`,
 `claim_fees` (Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM, venue auto-detected),

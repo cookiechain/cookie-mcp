@@ -2,6 +2,40 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+# [0.4.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.4.0)
+
+_July 25, 2026_
+
+### Added
+
+- **MomoSwap launchpad support** (6 new tools, 32 → 38). Tokens launch on a COOK bonding curve and
+  graduate to the open market once the raise target is met.
+  - `get_launchpad_pools` / `get_launchpad_token` — browse launches and inspect one: curve price, raise
+    vs graduation target, settlement mode, fee split, your position, and an optional buy quote.
+  - `get_launchpad_positions` — every launch a wallet holds a position in, what it is worth on a live
+    curve, and anything unclaimed (graduated tokens, a Fair-mode refund, a settlement payout, creator
+    fees, creator vesting). Read from the chain, so it works for any `owner`.
+  - `launchpad_buy` / `launchpad_sell` — trade a bonding curve with COOK; wrapping and account creation
+    are handled. ⚠️ Pre-graduation holdings are program-tracked **curve shares**, not SPL tokens: they
+    do not appear in `get_balance` and `trade` cannot route them.
+  - `claim_launchpad` — settle a position: the SPL token after graduation, a Fair-mode pro-rata refund,
+    a Jackpot/Survivor Merkle payout (proof fetched for you), or a creator's vested allocation.
+  - `deploy_token` and `claim_creator_fees` work again (0.3.0 left them as coming-soon stubs), now on
+    MomoSwap. A launch pins the logo + metadata to IPFS and costs the launchpad's 2,000 COOK creation
+    fee, so `COOKIE_MAX_TRADE_COOK` must allow it; `devBuyCook` makes your own buy the first trade.
+  - A pool's `status` may read **`ended`** — the launch window closed but the pool has not been settled
+    on-chain yet, and until it is, nothing on it can be traded or claimed.
+- `MOMOSWAP_API_URL` (default `https://api.momoswap.fun`). The launchpad API builds and partial-signs
+  each transaction — it holds the pre-ground `momo` mint the program requires and pins metadata — then
+  this server simulates it on your RPC, signs with `COOKIE_PRIVATE_KEY` and sends. Custody is unchanged:
+  the key never leaves your machine.
+
+### Changed
+
+- `get_quote` / `trade` recognise a launchpad token that has no DEX route and point at the launchpad
+  tools instead of reporting "no route found"; `get_token_info` gained a `launchpad` field for a mint
+  whose price and liquidity read empty because it is still on a curve.
+
 # [0.3.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.3.0)
 
 _July 23, 2026_

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { mapTokenInfo, searchTokenRegistry } from "./token";
+import { looksUnpriced, mapTokenInfo, searchTokenRegistry } from "./token";
 import type { CookiescanToken } from "./cookiescan";
 
 const token: CookiescanToken = {
@@ -49,6 +49,28 @@ describe("mapTokenInfo", () => {
     expect(t.symbol).toBeNull();
     expect(t.priceUsd).toBeNull();
     expect(t.decimals).toBeNull();
+  });
+});
+
+describe("looksUnpriced", () => {
+  it("is false for a token with any market data (so no launchpad lookup is made)", () => {
+    expect(looksUnpriced(mapTokenInfo(token))).toBe(false);
+    expect(looksUnpriced(mapTokenInfo({ ...token, price: {}, marketData: { liquidity: 5 } }))).toBe(
+      false,
+    );
+  });
+
+  it("is true when price and liquidity are all absent or zero — the launchpad-curve signature", () => {
+    expect(looksUnpriced(mapTokenInfo({ mint: "Xmint" }))).toBe(true);
+    expect(
+      looksUnpriced(
+        mapTokenInfo({
+          mint: "Xmint",
+          price: { usd: "0", native: 0 },
+          marketData: { liquidity: 0 },
+        }),
+      ),
+    ).toBe(true);
   });
 });
 
