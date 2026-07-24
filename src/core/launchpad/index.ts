@@ -19,6 +19,7 @@ import {
   launchpadTokenUrl,
   PROGRAM_IDS,
 } from "../config";
+import { confirmSent } from "../confirm";
 import { CookieMcpError } from "../errors";
 import { rawToUi, uiToRaw } from "../format";
 import { getConnection } from "../rpc";
@@ -141,25 +142,13 @@ async function submitBuilt(built: BuiltTx, keypair: Keypair, what: string): Prom
 
   tx.partialSign(keypair);
   const signature = await conn.sendRawTransaction(tx.serialize());
-  try {
-    await conn.confirmTransaction(
-      {
-        signature,
-        blockhash: built.blockhash,
-        lastValidBlockHeight: built.lastValidBlockHeight,
-      },
-      "confirmed",
-    );
-  } catch (e) {
-    // The transaction was SENT. A confirm timeout (blockhash window elapsed on a slow chain) does not
-    // mean it failed — it may still land. Say so loudly: a blind retry here can buy/launch twice.
-    const detail = e instanceof Error ? e.message : String(e);
-    throw new CookieMcpError(
-      `the ${what} transaction was sent (${signature}) but could not be confirmed in time: ${detail}`,
-      `DO NOT retry blindly — check ${explorerTxUrl(signature)} first; if it landed, the ${what} already happened`,
-    );
-  }
-  return signature;
+  // A confirm timeout does NOT mean the transaction failed — it may still land, and a blind retry here
+  // would buy or launch twice. confirmSent turns that into an explicit warning with the signature.
+  return confirmSent(
+    conn,
+    { signature, blockhash: built.blockhash, lastValidBlockHeight: built.lastValidBlockHeight },
+    what,
+  );
 }
 
 /** A pool reference is either the pool PDA or the token mint — resolve both to the pool. */

@@ -93,6 +93,8 @@ export interface TradeResult {
   signature: string;
   confirmed: boolean;
   explorerUrl: string;
+  /** Present only when the swap was submitted but not observed as confirmed — retrying is unsafe. */
+  warning?: string;
   input: { mint: string; symbol: string | null; amount: string };
   output: { mint: string; symbol: string | null; expectedOut: string; minOut: string };
   candyShopFeeBps: number | null;
@@ -185,6 +187,16 @@ export async function trade(args: {
     signature,
     confirmed: finalConfirmed,
     explorerUrl: explorerTxUrl(signature),
+    // The swap was submitted either way. Unconfirmed ≠ failed, and a retried swap is a second real
+    // swap, so say so instead of letting `confirmed: false` read as "nothing happened".
+    ...(finalConfirmed
+      ? {}
+      : {
+          warning:
+            `the swap was submitted but is not confirmed yet — DO NOT retry blindly, it may still ` +
+            `land. Check ${explorerTxUrl(signature)}; Cookie Chain finalization stalls can delay ` +
+            `confirmation (see chain_health).`,
+        }),
     input: {
       mint: args.inputMint,
       symbol: input.sym,

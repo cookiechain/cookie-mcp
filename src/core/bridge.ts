@@ -31,6 +31,7 @@ import {
   explorerTxUrl,
   solanaExplorerTxUrl,
 } from "./config";
+import { confirmSent } from "./confirm";
 import { CookieMcpError } from "./errors";
 import { getConnection, getSolanaConnection } from "./rpc";
 import { requireWallet, assertWithinSpendCap, ownPublicKey } from "./wallet";
@@ -411,9 +412,14 @@ export async function bridge(args: {
   }
 
   const sourceSignature = await route.sourceConn.sendRawTransaction(tx.serialize());
-  await route.sourceConn.confirmTransaction(
+  // A confirm timeout here does not mean the transfer failed — the dispatch may still land and the
+  // relayer would then deliver it. Retrying would bridge the amount twice, so surface the signature
+  // (on the SOURCE chain's explorer) instead of a bare timeout.
+  await confirmSent(
+    route.sourceConn,
     { signature: sourceSignature, blockhash, lastValidBlockHeight },
-    "confirmed",
+    "bridge",
+    { explorerUrl: route.sourceExplorerTxUrl(sourceSignature) },
   );
 
   // Extract the Hyperlane message id from the dispatch tx logs. getTransaction can lag confirmation on

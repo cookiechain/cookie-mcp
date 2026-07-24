@@ -130,9 +130,10 @@ async function sendBuilder(
   keypair: Keypair,
   builder: TransactionBuilder,
   computeUnits: number,
+  what = "liquidity",
 ): Promise<string> {
   const { tx, signers } = await builderToTx(builder, computeUnits);
-  return signSendConfirm(conn, tx, [keypair, ...signers]);
+  return signSendConfirm(conn, tx, [keypair, ...signers], what);
 }
 
 /** Build → send a list of builders sequentially (skipping empty ones); returns the last signature. */

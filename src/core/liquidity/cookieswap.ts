@@ -75,6 +75,12 @@ async function loadRaydium(connection: Connection, keypair: Keypair): Promise<Ra
 }
 
 // Raydium `MakeTxData`: sign with owner + ephemeral signers and send over our connection.
+//
+// ⚠️ Unlike every other send path, the SDK owns both the send and the confirm here, so we cannot wrap
+// the confirm in `confirmSent` — a confirm timeout surfaces as the SDK's own error and does NOT carry
+// the "sent, do not retry blindly" warning. The transaction may still land, so a SAMM op that reports a
+// confirmation failure must be checked on the explorer before retrying. Fixing this properly means
+// dropping `sendAndConfirm` and sending the built tx ourselves.
 async function execTx(built: {
   execute: (o?: { sendAndConfirm?: boolean }) => Promise<{ txId: string }>;
 }): Promise<string> {

@@ -8,6 +8,7 @@ import {
 } from "@solana/spl-token";
 
 import { COOK_MINT, COOK_SYMBOL, COOK_DECIMALS, explorerTxUrl } from "./config";
+import { confirmSent } from "./confirm";
 import { CookieMcpError } from "./errors";
 import { fetchToken } from "./cookiescan";
 import { getConnection } from "./rpc";
@@ -126,7 +127,7 @@ export async function transfer(args: {
 
   tx.sign(keypair);
   const signature = await conn.sendRawTransaction(tx.serialize());
-  await conn.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+  await confirmSent(conn, { signature, blockhash, lastValidBlockHeight }, "transfer");
 
   return {
     signature,
