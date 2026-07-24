@@ -3,13 +3,18 @@
 // all get the same safety path. Extracted from damm.ts.
 import { Keypair, Transaction, type Connection, type Signer } from "@solana/web3.js";
 
+import { confirmSent } from "../confirm";
 import { CookieMcpError } from "../errors";
 
-/** Sign, simulate, send, and confirm a legacy Transaction. Signer[0] is the fee payer. */
+/**
+ * Sign, simulate, send, and confirm a legacy Transaction. Signer[0] is the fee payer. `what` names the
+ * action for the "sent but unconfirmed" warning — pass it so a retry-unsafe timeout is unambiguous.
+ */
 export async function signSendConfirm(
   conn: Connection,
   tx: Transaction,
   signers: Signer[],
+  what = "transaction",
 ): Promise<string> {
   const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
   tx.recentBlockhash = blockhash;
@@ -31,8 +36,7 @@ export async function signSendConfirm(
   }
   tx.sign(...(signers as Keypair[]));
   const signature = await conn.sendRawTransaction(tx.serialize());
-  await conn.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
-  return signature;
+  return confirmSent(conn, { signature, blockhash, lastValidBlockHeight }, what);
 }
 
 export const LP_NOTE = "verify the result on cookiescan.io";

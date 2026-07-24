@@ -2,6 +2,19 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+# [Unreleased]
+
+### Fixed
+
+- **A confirmation timeout no longer reads as a failed transaction.** `transfer`, `stake`, `unstake`,
+  `bridge` and the liquidity / NFT write tools surfaced web3.js's raw
+  `TransactionExpiredBlockheightExceeded` when the blockhash window elapsed before the transaction was
+  observed — but it was already broadcast, and on Cookie Chain a finalization stall delays confirmation
+  without dropping the transaction. An agent reading that as a failure would retry, making a second
+  real transfer / stake / bridge. These now return the signature, an explorer link and an explicit
+  "DO NOT retry blindly". `trade`, which reports `confirmed: false` instead of throwing, gained the same
+  warning in its result.
+
 # [0.3.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.3.0)
 
 _July 23, 2026_

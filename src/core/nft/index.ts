@@ -648,7 +648,8 @@ async function sendNftTx(
   conn: Connection,
   ixs: TransactionInstruction[],
   signers: Parameters<typeof signSendConfirm>[2],
+  what = "NFT",
 ): Promise<string> {
   const tx = new Transaction().add(...ixs);
-  return signSendConfirm(conn, tx, signers);
+  return signSendConfirm(conn, tx, signers, what);
 }

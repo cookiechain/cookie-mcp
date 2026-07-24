@@ -167,7 +167,7 @@ export async function addLiquidity(args: {
     tokenBAmountThreshold: new BN(maxB.toString()),
   });
 
-  const signature = await signSendConfirm(conn, tx, [keypair, positionNft]);
+  const signature = await signSendConfirm(conn, tx, [keypair, positionNft], "add_liquidity");
   return {
     signature,
     pool: ctx.pool.toBase58(),
@@ -211,7 +211,7 @@ export async function removeLiquidity(args: { poolPk: string; bps?: number }): P
     liquidityDelta: bps >= 10_000 ? null : unlocked.mul(new BN(bps)).div(new BN(10_000)),
   });
 
-  const signature = await signSendConfirm(conn, tx, [keypair]);
+  const signature = await signSendConfirm(conn, tx, [keypair], "remove_liquidity");
   return {
     signature,
     pool: ctx.pool.toBase58(),
@@ -240,7 +240,7 @@ export async function claimFees(args: { poolPk: string }): Promise<LpResult> {
     tokenBProgram: ctx.bProgram,
   });
 
-  const signature = await signSendConfirm(conn, tx, [keypair]);
+  const signature = await signSendConfirm(conn, tx, [keypair], "claim_fees");
   return {
     signature,
     pool: ctx.pool.toBase58(),
@@ -264,7 +264,7 @@ export async function lockLiquidity(args: { poolPk: string }): Promise<LpResult>
     unlockedLiquidity: pos.positionState.unlockedLiquidity,
   });
 
-  const signature = await signSendConfirm(conn, tx, [keypair]);
+  const signature = await signSendConfirm(conn, tx, [keypair], "lock_liquidity");
   return {
     signature,
     pool: ctx.pool.toBase58(),
@@ -359,7 +359,7 @@ export async function createPool(args: {
     tokenBAmount: b.raw,
   });
 
-  const signature = await signSendConfirm(conn, tx, [keypair, positionNft]);
+  const signature = await signSendConfirm(conn, tx, [keypair, positionNft], "create_pool");
   return {
     signature,
     pool: derivePoolAddress(configPk, a.mint, b.mint).toBase58(),

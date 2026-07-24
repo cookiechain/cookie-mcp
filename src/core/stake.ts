@@ -24,6 +24,7 @@ import {
 } from "@solana/spl-token";
 
 import { COOK_DECIMALS, COOK_SYMBOL, explorerTxUrl, explorerAddressUrl } from "./config";
+import { confirmSent } from "./confirm";
 import { CookieMcpError } from "./errors";
 import { getConnection } from "./rpc";
 import { requireWallet, assertWithinSpendCap } from "./wallet";
@@ -193,8 +194,7 @@ async function signSendConfirm(
   }
   tx.sign(...signers);
   const signature = await conn.sendRawTransaction(tx.serialize());
-  await conn.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
-  return signature;
+  return confirmSent(conn, { signature, blockhash, lastValidBlockHeight }, what);
 }
 
 export interface StakeResult {
