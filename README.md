@@ -183,7 +183,8 @@ launchpad support is being migrated to MomoSwap.
 
 **Liquidity** (need `COOKIE_PRIVATE_KEY`): `create_pool`, `add_liquidity`, `remove_liquidity`,
 `claim_fees` (Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM, venue auto-detected),
-`lock_liquidity` (Cookiebox DAMM v2, permanent). Concentrated-liquidity venues (CLMM / SAMM) open a
+`lock_liquidity` (Cookiebox DAMM v2 and Cookiebox CLMM, permanent and irreversible — CLMM locks the
+whole position; fees stay claimable either way). Concentrated-liquidity venues (CLMM / SAMM) open a
 full-range position by default.
 
 **NFT marketplace** (need `COOKIE_PRIVATE_KEY`, [Baked Bazaar](https://bakedbazaar.art)): `buy_nft`,

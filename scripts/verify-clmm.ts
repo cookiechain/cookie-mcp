@@ -23,7 +23,7 @@ async function tryOp(label: string, fn: () => Promise<unknown>): Promise<void> {
 
 async function main() {
   process.env.COOKIE_PRIVATE_KEY = bs58.encode(Keypair.generate().secretKey);
-  const { addLiquidity, removeLiquidity, claimFees, createPool } =
+  const { addLiquidity, removeLiquidity, lockLiquidity, claimFees, createPool } =
     await import("../src/core/liquidity");
 
   const COOK = "So11111111111111111111111111111111111111112";
@@ -33,6 +33,9 @@ async function main() {
     removeLiquidity({ poolPk: CLMM_POOL }),
   );
   await tryOp("claim_fees (CLMM) → no position (unfunded)", () => claimFees({ poolPk: CLMM_POOL }));
+  await tryOp("lock_liquidity (CLMM) → routed to CLMM, no position (unfunded)", () =>
+    lockLiquidity({ poolPk: CLMM_POOL }),
+  );
   await tryOp("add_liquidity (CLMM) → getPool + tick/open build/simulate (unfunded)", () =>
     addLiquidity({ poolPk: CLMM_POOL, amountA: 0.001, amountB: 0.001 }),
   );

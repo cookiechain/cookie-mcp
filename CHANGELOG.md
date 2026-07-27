@@ -4,6 +4,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 # [Unreleased]
 
+### Added
+
+- **`lock_liquidity` now supports Cookiebox CLMM**, not just DAMM v2 — the venue is auto-detected from
+  the pool like every other liquidity tool. The whirlpool program only offers `LockType::Permanent` and
+  it always takes the **whole** position, so unlike DAMM there is no partial amount and no vesting.
+  Locked liquidity can never be withdrawn and the position can never be closed; fees stay claimable via
+  `claim_fees`.
+
+### Changed
+
+- **CLMM positions are now opened as Token-2022 NFTs** (`open_position_with_token_extensions` instead
+  of the legacy Metaplex `open_position_with_metadata`). This is required for locking: the program
+  freezes the position token account, which only works when the mint's freeze authority is the position
+  PDA. Positions opened by earlier versions are legacy NFTs and **can never be locked** —
+  `lock_liquidity` detects them and says so instead of sending a transaction that fails with
+  `ConstraintOwner`.
+- **`add_liquidity` / `remove_liquidity` skip permanently-locked CLMM positions.** The program rejects
+  every liquidity change on a locked position, so `add_liquidity` opens a fresh position instead of
+  failing, and `remove_liquidity` reports that the position is locked rather than "no position found".
+
 ### Fixed
 
 - **A confirmation timeout no longer reads as a failed transaction.** `transfer`, `stake`, `unstake`,
