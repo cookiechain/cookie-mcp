@@ -18,6 +18,7 @@ src/
     format.ts          #   rawToUi / uiToRaw / shortAddr — always go through these
     http.ts            #   fetchJson with retry policy
     launchpad/         #   MomoSwap launchpad: api (HTTP client) + curve (quote math) + positions (PDAs)
+                       #   + program (which deployment: PDA scope + error-code build)
     liquidity/         #   create/add/remove/lock/claim across damm, cpAmm, clmm, cookieswap
     nft/               #   Baked Bazaar: auctionHouse (writes) + bazaar (reads)
   idl/                 # committed IDLs (cp_amm, whirlpool)

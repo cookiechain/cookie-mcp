@@ -49,33 +49,14 @@ import {
   type PoolStatus,
 } from "./api";
 import { estimateBuy, estimateSell, graduationProgressPct, spotPriceCook } from "./curve";
-import { fetchCreatorFeeVaults, fetchPositionsForPools } from "./positions";
+import { fetchCreatorFeeVaults, fetchPoolPrograms, fetchPositionsForPools } from "./positions";
+import { launchpadErrorMessage, launchpadProgramIdFromTx } from "./program";
 
 const MIN_DURATION_SECS = 60;
 const MAX_DURATION_SECS = 604_800; // 7 days, enforced on-chain
 const DEFAULT_DURATION_SECS = 86_400;
 const MAX_NAME_LEN = 32;
 const MAX_SYMBOL_LEN = 10;
-
-// Program error codes (anchor custom errors) worth translating for an agent — the rest fall through
-// to the raw simulation log tail.
-const LAUNCHPAD_ERRORS: Record<number, string> = {
-  6000: "the launchpad is paused",
-  6011: "the pool is not in a tradeable state (it has graduated or expired)",
-  6012: "trading has not opened yet for this launch",
-  6013: "the launch has ended — the pool is expired",
-  6015: "the amount is below the pool's minimum buy",
-  6016: "this buy would exceed the pool's per-wallet cap",
-  6017: "this buy would exceed the pool's raise cap",
-  6019: "the pool has no sale tokens left at this size",
-  6020: "you have no bonding-curve position on this pool",
-  6021: "you are trying to sell more shares than you hold",
-  6022: "the pool's payment vault cannot cover this sell",
-  6025: "there is nothing to claim",
-  6026: "this has already been claimed",
-  6035: "self-referral is not allowed",
-  6040: "the anti-snipe window caps how much one wallet can buy right after launch",
-};
 
 function programErrorCode(blob: string): number | null {
   const m =
@@ -85,16 +66,22 @@ function programErrorCode(blob: string): number | null {
   return /^0x/i.test(m[0]) || m[0].includes("0x") ? parseInt(raw, 16) : parseInt(raw, 10);
 }
 
-/** Turn a failed simulation into an actionable error, translating known program error codes. */
+/**
+ * Turn a failed simulation into an actionable error, translating known program error codes. `programId`
+ * is which launchpad deployment produced them — the codes are enum ordinals, so the same number means
+ * different things in different builds (see `program.ts`).
+ */
 export function launchpadSimError(
   what: string,
   err: unknown,
   logs: string[] | null,
+  programId?: string | null,
 ): CookieMcpError {
   const blob = `${JSON.stringify(err)} ${logs?.join(" ") ?? ""}`;
   const code = programErrorCode(blob);
-  if (code != null && LAUNCHPAD_ERRORS[code]) {
-    return new CookieMcpError(`${what} would fail: ${LAUNCHPAD_ERRORS[code]}`, "nothing was sent");
+  const known = code != null ? launchpadErrorMessage(code, programId) : undefined;
+  if (known) {
+    return new CookieMcpError(`${what} would fail: ${known}`, "nothing was sent");
   }
   if (/BlockhashNotFound|blockhash/i.test(blob)) {
     return new CookieMcpError(
@@ -138,7 +125,16 @@ async function submitBuilt(built: BuiltTx, keypair: Keypair, what: string): Prom
   }
 
   const sim = await conn.simulateTransaction(tx);
-  if (sim.value.err) throw launchpadSimError(what, sim.value.err, sim.value.logs ?? null);
+  if (sim.value.err) {
+    // The transaction itself says which deployment the API built against, which is what the error
+    // codes belong to — no need to ask the chain.
+    throw launchpadSimError(
+      what,
+      sim.value.err,
+      sim.value.logs ?? null,
+      launchpadProgramIdFromTx(tx),
+    );
+  }
 
   tx.partialSign(keypair);
   const signature = await conn.sendRawTransaction(tx.serialize());
@@ -377,9 +373,22 @@ export async function getLaunchpadPools(args: {
   return {
     count: pools.length,
     status,
-    program: PROGRAM_IDS.momoswapLaunchpad,
+    // Report the deployment these pools actually live on, not a build-time constant — the launchpad
+    // has been redeployed under a new id before. Falls back to the configured id if the read fails.
+    program: await resolvePoolsProgramId(sorted[0]?.pubkey),
     pools: sorted.slice(0, limit).map((p) => mapPoolView(p, cfg.defaultTokenDecimals)),
   };
+}
+
+/** The program owning `pool`, for reporting. Never throws — a read tool must not fail over a label. */
+async function resolvePoolsProgramId(pool: string | undefined): Promise<string> {
+  if (!pool) return PROGRAM_IDS.momoswapLaunchpad;
+  try {
+    const owners = await fetchPoolPrograms(getConnection(), [pool]);
+    return owners.get(pool)?.toBase58() ?? PROGRAM_IDS.momoswapLaunchpad;
+  } catch {
+    return PROGRAM_IDS.momoswapLaunchpad;
+  }
 }
 
 export interface PositionView {
@@ -536,12 +545,16 @@ export async function getLaunchpadPositions(args: {
   const poolKeys = pools.map((p) => p.pubkey);
   const created = pools.filter((p) => p.creator === owner);
 
+  // Read each pool's owning program first: PDA seeds are program-scoped, and pools created before a
+  // redeploy stay on the old program id forever, so a single hardcoded id would silently miss them.
+  const programs = await fetchPoolPrograms(conn, poolKeys);
   const [positions, feeVaults] = await Promise.all([
-    fetchPositionsForPools(conn, owner, poolKeys),
+    fetchPositionsForPools(conn, owner, poolKeys, programs),
     created.length
       ? fetchCreatorFeeVaults(
           conn,
           created.map((p) => p.pubkey),
+          programs,
         )
       : new Map(),
   ]);
@@ -859,7 +872,7 @@ export interface DeployTokenResult {
 /**
  * Launch a token on the MomoSwap bonding curve. The API pins the metadata, leases a `momo`-suffixed
  * mint (required on-chain) and partial-signs the mint/vault keypairs; we simulate, sign and send.
- * Costs the launchpad's creation fee (2,000 COOK at time of writing) plus rent and any dev buy.
+ * Costs the launchpad's creation fee (read live from `/config`) plus rent and any dev buy.
  */
 export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenResult> {
   const { keypair } = requireWallet();

@@ -418,8 +418,9 @@ registerTool(
     description:
       "Launch a new token on the MomoSwap launchpad (bonding curve priced in COOK, graduates to the " +
       "open market at the raise target). Mint + freeze authority are renounced and the metadata is " +
-      "immutable, so a launch is final. COSTS the launchpad creation fee (2,000 COOK at time of " +
-      "writing) plus account rent, so COOKIE_MAX_TRADE_COOK must be raised above that fee or the " +
+      "immutable, so a launch is final. COSTS the launchpad's current creation fee (read live from the " +
+      "launchpad config — 2,000 COOK on the deployment the API serves today, 0 on newer ones) plus " +
+      "account rent, so COOKIE_MAX_TRADE_COOK must be raised above that fee or the " +
       "launch is refused by the spend cap. ALWAYS give the token a logo: pass " +
       "`imageBase64` (preferred — you can attach an image you generated) or `imageUrl`; the launchpad " +
       "pins it to IPFS. The mint address is chosen by the launchpad (the program requires one ending " +

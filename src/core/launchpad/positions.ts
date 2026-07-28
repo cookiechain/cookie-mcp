@@ -2,15 +2,21 @@
 //
 // The API exposes positions one pool at a time (`/pools/:pool/position/:owner`), which would be one
 // HTTP request per pool. `UserPosition` is a PDA of `["user", pool, owner]` with a fixed layout, so we
-// derive the addresses and batch-read them with `getMultipleAccounts` (100 per call) instead — one
-// round trip covers 100 pools, and the answer is on-chain truth rather than an indexer's view.
+// derive the addresses and batch-read them with `getMultipleAccounts` (100 per call) instead — two
+// round trips cover 100 pools, and the answer is on-chain truth rather than an indexer's view.
 // Same trick for the per-pool `creator_fee_vault` (a plain SPL token account).
+//
+// The first of those two round trips reads the **pool accounts themselves**, purely for their `owner`:
+// PDA seeds are program-scoped, and the launchpad has been redeployed under a new program id with the
+// old pools left behind on the old one. Deriving every PDA under the pool's own owner is the only
+// version-proof way to do this, and it stays correct while both deployments are in play. See
+// `program.ts`.
 import { PublicKey, type Connection } from "@solana/web3.js";
 
-import { PROGRAM_IDS } from "../config";
 import type { LaunchpadPosition } from "./api";
+import { CONFIGURED_LAUNCHPAD_PROGRAM_ID } from "./program";
 
-export const LAUNCHPAD_PROGRAM_ID = new PublicKey(PROGRAM_IDS.momoswapLaunchpad);
+export const LAUNCHPAD_PROGRAM_ID = CONFIGURED_LAUNCHPAD_PROGRAM_ID;
 
 /** Anchor account discriminators (first 8 bytes) from the launchpad IDL. */
 export const USER_POSITION_DISCRIMINATOR = Buffer.from([251, 248, 209, 245, 83, 234, 17, 27]);
@@ -33,20 +39,31 @@ const TOKEN_ACCOUNT_MIN_LEN = 72;
 
 const MAX_ACCOUNTS_PER_CALL = 100;
 
-export function userPositionPda(pool: PublicKey | string, owner: PublicKey | string): PublicKey {
+/**
+ * `["user", pool, owner]` under `programId` — the deployment that owns the pool. Defaults to the
+ * configured id so a caller that already knows it (or a test) can stay terse.
+ */
+export function userPositionPda(
+  pool: PublicKey | string,
+  owner: PublicKey | string,
+  programId: PublicKey = LAUNCHPAD_PROGRAM_ID,
+): PublicKey {
   const p = typeof pool === "string" ? new PublicKey(pool) : pool;
   const o = typeof owner === "string" ? new PublicKey(owner) : owner;
   return PublicKey.findProgramAddressSync(
     [Buffer.from("user"), p.toBuffer(), o.toBuffer()],
-    LAUNCHPAD_PROGRAM_ID,
+    programId,
   )[0];
 }
 
-export function creatorFeeVaultPda(pool: PublicKey | string): PublicKey {
+export function creatorFeeVaultPda(
+  pool: PublicKey | string,
+  programId: PublicKey = LAUNCHPAD_PROGRAM_ID,
+): PublicKey {
   const p = typeof pool === "string" ? new PublicKey(pool) : pool;
   return PublicKey.findProgramAddressSync(
     [Buffer.from("creator_fee_vault"), p.toBuffer()],
-    LAUNCHPAD_PROGRAM_ID,
+    programId,
   )[0];
 }
 
@@ -83,16 +100,63 @@ export function chunk<T>(items: T[], size = MAX_ACCOUNTS_PER_CALL): T[][] {
 }
 
 /**
+ * Which program owns a pool is **immutable** — an account's owner never changes once it is allocated —
+ * so this is cached for the life of the process. A wallet polling its portfolio pays one batched read
+ * the first time and nothing after that.
+ */
+const poolProgramCache = new Map<string, PublicKey>();
+
+/** Test seam: forget what we learned about pool ownership. */
+export function resetPoolProgramCache(): void {
+  poolProgramCache.clear();
+}
+
+/**
+ * The program that owns each pool account, keyed by pool address — the ground truth PDA derivation
+ * needs. Only pools not already known are read. Pools we can't read are absent *and not cached* (so a
+ * transient RPC failure is retried); the caller falls back to the configured id for those, which is the
+ * best guess available and no worse than the old hardcoded behaviour.
+ */
+export async function fetchPoolPrograms(
+  conn: Connection,
+  pools: string[],
+): Promise<Map<string, PublicKey>> {
+  const owners = new Map<string, PublicKey>();
+  const unknown: string[] = [];
+  for (const pool of pools) {
+    const cached = poolProgramCache.get(pool);
+    if (cached) owners.set(pool, cached);
+    else unknown.push(pool);
+  }
+  for (const batch of chunk(unknown)) {
+    const infos = await conn.getMultipleAccountsInfo(batch.map((p) => new PublicKey(p)));
+    infos.forEach((info, i) => {
+      if (!info?.owner) return;
+      poolProgramCache.set(batch[i]!, info.owner);
+      owners.set(batch[i]!, info.owner);
+    });
+  }
+  return owners;
+}
+
+/**
  * A wallet's curve position in each of `pools`, keyed by pool address. Pools the wallet never bought
  * into are simply absent (their PDA does not exist).
+ *
+ * `programs` maps a pool to the deployment that owns it (from `fetchPoolPrograms`); pass it to stay
+ * correct across a program-id change. Without it every PDA is derived under the configured id.
  */
 export async function fetchPositionsForPools(
   conn: Connection,
   owner: string,
   pools: string[],
+  programs?: Map<string, PublicKey>,
 ): Promise<Map<string, LaunchpadPosition>> {
   const found = new Map<string, LaunchpadPosition>();
-  const pdas = pools.map((pool) => ({ pool, pda: userPositionPda(pool, owner) }));
+  const pdas = pools.map((pool) => ({
+    pool,
+    pda: userPositionPda(pool, owner, programs?.get(pool) ?? LAUNCHPAD_PROGRAM_ID),
+  }));
   for (const batch of chunk(pdas)) {
     const infos = await conn.getMultipleAccountsInfo(batch.map((b) => b.pda));
     infos.forEach((info, i) => {
@@ -108,9 +172,13 @@ export async function fetchPositionsForPools(
 export async function fetchCreatorFeeVaults(
   conn: Connection,
   pools: string[],
+  programs?: Map<string, PublicKey>,
 ): Promise<Map<string, bigint>> {
   const out = new Map<string, bigint>();
-  const pdas = pools.map((pool) => ({ pool, pda: creatorFeeVaultPda(pool) }));
+  const pdas = pools.map((pool) => ({
+    pool,
+    pda: creatorFeeVaultPda(pool, programs?.get(pool) ?? LAUNCHPAD_PROGRAM_ID),
+  }));
   for (const batch of chunk(pdas)) {
     const infos = await conn.getMultipleAccountsInfo(batch.map((b) => b.pda));
     infos.forEach((info, i) => out.set(batch[i]!.pool, decodeTokenAmount(info?.data)));

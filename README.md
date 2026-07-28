@@ -181,7 +181,8 @@ APY / fees), launchpad reads `get_launchpad_pools` / `get_launchpad_token` /
 
 **Launchpad** (need `COOKIE_PRIVATE_KEY`, [MomoSwap](https://momoswap.fun)): `deploy_token` launches a
 token on a COOK bonding curve (pass `imageBase64` for the logo — it is pinned to IPFS; costs the
-launchpad creation fee, **2,000 COOK**, so raise `COOKIE_MAX_TRADE_COOK` accordingly), `launchpad_buy` /
+launchpad creation fee — **2,000 COOK** on the deployment live today, read from the launchpad config at
+call time — so raise `COOKIE_MAX_TRADE_COOK` accordingly), `launchpad_buy` /
 `launchpad_sell` trade that curve, `claim_launchpad` settles a position (the real SPL token after
 graduation, a Fair-mode refund, or a Jackpot/Survivor payout), and `claim_creator_fees` sweeps the
 creator's share of trading fees from a launch you created.

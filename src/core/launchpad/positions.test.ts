@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { PublicKey } from "@solana/web3.js";
 
 import {
@@ -6,9 +6,13 @@ import {
   creatorFeeVaultPda,
   decodeTokenAmount,
   decodeUserPosition,
+  fetchPoolPrograms,
+  fetchPositionsForPools,
+  resetPoolProgramCache,
   userPositionPda,
   USER_POSITION_DISCRIMINATOR,
 } from "./positions";
+import { LAUNCHPAD_PROGRAM_CURRENT } from "./program";
 
 // Golden: the real on-chain UserPosition `7c4j8hud…` — wallet 9rj5GEEy… on pool 4pZSDRbe… (the MOMO
 // test launch). Its decoded values match what GET /pools/:pool/position/:owner reports for the same
@@ -34,6 +38,103 @@ describe("userPositionPda", () => {
     expect(
       userPositionPda(GOLDEN_POOL, "FNNVmNtTFhQtcU6Rp554aS5aDaEhhQqvjX9HLFNKoYEZ").toBase58(),
     ).not.toBe(GOLDEN_PDA);
+  });
+});
+
+describe("program-scoped PDA derivation", () => {
+  // PDAs are program-scoped: the same pool under a different deployment is a different address. This
+  // is the whole reason positions.ts reads each pool's owner instead of trusting one constant — a
+  // wrong program id yields addresses that simply do not exist, i.e. an empty portfolio, no error.
+  it("derives a different UserPosition under a different program id", () => {
+    const underCurrent = userPositionPda(
+      GOLDEN_POOL,
+      GOLDEN_OWNER,
+      new PublicKey(LAUNCHPAD_PROGRAM_CURRENT),
+    );
+    expect(underCurrent.toBase58()).not.toBe(GOLDEN_PDA);
+    expect(userPositionPda(GOLDEN_POOL, GOLDEN_OWNER).toBase58()).toBe(GOLDEN_PDA);
+  });
+
+  it("scopes the creator-fee vault the same way", () => {
+    expect(
+      creatorFeeVaultPda(GOLDEN_POOL, new PublicKey(LAUNCHPAD_PROGRAM_CURRENT)).toBase58(),
+    ).not.toBe(creatorFeeVaultPda(GOLDEN_POOL).toBase58());
+  });
+
+  it("uses each pool's own program, so a mixed-deployment portfolio still resolves", async () => {
+    const OTHER_POOL = "4YgzpSWSMR5gAHzDnzL6cyJH1rVZuz2SNJ9AZEPp33em";
+    const current = new PublicKey(LAUNCHPAD_PROGRAM_CURRENT);
+    const programs = new Map([[OTHER_POOL, current]]); // GOLDEN_POOL deliberately absent -> default
+    const asked: string[] = [];
+    const conn = {
+      getMultipleAccountsInfo: async (keys: PublicKey[]) => {
+        asked.push(...keys.map((k) => k.toBase58()));
+        return keys.map(() => null);
+      },
+    } as never;
+    await fetchPositionsForPools(conn, GOLDEN_OWNER, [GOLDEN_POOL, OTHER_POOL], programs);
+    expect(asked).toEqual([
+      GOLDEN_PDA, // configured id, because this pool was not in the map
+      userPositionPda(OTHER_POOL, GOLDEN_OWNER, current).toBase58(),
+    ]);
+  });
+});
+
+describe("fetchPoolPrograms", () => {
+  const OTHER_POOL = "4YgzpSWSMR5gAHzDnzL6cyJH1rVZuz2SNJ9AZEPp33em";
+
+  beforeEach(() => resetPoolProgramCache());
+
+  it("maps each pool to its owning program and omits pools it cannot read", async () => {
+    const conn = {
+      getMultipleAccountsInfo: async (keys: PublicKey[]) =>
+        keys.map((_k, i) => (i === 0 ? { owner: new PublicKey(LAUNCHPAD_PROGRAM_CURRENT) } : null)),
+    } as never;
+    const out = await fetchPoolPrograms(conn, [GOLDEN_POOL, OTHER_POOL]);
+    expect(out.get(GOLDEN_POOL)?.toBase58()).toBe(LAUNCHPAD_PROGRAM_CURRENT);
+    expect(out.size).toBe(1);
+  });
+
+  it("caches ownership — an account's owner is immutable, so the second call costs no RPC", async () => {
+    let calls = 0;
+    const conn = {
+      getMultipleAccountsInfo: async (keys: PublicKey[]) => {
+        calls++;
+        return keys.map(() => ({ owner: new PublicKey(LAUNCHPAD_PROGRAM_CURRENT) }));
+      },
+    } as never;
+    await fetchPoolPrograms(conn, [GOLDEN_POOL, OTHER_POOL]);
+    const again = await fetchPoolPrograms(conn, [GOLDEN_POOL, OTHER_POOL]);
+    expect(calls).toBe(1);
+    expect(again.get(OTHER_POOL)?.toBase58()).toBe(LAUNCHPAD_PROGRAM_CURRENT);
+  });
+
+  it("only reads the pools it has not seen before", async () => {
+    const asked: string[][] = [];
+    const conn = {
+      getMultipleAccountsInfo: async (keys: PublicKey[]) => {
+        asked.push(keys.map((k) => k.toBase58()));
+        return keys.map(() => ({ owner: new PublicKey(LAUNCHPAD_PROGRAM_CURRENT) }));
+      },
+    } as never;
+    await fetchPoolPrograms(conn, [GOLDEN_POOL]);
+    await fetchPoolPrograms(conn, [GOLDEN_POOL, OTHER_POOL]);
+    expect(asked).toEqual([[GOLDEN_POOL], [OTHER_POOL]]);
+  });
+
+  it("does not cache a pool it failed to read, so the next call retries it", async () => {
+    let calls = 0;
+    const conn = {
+      getMultipleAccountsInfo: async (keys: PublicKey[]) => {
+        calls++;
+        return keys.map(() =>
+          calls === 1 ? null : { owner: new PublicKey(LAUNCHPAD_PROGRAM_CURRENT) },
+        );
+      },
+    } as never;
+    expect((await fetchPoolPrograms(conn, [GOLDEN_POOL])).size).toBe(0);
+    expect((await fetchPoolPrograms(conn, [GOLDEN_POOL])).size).toBe(1);
+    expect(calls).toBe(2);
   });
 });
 

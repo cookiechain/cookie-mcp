@@ -50,7 +50,13 @@ export const PROGRAM_IDS = {
   cookieboxClmm: "CLMMmWqTtyNSomqXP3kETJy2SGKPdr31USsm4GfbLyKs",
   cookieswapSamm: "WTzkPUoprVx7PDc1tfKA5sS7k1ynCgU89WtwZhksHX5",
   cookieswapXybn: "xYBN2zddsqSy41tg1yD9nJScCmqquZnHUyzXBfLEqC8",
-  momoswapLaunchpad: "7tLQV8D6uUyG9r1nEtQuBMqDb5Nfi9TXxsdVZUtsct2M",
+  // The launchpad deployment to assume when nothing on-chain is available to read the id from. It has
+  // changed once already (`7tLQV8D6…` → `momoL7wu…`) and the old pools stay on the old id, so this is
+  // only a fallback: PDAs and error codes are resolved per pool / per transaction at runtime. Override
+  // via env when the API cuts over, without waiting for a release.
+  momoswapLaunchpad:
+    process.env.MOMOSWAP_LAUNCHPAD_PROGRAM_ID?.trim() ||
+    "7tLQV8D6uUyG9r1nEtQuBMqDb5Nfi9TXxsdVZUtsct2M",
 } as const;
 
 export const HTTP_TIMEOUT_MS = 12_000;
