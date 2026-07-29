@@ -12,6 +12,7 @@ import {
   resolveClaimKind,
 } from "./index";
 import { CookieMcpError } from "../errors";
+import { assertWithinSpendCap } from "../wallet";
 import type { LaunchpadPool } from "./api";
 
 // Shape mirrors GET /v1/launchpad/pools for the live pool 3YyYM3J8… (SAKURA, expired/fair).
@@ -344,6 +345,16 @@ describe("launchpadRouteMessage", () => {
     const m = launchpadRouteMessage({ ...POOL, status: "ended" });
     expect(m?.error).toContain("window has closed");
     expect(m?.hint).not.toContain("launchpad_buy");
+  });
+});
+
+describe("spend cap vs a zero-cost action", () => {
+  // Why deployToken / launchpadSell only assert the cap when the amount is positive: the cap helper
+  // rejects 0 outright, so on a zero-fee launchpad deployment a launch with no dev buy (total 0) would
+  // have failed with "amount must be greater than 0" — an error about an amount the caller never passed.
+  it("assertWithinSpendCap rejects 0, which is why the callers guard on > 0", () => {
+    expect(() => assertWithinSpendCap(0, 1)).toThrow(/greater than 0/);
+    expect(() => assertWithinSpendCap(1, 1)).not.toThrow(); // exactly at the cap is allowed
   });
 });
 
