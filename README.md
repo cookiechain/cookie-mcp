@@ -3,6 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/cookie-mcp.svg)](https://www.npmjs.com/package/cookie-mcp)
 [![npm downloads](https://img.shields.io/npm/dm/cookie-mcp.svg)](https://www.npmjs.com/package/cookie-mcp)
 [![MCP Registry](https://img.shields.io/badge/mcp--registry-listed-4b0)](https://registry.modelcontextprotocol.io/v0/servers?search=cookie-mcp)
+[![MCP Servers](https://img.shields.io/badge/mcp--servers-listed-4b0)](https://mcpservers.org/servers/cookiechain/cookie-mcp)
 [![CI](https://github.com/cookiechain/cookie-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/cookiechain/cookie-mcp/actions/workflows/ci.yml)
 [![node](https://img.shields.io/node/v/cookie-mcp.svg)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/cookie-mcp.svg)](./LICENSE)
