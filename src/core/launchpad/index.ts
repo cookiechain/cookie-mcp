@@ -738,6 +738,48 @@ export interface GetLaunchpadTokenResult extends LaunchpadPoolView {
   notes: string[];
 }
 
+/** Identity + curve price for a launchpad mint, for callers that only need to describe the token. */
+export interface LaunchpadTokenIdentity {
+  pool: string;
+  status: PoolPhase;
+  note: string;
+  name: string;
+  symbol: string;
+  decimals: number;
+  metadataUri: string;
+  /** Curve spot price in COOK. The curve IS this token's only market pre-graduation. */
+  priceCook: number;
+}
+
+/**
+ * Describe a mint purely from its launchpad pool, for `get_token_info` to fall back on when the
+ * Cookiescan registry has never heard of it. **Every launch is in exactly that state for a while**, so
+ * this is the normal path for a fresh token, not an edge case.
+ * Returns null when the mint is not a launchpad token (or the launchpad API is unreachable).
+ */
+export async function launchpadTokenIdentity(mint: string): Promise<LaunchpadTokenIdentity | null> {
+  try {
+    const [cfg, { pool }] = await Promise.all([fetchLaunchpadConfig(), fetchPoolByMint(mint)]);
+    const decimals = await tokenDecimals(pool, cfg);
+    const status = poolPhase(pool, nowSeconds());
+    const msg = launchpadRouteMessage({ ...pool, status });
+    return {
+      pool: pool.pubkey,
+      status,
+      // Every phase has a route message except a graduated pool, which trades normally and so needs no
+      // explanation beyond "it came from the launchpad".
+      note: msg?.hint ?? "this token launched on the MomoSwap launchpad and has graduated",
+      name: pool.name,
+      symbol: pool.symbol,
+      decimals,
+      metadataUri: pool.uri,
+      priceCook: spotPriceCook(pool, COOK_DECIMALS, decimals),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function getLaunchpadToken(args: {
   ref: string;
   quoteCook?: string | number;
@@ -1265,6 +1307,32 @@ export function resolveClaimKind(pool: {
   return null; // dead → unraised funds went to the treasury, nothing to claim
 }
 
+/**
+ * What a Fair-mode refund pays out, in raw payment units: the program's own formula,
+ * `mul_div(expiry_liquidity, shares, total_expiry_shares)` (`claim_fair`, lib.rs:579) applied to the
+ * snapshot the pool froze when it expired. Floor division, matching `mul_div`.
+ *
+ * Pure so it can be tested: returns null when there is nothing to compute from — an unexpired pool has
+ * a zeroed snapshot, and the program itself rejects a zero claim (`NothingToClaim`).
+ */
+export function fairRefundRaw(
+  pool: { expiryLiquidity: string; totalExpiryShares: string },
+  sharesRaw: bigint,
+): bigint | null {
+  let liquidity: bigint;
+  let totalShares: bigint;
+  try {
+    liquidity = BigInt(pool.expiryLiquidity);
+    totalShares = BigInt(pool.totalExpiryShares);
+  } catch {
+    return null;
+  }
+  if (sharesRaw <= 0n || totalShares <= 0n || liquidity <= 0n) return null;
+  if (sharesRaw > totalShares) return null; // a share of more than the whole snapshot is nonsense
+  const refund = (liquidity * sharesRaw) / totalShares;
+  return refund > 0n ? refund : null;
+}
+
 export interface ClaimLaunchpadResult {
   signature: string;
   explorerUrl: string;
@@ -1349,6 +1417,16 @@ export async function claimLaunchpad(args: {
     proof = win.proof;
   }
 
+  // A Fair refund has to be measured BEFORE the claim lands: `claim_fair` sets `user.shares = 0`
+  // (lib.rs:585), so reading the position afterwards always yields 0. `claim_graduated_tokens` leaves
+  // shares in place, which is why that branch can read them after.
+  const sharesBefore =
+    kind === "fair"
+      ? await fetchPosition(pool.pubkey, claimant)
+          .then((p) => (p ? BigInt(p.shares) : null))
+          .catch(() => null)
+      : null;
+
   const built = await buildClaimTx({
     kind,
     claimant,
@@ -1358,13 +1436,19 @@ export async function claimLaunchpad(args: {
   });
   const signature = await submitBuilt(built, keypair, "claim");
 
-  // Estimate what landed: shares → SPL tokens 1:1 for graduated claims, COOK for payouts.
-  const position = await fetchPosition(pool.pubkey, claimant).catch(() => null);
+  // Report what landed: shares → SPL tokens 1:1 for graduated claims, COOK for payouts. Best-effort —
+  // the claim already succeeded, so a failed estimate must never turn into a thrown error.
   let claimed: { estimate: string; symbol: string } | null = null;
-  if (kind === "graduated_tokens" && position) {
-    claimed = { estimate: rawToUi(position.shares, decs), symbol: pool.symbol };
+  if (kind === "graduated_tokens") {
+    const position = await fetchPosition(pool.pubkey, claimant).catch(() => null);
+    if (position) claimed = { estimate: rawToUi(position.shares, decs), symbol: pool.symbol };
   } else if (kind === "winner" && amount) {
     claimed = { estimate: rawToUi(amount, COOK_DECIMALS), symbol: COOK_SYMBOL };
+  } else if (kind === "fair" && sharesBefore != null) {
+    const refund = fairRefundRaw(pool, sharesBefore);
+    if (refund != null) {
+      claimed = { estimate: rawToUi(refund, COOK_DECIMALS), symbol: COOK_SYMBOL };
+    }
   }
 
   return {

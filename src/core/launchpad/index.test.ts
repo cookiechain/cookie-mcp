@@ -4,6 +4,7 @@ import {
   buildCreateParams,
   buildMetadata,
   creatorVestOutstanding,
+  fairRefundRaw,
   poolPhase,
   launchpadRouteMessage,
   launchpadSimError,
@@ -113,6 +114,43 @@ describe("mapPoolView", () => {
     const stillOpen = { ...POOL, status: "live" as const, endTs: 1_000 };
     expect(mapPoolView(stillOpen, 6, 9, 999).status).toBe("live");
     expect(mapPoolView(stillOpen, 6, 9, 1_001).status).toBe("ended");
+  });
+});
+
+describe("fairRefundRaw", () => {
+  // Golden, from the 2026-07-29 live validation: pool EKkxjFhW… paid this wallet exactly 14898142 raw
+  // COOK for 90585448 shares. Verified against the pool's payment-vault delta on the claim tx
+  // (4Tf7Rwp4…), so this pins MCP's arithmetic to a real on-chain payout.
+  const SNAPSHOT = { expiryLiquidity: "14898142", totalExpiryShares: "90585448" };
+
+  it("reproduces a real on-chain fair refund", () => {
+    expect(fairRefundRaw(SNAPSHOT, 90_585_448n)).toBe(14_898_142n);
+  });
+
+  it("is proportional for a partial holder and floors like the program's mul_div", () => {
+    // The live case was the only holder (shares == totalExpiryShares), which does not exercise the
+    // ratio — so cover it here. A third of the shares earns a third of the pot, rounded DOWN.
+    expect(fairRefundRaw({ expiryLiquidity: "1000", totalExpiryShares: "3000" }, 1_000n)).toBe(
+      333n,
+    );
+    expect(fairRefundRaw({ expiryLiquidity: "100", totalExpiryShares: "1000" }, 500n)).toBe(50n);
+  });
+
+  it("returns null rather than a bogus 0 when there is nothing to compute from", () => {
+    // An unexpired pool has a zeroed snapshot; the program rejects a zero claim as NothingToClaim.
+    expect(fairRefundRaw({ expiryLiquidity: "0", totalExpiryShares: "0" }, 100n)).toBeNull();
+    expect(fairRefundRaw(SNAPSHOT, 0n)).toBeNull();
+    // A dust holder whose proportional share floors to zero gets null, not "0.000000000".
+    expect(fairRefundRaw({ expiryLiquidity: "10", totalExpiryShares: "1000" }, 1n)).toBeNull();
+  });
+
+  it("refuses a share count larger than the whole snapshot instead of over-reporting", () => {
+    expect(fairRefundRaw(SNAPSHOT, 90_585_449n)).toBeNull();
+  });
+
+  it("survives malformed numbers from the API", () => {
+    expect(fairRefundRaw({ expiryLiquidity: "", totalExpiryShares: "1" }, 1n)).toBeNull();
+    expect(fairRefundRaw({ expiryLiquidity: "abc", totalExpiryShares: "1" }, 1n)).toBeNull();
   });
 });
 
