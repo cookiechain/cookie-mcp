@@ -885,6 +885,28 @@ export interface DeployTokenArgs {
   minBuyCook?: string | number;
   maxBuyPerWalletCook?: string | number;
   devBuyCook?: string | number;
+  /** Deliberately launch with no logo. Required to bypass `assertLogoDecision`. */
+  noLogo?: boolean;
+}
+
+/**
+ * Refuse a launch that has no logo unless the caller says it means it (pure).
+ *
+ * A prose "ALWAYS give the token a logo" in the tool description does not work — it competes with a
+ * dozen optional params, and the only consequence used to arrive as a `warning` on the RESULT, i.e.
+ * after mint + freeze authority are renounced and the metadata is immutable. A logo cannot be added
+ * later, so the check has to happen while the launch can still be stopped. Opting out is one flag.
+ */
+export function assertLogoDecision(
+  args: Pick<DeployTokenArgs, "imageBase64" | "imageUrl" | "noLogo">,
+): void {
+  if (args.imageBase64?.trim() || args.imageUrl?.trim() || args.noLogo) return;
+  throw new CookieMcpError(
+    "this launch has no logo, and a launch is irreversible",
+    "pass imageBase64 (preferred — attach an image you generated, with imageMimeType) or imageUrl; " +
+      "the launchpad pins it to IPFS. The metadata is immutable, so a logo can never be added later " +
+      "and most launchpad UIs will show a blank image. Set noLogo: true to launch anyway.",
+  );
 }
 
 /** Assemble the off-chain metadata JSON the launchpad pins to IPFS (pure). */
@@ -994,6 +1016,8 @@ export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenRes
       'e.g. "image/png" or "image/jpeg"',
     );
   }
+  // Before any network call or spend: a logo is unfixable after the fact.
+  assertLogoDecision(args);
 
   const cfg = await fetchLaunchpadConfig();
   if (cfg.paused) {
@@ -1081,9 +1105,15 @@ export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenRes
       launchpad: pool ? launchpadPoolUrl(pool.pubkey) : null,
       token: launchpadTokenUrl(mint),
     },
+    // Only reachable via noLogo: true now, so state it as the settled consequence rather than a
+    // reproach — assertLogoDecision already gave the caller the chance to change its mind.
     ...(imageUrl
       ? {}
-      : { warning: "launched without a logo — most launchpad UIs will show a blank image" }),
+      : {
+          warning:
+            "launched with noLogo — most launchpad UIs will show a blank image, and the metadata is " +
+            "immutable so this cannot be changed",
+        }),
     notes,
   };
 }

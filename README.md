@@ -180,12 +180,12 @@ APY / fees), launchpad reads `get_launchpad_pools` / `get_launchpad_token` /
 `stake` / `unstake` (COOK ⇄ bCOOK liquid staking).
 
 **Launchpad** (need `COOKIE_PRIVATE_KEY`, [MomoSwap](https://momoswap.fun)): `deploy_token` launches a
-token on a COOK bonding curve (pass `imageBase64` for the logo — it is pinned to IPFS; costs the
-launchpad creation fee — **2,000 COOK** on the deployment live today, read from the launchpad config at
-call time — so raise `COOKIE_MAX_TRADE_COOK` accordingly), `launchpad_buy` /
-`launchpad_sell` trade that curve, `claim_launchpad` settles a position (the real SPL token after
-graduation, a Fair-mode refund, or a Jackpot/Survivor payout), and `claim_creator_fees` sweeps the
-creator's share of trading fees from a launch you created.
+token on a COOK bonding curve (a logo is **required** — pass `imageBase64` and it is pinned to IPFS, or
+set `noLogo: true` to launch without one; the metadata is immutable, so a logo cannot be added later.
+Costs the launchpad creation fee, read from its config at call time; raise `COOKIE_MAX_TRADE_COOK` if the fee
+or your `devBuyCook` exceeds it), `launchpad_buy` / `launchpad_sell` trade that curve, `claim_launchpad`
+settles a position (the real SPL token after graduation, a Fair-mode refund, or a Jackpot/Survivor payout),
+and `claim_creator_fees` sweeps the creator's share of trading fees from a launch you created.
 
 > ⚠️ **Before graduation, holdings are program-tracked curve shares, not SPL tokens** — they do not
 > appear in `get_balance` and `trade` cannot route them. Exit with `launchpad_sell`, or claim the real

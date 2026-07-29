@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  assertLogoDecision,
   buildCreateParams,
   buildMetadata,
   creatorVestOutstanding,
@@ -114,6 +115,40 @@ describe("mapPoolView", () => {
     const stillOpen = { ...POOL, status: "live" as const, endTs: 1_000 };
     expect(mapPoolView(stillOpen, 6, 9, 999).status).toBe("live");
     expect(mapPoolView(stillOpen, 6, 9, 1_001).status).toBe("ended");
+  });
+});
+
+describe("assertLogoDecision", () => {
+  // Why this is a hard pre-flight and not a warning: the old design only reported "launched without a
+  // logo" on the RESULT, i.e. after mint + freeze authority were renounced and the metadata was frozen.
+  // Both live validation launches on 2026-07-29 shipped logo-less despite an "ALWAYS give the token a
+  // logo" line in the tool description, which is what proved prose insufficient.
+  it("accepts either image source", () => {
+    expect(() => assertLogoDecision({ imageBase64: "iVBORw0KGgo=" })).not.toThrow();
+    expect(() => assertLogoDecision({ imageUrl: "https://example.com/logo.png" })).not.toThrow();
+  });
+
+  it("refuses a logo-less launch and names the escape hatch", () => {
+    try {
+      assertLogoDecision({});
+      throw new Error("expected a refusal");
+    } catch (e) {
+      expect(e).toBeInstanceOf(CookieMcpError);
+      expect((e as CookieMcpError).message).toContain("no logo");
+      expect((e as CookieMcpError).hint).toContain("noLogo: true");
+      expect((e as CookieMcpError).hint).toContain("immutable");
+    }
+  });
+
+  it("treats blank/whitespace image fields as absent, not as a logo", () => {
+    expect(() => assertLogoDecision({ imageUrl: "   " })).toThrow(CookieMcpError);
+    expect(() => assertLogoDecision({ imageBase64: "" })).toThrow(CookieMcpError);
+  });
+
+  it("lets an explicit opt-out through", () => {
+    expect(() => assertLogoDecision({ noLogo: true })).not.toThrow();
+    // ...but a falsy flag is not an opt-out.
+    expect(() => assertLogoDecision({ noLogo: false })).toThrow(CookieMcpError);
   });
 });
 

@@ -418,12 +418,14 @@ registerTool(
     description:
       "Launch a new token on the MomoSwap launchpad (bonding curve priced in COOK, graduates to the " +
       "open market at the raise target). Mint + freeze authority are renounced and the metadata is " +
-      "immutable, so a launch is final. COSTS the launchpad's current creation fee (read live from the " +
-      "launchpad config — 2,000 COOK on the deployment the API serves today, 0 on newer ones) plus " +
-      "account rent, so COOKIE_MAX_TRADE_COOK must be raised above that fee or the " +
-      "launch is refused by the spend cap. ALWAYS give the token a logo: pass " +
-      "`imageBase64` (preferred — you can attach an image you generated) or `imageUrl`; the launchpad " +
-      "pins it to IPFS. The mint address is chosen by the launchpad (the program requires one ending " +
+      "immutable, so a launch is FINAL — nothing about the token can be changed afterwards. Costs the " +
+      "launchpad's creation fee, read live from its config (0 on the current deployment, so a launch " +
+      "usually costs only account rent) plus any devBuyCook; when the fee or dev buy is non-zero, " +
+      "COOKIE_MAX_TRADE_COOK must allow the total or the launch is refused by the spend cap. " +
+      "A LOGO IS REQUIRED: pass `imageBase64` (preferred — attach an image you generated, with " +
+      "`imageMimeType`) or `imageUrl` and the launchpad pins it to IPFS. Launching without one is " +
+      "refused unless you set `noLogo: true`, because the metadata is immutable and a logo can never " +
+      "be added later. The mint address is chosen by the launchpad (the program requires one ending " +
       "in `momo`). Set `devBuyCook` to make your own buy the atomic first trade. Requires " +
       "COOKIE_PRIVATE_KEY.",
     inputSchema: {
@@ -475,6 +477,13 @@ registerTool(
         .union([z.number().positive(), z.string()])
         .optional()
         .describe("optional COOK amount to buy atomically in the launch transaction"),
+      noLogo: z
+        .boolean()
+        .optional()
+        .describe(
+          "launch deliberately without a logo. Only set this if the user asked for it — the token " +
+            "metadata is immutable, so no logo can ever be added and most UIs show a blank image",
+        ),
     },
   },
   tool(
@@ -494,6 +503,7 @@ registerTool(
       minBuyCook?: string | number;
       maxBuyPerWalletCook?: string | number;
       devBuyCook?: string | number;
+      noLogo?: boolean;
     }) => deployToken(a),
   ),
 );
