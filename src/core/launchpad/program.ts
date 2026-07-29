@@ -56,9 +56,19 @@ export function launchpadProgramIdFromTx(tx: Transaction): string | null {
 }
 
 /**
- * Agent-actionable program errors, keyed by the code in the **pre-slippage** build. The launchpad's
- * anchor codes are enum ordinals, so inserting a variant renumbers everything after it — see
- * `launchpadErrorMessage`, which applies that shift instead of duplicating the table.
+ * Agent-actionable program errors. **One table for every deployment** — the launchpad's error codes are
+ * stable across builds because the audit fix appended `SlippageExceeded` to the END of the enum rather
+ * than inserting it (`lib.rs`: *"Appended at the end to keep existing error codes stable (audit: only
+ * ever append variants)"*), so nothing was ever renumbered.
+ *
+ * ⚠️ **The launchpad's committed IDL disagrees with its own Rust source and is wrong.** `idl/
+ * cookie_launchpad.json` lists `SlippageExceeded` at **6019** and shifts all 27 codes after it
+ * (`InsufficientPoolTokens` → 6020, …, `InvalidSessionKey` → 6046), while the source has it at 6046 with
+ * 6000–6045 untouched. Anchor codes are the compiled enum discriminants, so **the source wins** and the
+ * IDL is stale metadata. MCP previously trusted the IDL and applied a `+1` shift for post-audit builds,
+ * which mistranslated every code ≥ 6019 (e.g. reporting "no sale tokens left" as "slippage exceeded").
+ * *Lesson: verify an anchor error map against the `#[error_code]` enum in source, never against a
+ * checked-in IDL — the IDL can be regenerated wrong and nothing fails loudly when it is.*
  */
 const LAUNCHPAD_ERRORS: Record<number, string> = {
   6000: "the launchpad is paused",
@@ -76,23 +86,22 @@ const LAUNCHPAD_ERRORS: Record<number, string> = {
   6026: "this has already been claimed",
   6035: "self-referral is not allowed",
   6040: "the anti-snipe window caps how much one wallet can buy right after launch",
+  // Appended by the min-out audit fix, so it only exists on post-audit builds. Harmless to keep in the
+  // shared table: a pre-audit build can never emit 6046.
+  6046: "the trade would return less than the minimum you asked for (slippage) — the curve moved",
 };
 
 /**
- * `SlippageExceeded` was inserted here by the audit fix that added `buy_v2`/`sell_v2`, so in every
- * post-audit build the codes from this point on are one higher than the table above.
+ * Translate an anchor error code, or undefined when the code isn't one we explain (the caller then
+ * shows the raw log tail, which beats a confident wrong answer).
+ *
+ * `programId` is accepted and ignored: it was used to pick between two numberings, but there is only
+ * one — see `LAUNCHPAD_ERRORS`. Kept in the signature because callers derive it from the transaction
+ * anyway and a future build that genuinely renumbers would need it back.
  */
-const SLIPPAGE_EXCEEDED_CODE = 6019;
-const SLIPPAGE_EXCEEDED_MESSAGE =
-  "the trade would return less than the minimum you asked for (slippage) — the curve moved";
-
-/**
- * Translate an anchor error code for the deployment that produced it, or undefined when the code
- * isn't one we explain (the caller then shows the raw log tail, which beats a confident wrong answer).
- */
-export function launchpadErrorMessage(code: number, programId?: string | null): string | undefined {
-  const id = programId ?? PROGRAM_IDS.momoswapLaunchpad;
-  if (id === LAUNCHPAD_PROGRAM_PRE_SLIPPAGE) return LAUNCHPAD_ERRORS[code];
-  if (code === SLIPPAGE_EXCEEDED_CODE) return SLIPPAGE_EXCEEDED_MESSAGE;
-  return LAUNCHPAD_ERRORS[code > SLIPPAGE_EXCEEDED_CODE ? code - 1 : code];
+export function launchpadErrorMessage(
+  code: number,
+  _programId?: string | null,
+): string | undefined {
+  return LAUNCHPAD_ERRORS[code];
 }

@@ -426,23 +426,16 @@ describe("sendFailure", () => {
 
 describe("launchpadSimError", () => {
   it("translates known launchpad program errors", () => {
-    // No program id passed → the configured default, which is the current (post-audit) deployment.
-    // Below `SlippageExceeded` the numbering is shared, so 6012 reads the same on both builds.
     const e = launchpadSimError("buy", { InstructionError: [1, { Custom: 6012 }] }, null);
     expect(e.message).toContain("trading has not opened yet");
-    // Above it the codes are shifted by the inserted variant: "sell more than you hold" is 6022 on the
-    // current build (it was 6021 pre-audit — see launchpadErrorMessage).
-    expect(
-      launchpadSimError("sell", { InstructionError: [1, { Custom: 6022 }] }, null).message,
-    ).toContain("more shares than you hold");
-    expect(
-      launchpadSimError(
-        "sell",
-        { InstructionError: [1, { Custom: 6021 }] },
-        null,
-        LAUNCHPAD_PROGRAM_PRE_SLIPPAGE,
-      ).message,
-    ).toContain("more shares than you hold");
+    // 6021 is InsufficientShares on EVERY build — the codes never renumbered (see program.test.ts).
+    // An earlier version of this test asserted 6022 here, matching a phantom +1 shift MCP had taken
+    // from the launchpad's (wrong) IDL; the program id must make no difference.
+    for (const id of [null, LAUNCHPAD_PROGRAM_PRE_SLIPPAGE]) {
+      expect(
+        launchpadSimError("sell", { InstructionError: [1, { Custom: 6021 }] }, null, id).message,
+      ).toContain("more shares than you hold");
+    }
   });
 
   it("flags a stalled chain and insufficient funds distinctly", () => {

@@ -19,56 +19,49 @@ function ix(programId: string): TransactionInstruction {
 }
 
 describe("launchpadErrorMessage", () => {
-  // The audit fix that added buy_v2/sell_v2 INSERTED SlippageExceeded at 6019, so every code from
-  // there up means something different depending on which deployment threw it. Getting this wrong
-  // hands an agent a confident, wrong explanation — worse than no translation at all.
-  it("reads the pre-slippage build's codes as they were", () => {
-    expect(launchpadErrorMessage(6019, LAUNCHPAD_PROGRAM_PRE_SLIPPAGE)).toContain(
-      "no sale tokens left",
-    );
-    expect(launchpadErrorMessage(6020, LAUNCHPAD_PROGRAM_PRE_SLIPPAGE)).toContain(
-      "no bonding-curve",
-    );
-    expect(launchpadErrorMessage(6025, LAUNCHPAD_PROGRAM_PRE_SLIPPAGE)).toContain(
-      "nothing to claim",
-    );
-    expect(launchpadErrorMessage(6035, LAUNCHPAD_PROGRAM_PRE_SLIPPAGE)).toContain("self-referral");
-    expect(launchpadErrorMessage(6040, LAUNCHPAD_PROGRAM_PRE_SLIPPAGE)).toContain("anti-snipe");
-  });
+  // The codes are IDENTICAL on every deployment. The min-out audit fix APPENDED `SlippageExceeded` to
+  // the end of the enum (= 6046) rather than inserting it — lib.rs says so outright: "Appended at the
+  // end to keep existing error codes stable (audit: only ever append variants)". Verified against the
+  // `#[error_code]` enum in the launchpad source at 8f9c240, 1270e30 and a87a052: 6000–6045 never move.
+  //
+  // ⚠️ The launchpad's checked-in IDL contradicts its own source, claiming SlippageExceeded == 6019 and
+  // shifting the 27 codes after it. MCP used to believe the IDL and shift by +1, which mistranslated
+  // every code >= 6019 — e.g. calling "no sale tokens left" a slippage failure. Anchor codes are the
+  // compiled enum discriminants, so source wins. These tests pin the SOURCE numbering.
+  const DEPLOYMENTS = [
+    LAUNCHPAD_PROGRAM_PRE_SLIPPAGE,
+    LAUNCHPAD_PROGRAM_CURRENT,
+    "EZWe5C5gV1heTEsaoqh2gVVZQAhrgACSpufPyT9SKruF", // the fee-free clone
+    null, // no id available → must not change the answer
+  ];
 
-  it("shifts every code >= 6019 by one on a post-audit build, and explains 6019 as slippage", () => {
-    expect(launchpadErrorMessage(6019, LAUNCHPAD_PROGRAM_CURRENT)).toContain("slippage");
-    expect(launchpadErrorMessage(6020, LAUNCHPAD_PROGRAM_CURRENT)).toContain("no sale tokens left");
-    expect(launchpadErrorMessage(6021, LAUNCHPAD_PROGRAM_CURRENT)).toContain("no bonding-curve");
-    expect(launchpadErrorMessage(6022, LAUNCHPAD_PROGRAM_CURRENT)).toContain("sell more shares");
-    expect(launchpadErrorMessage(6026, LAUNCHPAD_PROGRAM_CURRENT)).toContain("nothing to claim");
-    expect(launchpadErrorMessage(6027, LAUNCHPAD_PROGRAM_CURRENT)).toContain(
-      "already been claimed",
-    );
-    expect(launchpadErrorMessage(6036, LAUNCHPAD_PROGRAM_CURRENT)).toContain("self-referral");
-    expect(launchpadErrorMessage(6041, LAUNCHPAD_PROGRAM_CURRENT)).toContain("anti-snipe");
-  });
-
-  it("leaves the codes below the insertion point alone in both builds", () => {
-    for (const id of [LAUNCHPAD_PROGRAM_PRE_SLIPPAGE, LAUNCHPAD_PROGRAM_CURRENT]) {
+  it("reads the same code the same way on every deployment", () => {
+    for (const id of DEPLOYMENTS) {
       expect(launchpadErrorMessage(6000, id)).toContain("paused");
       expect(launchpadErrorMessage(6011, id)).toContain("not in a tradeable state");
       expect(launchpadErrorMessage(6013, id)).toContain("expired");
       expect(launchpadErrorMessage(6017, id)).toContain("raise cap");
+      // The range the phantom shift used to corrupt:
+      expect(launchpadErrorMessage(6019, id)).toContain("no sale tokens left");
+      expect(launchpadErrorMessage(6020, id)).toContain("no bonding-curve");
+      expect(launchpadErrorMessage(6021, id)).toContain("sell more shares");
+      expect(launchpadErrorMessage(6025, id)).toContain("nothing to claim");
+      expect(launchpadErrorMessage(6035, id)).toContain("self-referral");
+      expect(launchpadErrorMessage(6040, id)).toContain("anti-snipe");
     }
   });
 
-  it("treats an unknown deployment as a current build (the program only moves forward)", () => {
-    expect(launchpadErrorMessage(6019, "EZWe5C5gV1heTEsaoqh2gVVZQAhrgACSpufPyT9SKruF")).toContain(
-      "slippage",
-    );
+  it("explains slippage at 6046, where the audit fix actually appended it", () => {
+    expect(launchpadErrorMessage(6046)).toContain("slippage");
+    // 6019 must NOT be slippage — that was the IDL's error, and the bug MCP inherited.
+    expect(launchpadErrorMessage(6019)).not.toContain("slippage");
   });
 
   it("returns undefined for codes it does not explain, rather than a neighbour's message", () => {
-    expect(launchpadErrorMessage(6001, LAUNCHPAD_PROGRAM_CURRENT)).toBeUndefined();
-    expect(launchpadErrorMessage(9999, LAUNCHPAD_PROGRAM_CURRENT)).toBeUndefined();
-    // 6018 (ZeroOutput) is unmapped in both builds — the shift must not pull 6019's text down to it.
-    expect(launchpadErrorMessage(6018, LAUNCHPAD_PROGRAM_CURRENT)).toBeUndefined();
+    expect(launchpadErrorMessage(6001)).toBeUndefined();
+    expect(launchpadErrorMessage(9999)).toBeUndefined();
+    // 6018 is ZeroOutput, deliberately unmapped — nothing may pull a neighbour's text into it.
+    expect(launchpadErrorMessage(6018)).toBeUndefined();
   });
 });
 
