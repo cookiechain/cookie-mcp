@@ -7,7 +7,7 @@
 // NOT show up in `get_balance` and cannot be swapped with `trade`. Selling back to the curve
 // (launchpad_sell) is the only exit until the pool graduates; after graduation the holder claims the
 // real SPL token (claim_launchpad) and trades it normally.
-import { PublicKey, Transaction, type Keypair } from "@solana/web3.js";
+import { PublicKey, Transaction, type Connection, type Keypair } from "@solana/web3.js";
 import { getMint } from "@solana/spl-token";
 
 import {
@@ -103,6 +103,53 @@ export function launchpadSimError(
 }
 
 /**
+ * The API's blockhash has to be alive on the node WE send to. It usually is — but the launchpad
+ * builds against its own RPC, so a lagging node upstream yields a blockhash that expired before we
+ * ever saw it. Fail loudly here rather than at preflight, because at this point nothing is signed and
+ * nothing is sent. A read error is not treated as a failure: never block a good send on a flaky probe.
+ */
+async function assertBlockhashUsable(
+  conn: Connection,
+  built: BuiltTx,
+  what: string,
+): Promise<void> {
+  let valid: boolean;
+  try {
+    valid = (await conn.isBlockhashValid(built.blockhash, { commitment: "confirmed" })).value;
+  } catch {
+    return;
+  }
+  if (valid) return;
+  throw new CookieMcpError(
+    `the launchpad built this ${what} transaction against a stale blockhash, so it cannot be sent`,
+    "the launchpad API's RPC node is lagging behind the chain — nothing was sent and no funds moved; " +
+      "retry in a few minutes, and if it persists the launchpad API needs to be pointed at a synced node",
+  );
+}
+
+/** Translate a send-time failure so a raw web3 error never reaches the agent untranslated. */
+export function sendFailure(what: string, e: unknown): CookieMcpError {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (/Blockhash not found|block height exceeded|Node is behind/i.test(msg)) {
+    return new CookieMcpError(
+      `the ${what} transaction expired before it could be sent`,
+      "the blockhash the launchpad built with is no longer valid on this RPC — nothing was sent; " +
+        "retry, and if it persists the launchpad API's node is out of sync with the chain",
+    );
+  }
+  if (/insufficient lamports|insufficient funds/i.test(msg)) {
+    return new CookieMcpError(
+      `insufficient funds to send the ${what}`,
+      "top up native COOK for rent and fees — nothing was sent",
+    );
+  }
+  return new CookieMcpError(
+    `the ${what} transaction could not be sent: ${msg}`,
+    "nothing was sent",
+  );
+}
+
+/**
  * Simulate an API-built, partial-signed legacy transaction, add our signature and send it.
  * The API sets the fee payer and blockhash, so we confirm against the window it returned.
  */
@@ -136,8 +183,23 @@ async function submitBuilt(built: BuiltTx, keypair: Keypair, what: string): Prom
     );
   }
 
+  // The simulation above proves the PROGRAM accepts the transaction, but it says nothing about the
+  // blockhash: web3.js's legacy `simulateTransaction(Transaction)` overwrites `recentBlockhash` with a
+  // fresh one before simulating. The blockhash we actually send is the API's, and the API builds
+  // against its own RPC node — when that node lags, the blockhash is already expired on arrival and
+  // the send dies at preflight with a raw, untranslated web3 error. Check it while we can still say
+  // that nothing was sent. Most of the API-built transactions are co-signed by server-side keypairs
+  // (the leased mint and the vaults on a launch), so refreshing the blockhash locally is not an option
+  // — it would invalidate their signatures.
+  await assertBlockhashUsable(conn, built, what);
+
   tx.partialSign(keypair);
-  const signature = await conn.sendRawTransaction(tx.serialize());
+  let signature: string;
+  try {
+    signature = await conn.sendRawTransaction(tx.serialize());
+  } catch (e) {
+    throw sendFailure(what, e);
+  }
   // A confirm timeout does NOT mean the transaction failed — it may still land, and a blind retry here
   // would buy or launch twice. confirmSent turns that into an explicit warning with the signature.
   return confirmSent(

@@ -12,11 +12,14 @@ import {
   userPositionPda,
   USER_POSITION_DISCRIMINATOR,
 } from "./positions";
-import { LAUNCHPAD_PROGRAM_CURRENT } from "./program";
+import { LAUNCHPAD_PROGRAM_CURRENT, LAUNCHPAD_PROGRAM_PRE_SLIPPAGE } from "./program";
 
 // Golden: the real on-chain UserPosition `7c4j8hud…` — wallet 9rj5GEEy… on pool 4pZSDRbe… (the MOMO
 // test launch). Its decoded values match what GET /pools/:pool/position/:owner reports for the same
 // wallet, so this fixture pins BOTH the PDA seeds and the field offsets against silent drift.
+// The pool predates the redeploy, so its PDAs only reproduce under the OLD program — pass it
+// explicitly rather than leaning on the configured default, which now points at `momoL7wu…`.
+const GOLDEN_PROGRAM = new PublicKey(LAUNCHPAD_PROGRAM_PRE_SLIPPAGE);
 const GOLDEN_POOL = "4pZSDRbeimD86umZM9RGLT3mzcSQxbnohicMQcccn8gy";
 const GOLDEN_OWNER = "9rj5GEEypdCbJ1W9is4LHeQxg86h9vxSny6pmsxmakni";
 const GOLDEN_PDA = "7c4j8hudvNyuhTef4AoCmK4LECnqBfe1SgnBgWsEcobB";
@@ -28,15 +31,23 @@ const GOLDEN_ACCOUNT = Buffer.from(
 
 describe("userPositionPda", () => {
   it('derives the on-chain UserPosition address from ["user", pool, owner]', () => {
-    expect(userPositionPda(GOLDEN_POOL, GOLDEN_OWNER).toBase58()).toBe(GOLDEN_PDA);
+    expect(userPositionPda(GOLDEN_POOL, GOLDEN_OWNER, GOLDEN_PROGRAM).toBase58()).toBe(GOLDEN_PDA);
   });
 
   it("accepts PublicKey inputs and is owner-specific", () => {
     expect(
-      userPositionPda(new PublicKey(GOLDEN_POOL), new PublicKey(GOLDEN_OWNER)).toBase58(),
+      userPositionPda(
+        new PublicKey(GOLDEN_POOL),
+        new PublicKey(GOLDEN_OWNER),
+        GOLDEN_PROGRAM,
+      ).toBase58(),
     ).toBe(GOLDEN_PDA);
     expect(
-      userPositionPda(GOLDEN_POOL, "FNNVmNtTFhQtcU6Rp554aS5aDaEhhQqvjX9HLFNKoYEZ").toBase58(),
+      userPositionPda(
+        GOLDEN_POOL,
+        "FNNVmNtTFhQtcU6Rp554aS5aDaEhhQqvjX9HLFNKoYEZ",
+        GOLDEN_PROGRAM,
+      ).toBase58(),
     ).not.toBe(GOLDEN_PDA);
   });
 });
@@ -52,19 +63,19 @@ describe("program-scoped PDA derivation", () => {
       new PublicKey(LAUNCHPAD_PROGRAM_CURRENT),
     );
     expect(underCurrent.toBase58()).not.toBe(GOLDEN_PDA);
-    expect(userPositionPda(GOLDEN_POOL, GOLDEN_OWNER).toBase58()).toBe(GOLDEN_PDA);
+    expect(userPositionPda(GOLDEN_POOL, GOLDEN_OWNER, GOLDEN_PROGRAM).toBase58()).toBe(GOLDEN_PDA);
   });
 
   it("scopes the creator-fee vault the same way", () => {
     expect(
       creatorFeeVaultPda(GOLDEN_POOL, new PublicKey(LAUNCHPAD_PROGRAM_CURRENT)).toBase58(),
-    ).not.toBe(creatorFeeVaultPda(GOLDEN_POOL).toBase58());
+    ).not.toBe(creatorFeeVaultPda(GOLDEN_POOL, GOLDEN_PROGRAM).toBase58());
   });
 
   it("uses each pool's own program, so a mixed-deployment portfolio still resolves", async () => {
     const OTHER_POOL = "4YgzpSWSMR5gAHzDnzL6cyJH1rVZuz2SNJ9AZEPp33em";
-    const current = new PublicKey(LAUNCHPAD_PROGRAM_CURRENT);
-    const programs = new Map([[OTHER_POOL, current]]); // GOLDEN_POOL deliberately absent -> default
+    const old = GOLDEN_PROGRAM;
+    const programs = new Map([[OTHER_POOL, old]]); // GOLDEN_POOL deliberately absent -> default
     const asked: string[] = [];
     const conn = {
       getMultipleAccountsInfo: async (keys: PublicKey[]) => {
@@ -74,9 +85,12 @@ describe("program-scoped PDA derivation", () => {
     } as never;
     await fetchPositionsForPools(conn, GOLDEN_OWNER, [GOLDEN_POOL, OTHER_POOL], programs);
     expect(asked).toEqual([
-      GOLDEN_PDA, // configured id, because this pool was not in the map
-      userPositionPda(OTHER_POOL, GOLDEN_OWNER, current).toBase58(),
+      // configured id (now `momoL7wu…`), because this pool was not in the map — NOT the golden PDA,
+      // which only exists under the old deployment.
+      userPositionPda(GOLDEN_POOL, GOLDEN_OWNER).toBase58(),
+      userPositionPda(OTHER_POOL, GOLDEN_OWNER, old).toBase58(),
     ]);
+    expect(asked[0]).not.toBe(GOLDEN_PDA);
   });
 });
 
@@ -141,7 +155,7 @@ describe("fetchPoolPrograms", () => {
 describe("creatorFeeVaultPda", () => {
   it('derives from ["creator_fee_vault", pool] — the vault the API reports fees from', () => {
     // Matches GET /v1/launchpad/creator-fees/4pZSDRbe… → vault 2aNvdPhyxYJSDXyZeBHrjvK51EKhaY7J5mK2EJxapE8Q
-    expect(creatorFeeVaultPda(GOLDEN_POOL).toBase58()).toBe(
+    expect(creatorFeeVaultPda(GOLDEN_POOL, GOLDEN_PROGRAM).toBase58()).toBe(
       "2aNvdPhyxYJSDXyZeBHrjvK51EKhaY7J5mK2EJxapE8Q",
     );
   });

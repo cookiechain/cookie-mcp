@@ -10,8 +10,10 @@ import {
   mapPoolView,
   positionAction,
   resolveClaimKind,
+  sendFailure,
 } from "./index";
 import { CookieMcpError } from "../errors";
+import { LAUNCHPAD_PROGRAM_PRE_SLIPPAGE } from "./program";
 import { assertWithinSpendCap } from "../wallet";
 import type { LaunchpadPool } from "./api";
 
@@ -358,12 +360,50 @@ describe("spend cap vs a zero-cost action", () => {
   });
 });
 
+describe("sendFailure", () => {
+  // Every one of these reached the agent as a raw web3 SendTransactionError before. The stale-blockhash
+  // case is the one that actually happens: the launchpad API builds against its own RPC node, and on
+  // 2026-07-29 that node was ~4,000 slots behind, so the blockhash was expired on arrival.
+  it("translates an expired blockhash without implying funds moved", () => {
+    for (const raw of [
+      "Transaction simulation failed: Blockhash not found",
+      "Node is behind by 3991 slots",
+      "block height exceeded",
+    ]) {
+      const e = sendFailure("launch", new Error(raw));
+      expect(e.message).toContain("expired before it could be sent");
+      expect(e.hint).toContain("nothing was sent");
+    }
+  });
+
+  it("translates insufficient funds and falls back to the raw message otherwise", () => {
+    expect(
+      sendFailure("buy", new Error("Transfer: insufficient lamports 10, need 20")).message,
+    ).toContain("insufficient funds");
+    const other = sendFailure("sell", new Error("socket hang up"));
+    expect(other.message).toContain("socket hang up");
+    expect(other.hint).toContain("nothing was sent");
+  });
+});
+
 describe("launchpadSimError", () => {
   it("translates known launchpad program errors", () => {
+    // No program id passed → the configured default, which is the current (post-audit) deployment.
+    // Below `SlippageExceeded` the numbering is shared, so 6012 reads the same on both builds.
     const e = launchpadSimError("buy", { InstructionError: [1, { Custom: 6012 }] }, null);
     expect(e.message).toContain("trading has not opened yet");
+    // Above it the codes are shifted by the inserted variant: "sell more than you hold" is 6022 on the
+    // current build (it was 6021 pre-audit — see launchpadErrorMessage).
     expect(
-      launchpadSimError("sell", { InstructionError: [1, { Custom: 6021 }] }, null).message,
+      launchpadSimError("sell", { InstructionError: [1, { Custom: 6022 }] }, null).message,
+    ).toContain("more shares than you hold");
+    expect(
+      launchpadSimError(
+        "sell",
+        { InstructionError: [1, { Custom: 6021 }] },
+        null,
+        LAUNCHPAD_PROGRAM_PRE_SLIPPAGE,
+      ).message,
     ).toContain("more shares than you hold");
   });
 
