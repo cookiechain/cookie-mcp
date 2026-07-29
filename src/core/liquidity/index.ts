@@ -1,5 +1,6 @@
-// Liquidity dispatch across venues. add/remove/claim auto-detect the venue from the pool's on-chain
-// owner; create_pool routes on the explicit `dex`. lock is Cookiebox DAMM v2 only.
+// Liquidity dispatch across venues. add/remove/lock/claim auto-detect the venue from the pool's
+// on-chain owner; create_pool routes on the explicit `dex`. lock covers both Cookiebox venues
+// (DAMM v2 and CLMM); CookieSwap SAMM has no permanent-lock instruction.
 import { PublicKey } from "@solana/web3.js";
 
 import { CookieMcpError } from "../errors";
@@ -26,6 +27,7 @@ import {
   CLMM_PROGRAM_ID,
   addClmmLiquidity,
   removeClmmLiquidity,
+  lockClmmLiquidity,
   claimClmmFees,
   createClmmPool,
   type ClmmLpResult,
@@ -97,12 +99,17 @@ export async function removeLiquidity(args: {
   return removeDammLiquidity(args);
 }
 
-export async function lockLiquidity(args: { poolPk: string }): Promise<LpResult> {
-  if ((await detectVenue(args.poolPk)) !== "cookiebox-damm") {
+export async function lockLiquidity(args: { poolPk: string }): Promise<AnyLpResult> {
+  const venue = await detectVenue(args.poolPk);
+  if (venue === "cookieswap-samm") {
     throw new CookieMcpError(
-      "lock_liquidity is only supported on Cookiebox DAMM v2",
-      "CookieSwap SAMM and Cookiebox CLMM have no permanent-lock",
+      "lock_liquidity is not supported on CookieSwap SAMM",
+      "permanent lock is available on Cookiebox DAMM v2 and Cookiebox CLMM pools",
     );
+  }
+  if (venue === "cookiebox-clmm") {
+    const { keypair } = requireWallet();
+    return lockClmmLiquidity(getConnection(), keypair, args);
   }
   return lockDammLiquidity(args);
 }

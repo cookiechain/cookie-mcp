@@ -714,12 +714,15 @@ registerTool(
 registerTool(
   "lock_liquidity",
   {
-    title: "Permanently lock liquidity (Cookiebox DAMM v2)",
+    title: "Permanently lock liquidity (Cookiebox DAMM v2 / CLMM)",
     description:
-      "⚠️ IRREVERSIBLE. Permanently locks your unlocked liquidity in a Cookiebox DAMM v2 position. " +
-      "Requires COOKIE_PRIVATE_KEY.",
+      "⚠️ IRREVERSIBLE. Permanently locks your liquidity in a Cookiebox position; the venue is " +
+      "auto-detected from the pool. DAMM v2 locks the position's unlocked liquidity; CLMM locks the " +
+      "WHOLE position (the program offers no partial or vesting lock). Locked liquidity can never be " +
+      "withdrawn and the position can never be closed, but fees stay claimable via claim_fees. Not " +
+      "supported on CookieSwap SAMM. Requires COOKIE_PRIVATE_KEY.",
     inputSchema: {
-      poolPk: z.string().min(32).max(44).describe("DAMM v2 pool address"),
+      poolPk: z.string().min(32).max(44).describe("Cookiebox DAMM v2 or CLMM pool address"),
     },
   },
   tool(async (a: { poolPk: string }) => lockLiquidity(a)),

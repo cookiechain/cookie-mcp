@@ -22,6 +22,7 @@ import Decimal from "decimal.js";
 import {
   WhirlpoolContext,
   buildWhirlpoolClient,
+  LockConfigUtil,
   PDAUtil,
   PriceMath,
   TickUtil,
@@ -58,6 +59,7 @@ export const ORCA_METADATA_UPDATE_AUTH = new PublicKey(
 
 const OPEN_POSITION_CU = 500_000;
 const INIT_POOL_CU = 400_000;
+const LOCK_POSITION_CU = 200_000;
 
 /** Static fee tiers Cookie CLMM exposes: display bps → tickSpacing. Default 0.25% (tickSpacing 2). */
 export const CLMM_FEE_TIER_TICK_SPACING: Record<number, number> = {
@@ -192,6 +194,17 @@ interface OwnedPosition {
   positionAddress: PublicKey;
   positionMint: PublicKey;
   liquidity: BN;
+  /** Permanently locked via `lock_position` — no liquidity changes, but fees stay claimable. */
+  locked: boolean;
+}
+
+/**
+ * `["lock_config", position]` PDA. The account only exists once the position has been permanently
+ * locked, so "is this locked?" is an existence check — there is no flag on the position account
+ * (unlike DAMM, where the position carries `permanentLockedLiquidity`).
+ */
+export function clmmLockConfigAddress(positionAddress: PublicKey): PublicKey {
+  return PDAUtil.getLockConfig(CLMM_PROGRAM_ID, positionAddress).publicKey;
 }
 
 /**
@@ -199,13 +212,17 @@ interface OwnedPosition {
  * (amount 1, decimals 0) across SPL + Token-2022, derives each position PDA against Cookie's program,
  * fetches them, keeps those in `poolPk`, and returns the largest-liquidity one first.
  * (Port of cookiebox fetchAllWalletClmmPositions, scoped to a pool.)
+ *
+ * Each result carries `locked`. Callers doing a liquidity change (add/remove/lock) must skip locked
+ * positions — the program rejects every liquidity change on one. Fee claims must NOT skip them:
+ * a locked position still accrues claimable fees.
  */
-export async function findClmmPosition(
+export async function findClmmPositions(
   conn: Connection,
   client: WhirlpoolClient,
   owner: PublicKey,
   poolPk: PublicKey,
-): Promise<OwnedPosition | null> {
+): Promise<OwnedPosition[]> {
   const [spl, spl2022] = await Promise.all([
     conn.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }),
     conn.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }),
@@ -221,7 +238,7 @@ export async function findClmmPosition(
       mints.push(new PublicKey(parsed.mint));
     }
   }
-  if (mints.length === 0) return null;
+  if (mints.length === 0) return [];
 
   const pdas = mints.map((m) => PDAUtil.getPosition(CLMM_PROGRAM_ID, m).publicKey);
   const program = client.getContext().program as unknown as {
@@ -242,11 +259,49 @@ export async function findClmmPosition(
       positionAddress: pdas[i]!,
       positionMint: mints[i]!,
       liquidity: new BN((st.liquidity as { toString(): string }).toString()),
+      locked: false,
     });
   });
-  if (found.length === 0) return null;
+  if (found.length === 0) return [];
+
+  const lockInfos = await conn.getMultipleAccountsInfo(
+    found.map((p) => clmmLockConfigAddress(p.positionAddress)),
+    "confirmed",
+  );
+  lockInfos.forEach((info, i) => {
+    if (info) found[i]!.locked = true;
+  });
+
   found.sort((a, b) => b.liquidity.cmp(a.liquidity));
-  return found[0]!;
+  return found;
+}
+
+/** Largest position in the pool, or null. See {@link findClmmPositions} for `unlockedOnly`. */
+export async function findClmmPosition(
+  conn: Connection,
+  client: WhirlpoolClient,
+  owner: PublicKey,
+  poolPk: PublicKey,
+  opts: { unlockedOnly?: boolean } = {},
+): Promise<OwnedPosition | null> {
+  const all = await findClmmPositions(conn, client, owner, poolPk);
+  const usable = opts.unlockedOnly ? all.filter((p) => !p.locked) : all;
+  return usable[0] ?? null;
+}
+
+/**
+ * "No usable position" error that distinguishes an empty wallet from one holding only permanently
+ * locked positions — otherwise remove/lock would tell the user to "add liquidity first" when they
+ * in fact have liquidity that simply can never move again.
+ */
+function noUsablePositionError(all: OwnedPosition[]): CookieMcpError {
+  if (all.some((p) => p.locked)) {
+    return new CookieMcpError(
+      "your CLMM position in that pool is permanently locked",
+      "locked liquidity can never be withdrawn; its fees are still claimable via claim_fees",
+    );
+  }
+  return noPositionError();
 }
 
 function noPositionError(): CookieMcpError {
@@ -311,7 +366,11 @@ export async function addClmmLiquidity(
     maxSqrtPrice: upperBound[0],
   };
 
-  const existing = await findClmmPosition(conn, client, owner, pool.getAddress());
+  // Skip locked positions: the program rejects increase_liquidity on them, so a wallet whose only
+  // position in this pool is locked gets a fresh position rather than a failed transaction.
+  const existing = await findClmmPosition(conn, client, owner, pool.getAddress(), {
+    unlockedOnly: true,
+  });
   if (existing) {
     const position = await client.getPosition(existing.positionAddress);
     await position.refreshData();
@@ -339,6 +398,8 @@ export async function addClmmLiquidity(
     depositParams,
     owner,
     owner,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
   );
   const sig = await sendBuilder(conn, keypair, tx, OPEN_POSITION_CU);
   return result(sig, pool.getAddress().toBase58());
@@ -356,8 +417,9 @@ export async function removeClmmLiquidity(
   const client = buildClmmClient(conn, keypair);
   const owner = keypair.publicKey;
   const poolPk = new PublicKey(args.poolPk);
-  const pos = await findClmmPosition(conn, client, owner, poolPk);
-  if (!pos) throw noPositionError();
+  const all = await findClmmPositions(conn, client, owner, poolPk);
+  const pos = all.find((p) => !p.locked);
+  if (!pos) throw noUsablePositionError(all);
 
   const pool = await client.getPool(poolPk);
   const slippage = Percentage.fromFraction(DEFAULT_SLIPPAGE_BPS, 10_000);
@@ -403,6 +465,60 @@ export async function removeClmmLiquidity(
     owner,
   );
   const sig = await sendBuilder(conn, keypair, tx, OPEN_POSITION_CU);
+  return result(sig, poolPk.toBase58());
+}
+
+/**
+ * Permanently lock the wallet's CLMM position — irreversible.
+ *
+ * Whirlpool's only lock type is `Permanent` and it always takes the WHOLE position, so unlike DAMM's
+ * `lock_liquidity` there is no partial amount and no vesting. Fees stay claimable afterwards; the
+ * liquidity can never be withdrawn and the position can never be closed.
+ *
+ * Requires a Token-2022 position NFT: `lock_position` freezes the position token account, which only
+ * works when the mint's freeze authority is the position PDA — set by
+ * `open_position_with_token_extensions` and never by the legacy Metaplex path. Positions opened
+ * before this server switched to Token-2022 are therefore permanently unlockable, and the program
+ * rejects them with `ConstraintOwner`, so check up front and say so plainly.
+ */
+export async function lockClmmLiquidity(
+  conn: Connection,
+  keypair: Keypair,
+  args: { poolPk: string },
+): Promise<ClmmLpResult> {
+  const client = buildClmmClient(conn, keypair);
+  const owner = keypair.publicKey;
+  const poolPk = new PublicKey(args.poolPk);
+
+  const all = await findClmmPositions(conn, client, owner, poolPk);
+  const pos = all.find((p) => !p.locked);
+  if (!pos) {
+    if (all.some((p) => p.locked)) {
+      throw new CookieMcpError(
+        "your CLMM position in that pool is already permanently locked",
+        "nothing to do — its fees are still claimable via claim_fees",
+      );
+    }
+    throw noPositionError();
+  }
+  if (pos.liquidity.lten(0)) {
+    throw new CookieMcpError(
+      "that CLMM position has no liquidity to lock",
+      "add liquidity first — the program rejects locking an empty position",
+    );
+  }
+
+  const mintInfo = await conn.getAccountInfo(pos.positionMint, "confirmed");
+  if (!mintInfo?.owner.equals(TOKEN_2022_PROGRAM_ID)) {
+    throw new CookieMcpError(
+      "that CLMM position uses the legacy position-NFT standard and cannot be locked",
+      "remove_liquidity to close it, then add_liquidity to open a lockable Token-2022 position",
+    );
+  }
+
+  const position = await client.getPosition(pos.positionAddress);
+  const builder = await position.lock(LockConfigUtil.getPermanentLockType(), owner, owner);
+  const sig = await sendBuilder(conn, keypair, builder, LOCK_POSITION_CU, "lock_liquidity");
   return result(sig, poolPk.toBase58());
 }
 
@@ -520,6 +636,8 @@ export async function createClmmPool(
     { tokenMaxA: rawA, tokenMaxB: rawB, minSqrtPrice: lowerBound[0], maxSqrtPrice: upperBound[0] },
     owner,
     owner,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
   );
   const sig = await sendBuilder(conn, keypair, openTx, OPEN_POSITION_CU);
   return result(sig, poolKey.toBase58());

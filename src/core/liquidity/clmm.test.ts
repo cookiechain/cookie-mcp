@@ -9,6 +9,7 @@ import {
 
 import {
   buildClmmClient,
+  clmmLockConfigAddress,
   patchMetadataAuth,
   CLMM_PROGRAM_ID,
   WHIRLPOOL_TREASURY,
@@ -63,6 +64,23 @@ describe("patchMetadataAuth", () => {
     const tx = new Transaction().add(ix([WHIRLPOOL_TREASURY]));
     patchMetadataAuth(tx);
     expect(tx.instructions[0]!.keys[0]!.pubkey.equals(WHIRLPOOL_TREASURY)).toBe(true);
+  });
+});
+
+describe("clmmLockConfigAddress", () => {
+  // Pinned against a real Cookie Chain position + the PDA the program derived for it, so a wrong
+  // seed or a wrong program id fails here rather than at lock time.
+  it("derives the `[lock_config, position]` PDA the program expects", () => {
+    const position = new PublicKey("7yjp7Ar6WZzmyvoVKGvTUxyd1hpNzLxRdqzqnMtmacNF");
+    expect(clmmLockConfigAddress(position).toBase58()).toBe(
+      "FAZmwBxhNzcmNft81SfJQ1DaW7quYicA14tiffHzydHn",
+    );
+  });
+
+  it("derives a distinct PDA per position", () => {
+    const a = clmmLockConfigAddress(Keypair.generate().publicKey);
+    const b = clmmLockConfigAddress(Keypair.generate().publicKey);
+    expect(a.equals(b)).toBe(false);
   });
 });
 
