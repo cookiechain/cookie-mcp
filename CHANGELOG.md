@@ -2,9 +2,7 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-# [0.4.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.4.0)
-
-_July 25, 2026_
+# [Unreleased]
 
 ### Added
 
@@ -25,19 +23,10 @@ _July 25, 2026_
     fee, so `COOKIE_MAX_TRADE_COOK` must allow it; `devBuyCook` makes your own buy the first trade.
   - A pool's `status` may read **`ended`** — the launch window closed but the pool has not been settled
     on-chain yet, and until it is, nothing on it can be traded or claimed.
-- `MOMOSWAP_API_URL` (default `https://api.momoswap.fun`). The launchpad API builds and partial-signs
-  each transaction — it holds the pre-ground `momo` mint the program requires and pins metadata — then
-  this server simulates it on your RPC, signs with `COOKIE_PRIVATE_KEY` and sends. Custody is unchanged:
-  the key never leaves your machine.
-
-### Changed
-
-- `get_quote` / `trade` recognise a launchpad token that has no DEX route and point at the launchpad
-  tools instead of reporting "no route found"; `get_token_info` gained a `launchpad` field for a mint
-  whose price and liquidity read empty because it is still on a curve.
-
-### Added
-
+  - `MOMOSWAP_API_URL` (default `https://api.momoswap.fun`). The launchpad API builds and partial-signs
+    each transaction — it holds the pre-ground `momo` mint the program requires and pins metadata — then
+    this server simulates it on your RPC, signs with `COOKIE_PRIVATE_KEY` and sends. Custody is unchanged:
+    the key never leaves your machine.
 - **`lock_liquidity` now supports Cookiebox CLMM**, not just DAMM v2 — the venue is auto-detected from
   the pool like every other liquidity tool. The whirlpool program only offers `LockType::Permanent` and
   it always takes the **whole** position, so unlike DAMM there is no partial amount and no vesting.
@@ -55,6 +44,9 @@ _July 25, 2026_
 - **`add_liquidity` / `remove_liquidity` skip permanently-locked CLMM positions.** The program rejects
   every liquidity change on a locked position, so `add_liquidity` opens a fresh position instead of
   failing, and `remove_liquidity` reports that the position is locked rather than "no position found".
+- `get_quote` / `trade` recognise a launchpad token that has no DEX route and point at the launchpad
+  tools instead of reporting "no route found"; `get_token_info` gained a `launchpad` field for a mint
+  whose price and liquidity read empty because it is still on a curve.
 
 ### Fixed
 
