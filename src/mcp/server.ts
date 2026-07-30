@@ -341,12 +341,13 @@ registerTool(
       "Browse MomoSwap launchpad pools: name/symbol/mint, curve price in COOK, amount raised vs the " +
       "graduation target (with progress %), participants, settlement mode and the launch window. " +
       "Defaults to `live` launches (currently tradeable), sorted closest-to-graduation first. " +
-      "NOTE the returned `status` can also be `ended`: the launch window closed but nobody has settled " +
-      "the pool on-chain yet, so it is neither tradeable nor claimable. The `status` filter is applied " +
-      "upstream, so a `live` filter may include such pools. Read-only — no key needed.",
+      "`ended` means the launch window closed but nobody has settled the pool on-chain yet, so it is " +
+      "neither tradeable nor claimable — filter for it explicitly, or use `all`, since a `live` filter " +
+      "may or may not include such pools depending on the launchpad's deployed version. " +
+      "Read-only — no key needed.",
     inputSchema: {
       status: z
-        .enum(["live", "upcoming", "graduated", "expired", "all"])
+        .enum(["live", "upcoming", "ended", "graduated", "expired", "all"])
         .optional()
         .describe("lifecycle filter (default live)"),
       limit: z

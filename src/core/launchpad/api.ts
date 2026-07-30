@@ -11,8 +11,15 @@ const LP = `${MOMOSWAP_API_URL}/v1/launchpad`;
 // IPFS pinning can be slow; give uploads more room than the default HTTP timeout.
 const UPLOAD_TIMEOUT_MS = 30_000;
 
-/** Pool lifecycle as the API reports it (`status`, derived from state + timestamps). */
-export type PoolStatus = "upcoming" | "live" | "graduated" | "expired";
+/**
+ * Pool lifecycle as the API reports it (`status`, derived from state + timestamps).
+ *
+ * `ended` = on-chain still `Open`/`Created` but past `end_ts`: trading is over and nothing has
+ * settled the pool yet, so it is neither tradeable nor claimable. The API used to report that window
+ * as `live`, which is why `poolPhase()` derives it locally too — it now agrees with the API instead
+ * of correcting it, and both spellings map to the same phase.
+ */
+export type PoolStatus = "upcoming" | "live" | "ended" | "graduated" | "expired";
 export type ExpiryMode = "dead" | "fair" | "jackpot" | "survivor";
 export type ClaimKind = "fair" | "winner" | "graduated_tokens" | "creator_vest";
 
@@ -77,6 +84,20 @@ export interface LaunchpadPool {
   creatorVestStart: number;
   creatorVestEnd: number;
   graduationTarget: string;
+  // --- economics SNAPSHOTTED onto the pool at create_pool -----------------------------------------
+  // A pool keeps the fee schedule it launched with, so a later admin `update_config` cannot re-price
+  // it. Resolve these through `./fees` (never read the `/config` value for a pool) — and note they are
+  // OPTIONAL: the deployed API predates the release that serializes them, so today they are absent and
+  // every resolution falls back to `/config`.
+  tradeFeeBps?: number;
+  treasuryFeeBps?: number;
+  creatorFeeBps?: number;
+  referralFeeBps?: number;
+  buybackFeeBps?: number;
+  lpBurnBps?: number;
+  creatorVestBps?: number;
+  /** i64 seconds — the pool's own linear creator-vest duration. */
+  creatorVestSeconds?: string;
 }
 
 /** A wallet's bonding-curve position. `shares` are program-tracked, NOT SPL tokens. */
@@ -152,12 +173,62 @@ export async function fetchLaunchpadConfig(): Promise<LaunchpadConfig> {
   return config;
 }
 
+/** One page of `GET /pools`. Every pagination field is absent on deployments that predate paging. */
+export interface PoolPage {
+  pools?: LaunchpadPool[];
+  /** Rows in THIS response. */
+  count?: number;
+  /** Rows matching the filter across all pages. */
+  total?: number;
+  hasMore?: boolean;
+  nextOffset?: number | null;
+}
+
+// Backstop on the page walk. 500 is the server's own `limit` ceiling, so this covers 20k pools —
+// orders of magnitude past anything real, and it bounds a server that reports `hasMore` forever.
+const MAX_POOL_PAGES = 40;
+
+/**
+ * Where the next `/pools` page starts, or null when the walk is done (pure).
+ *
+ * A `hasMore` with no usable, strictly-advancing cursor would loop forever, so it stops instead: a
+ * short list is recoverable, a hung stdio server is not.
+ */
+export function nextPoolOffset(
+  page: Pick<PoolPage, "hasMore" | "nextOffset">,
+  requestedOffset: number,
+): number | null {
+  if (page.hasMore !== true) return null;
+  const next = page.nextOffset;
+  if (typeof next !== "number" || !Number.isSafeInteger(next) || next <= requestedOffset)
+    return null;
+  return next;
+}
+
+/**
+ * Every pool matching `status`, following pagination when the API pages.
+ *
+ * `limit` is deliberately NOT sent: it is opt-in server-side and omitting it returns the whole
+ * filtered set in one round trip, which is what every caller here needs (both callers sort by
+ * graduation progress, a key the server does not offer, so a server-side page would be the wrong
+ * rows). The walk exists because a *default* page size would otherwise silently truncate the list —
+ * `get_launchpad_positions` scans this list to discover which pools to check, so a missing page means
+ * a position reported as absent, with no error. Offset paging is safe here only because the server
+ * breaks every sort tie on `pubkey`; do not add a `sort` param without re-reading that guarantee.
+ */
 export async function fetchPools(status: PoolStatus | "all" = "all"): Promise<LaunchpadPool[]> {
-  const { pools } = await get<{ pools: LaunchpadPool[] }>(
-    `/pools?status=${encodeURIComponent(status)}`,
-    "launchpad pools",
-  );
-  return pools ?? [];
+  const all: LaunchpadPool[] = [];
+  let offset = 0;
+  for (let page = 0; page < MAX_POOL_PAGES; page++) {
+    const query = new URLSearchParams({ status });
+    if (offset > 0) query.set("offset", String(offset));
+    const res = await get<PoolPage>(`/pools?${query.toString()}`, "launchpad pools");
+    all.push(...(res.pools ?? []));
+    const next = nextPoolOffset(res, offset);
+    if (next === null) return all;
+    offset = next;
+  }
+  return all;
 }
 
 export async function fetchPoolByAddress(pool: string): Promise<LaunchpadPool> {

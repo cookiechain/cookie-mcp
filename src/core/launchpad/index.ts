@@ -49,6 +49,7 @@ import {
   type PoolStatus,
 } from "./api";
 import { estimateBuy, estimateSell, graduationProgressPct, spotPriceCook } from "./curve";
+import { poolFeeShareBps, poolTradeFeeBps } from "./fees";
 import { fetchCreatorFeeVaults, fetchPoolPrograms, fetchPositionsForPools } from "./positions";
 import { launchpadErrorMessage, launchpadProgramIdFromTx } from "./program";
 
@@ -362,13 +363,17 @@ export interface LaunchpadPoolView {
 /**
  * The pool's real phase, which is NOT always the API's `status`.
  *
- * On-chain, `buy`/`sell` require `now <= end_ts` and the claim paths require state `Expired` — a state
- * only a permissionless `expire_pool` call sets, and nothing calls it automatically. The API reports
- * such a pool as `live` (its on-chain state IS still `Open`), so taking `status` at face value would
- * have us advertise a pool as tradeable when every trade reverts, and tell holders to "sell to exit"
- * when they cannot. `ended` names that window: trading closed, settlement not yet performed.
+ * On-chain, `buy`/`sell` require `now <= end_ts` and the claim paths require state `Expired`. A pool
+ * past `end_ts` but still on-chain `Open` is therefore neither tradeable nor claimable, and taking
+ * `status` at face value would have us advertise it as tradeable when every trade reverts, and tell
+ * holders to "sell to exit" when they cannot. `ended` names that window.
+ *
+ * The launchpad API now derives `ended` itself (momoswap-frontend #3), so on a current deployment this
+ * agrees with `status` rather than correcting it. It still has to be derived locally: the deployed API
+ * predates that release and reports the window as `live`, and the boundary is only knowable from
+ * `end_ts` anyway. Same alias either way — `PoolPhase` is `PoolStatus` now that `ended` is in it.
  */
-export type PoolPhase = PoolStatus | "ended";
+export type PoolPhase = PoolStatus;
 
 export function poolPhase(
   pool: Pick<LaunchpadPool, "status" | "endTs">,
@@ -640,7 +645,7 @@ export async function getLaunchpadPositions(args: {
     withdrawnRaw += BigInt(position.totalPaymentOut);
     let value: string | null = null;
     if (phase === "live" && shares > 0n) {
-      const net = estimateSell(pool, shares, cfg.tradeFeeBps).netRaw;
+      const net = estimateSell(pool, shares, poolTradeFeeBps(pool, cfg)).netRaw;
       liveValueRaw += net;
       value = rawToUi(net, COOK_DECIMALS);
     }
@@ -803,7 +808,7 @@ export async function getLaunchpadToken(args: {
   // Quote from the curve for pools that still have one — including a launch that hasn't opened yet.
   if (args.quoteCook != null && (tradeable || phase === "upcoming")) {
     const cookIn = uiToRaw(args.quoteCook, COOK_DECIMALS);
-    const est = estimateBuy(pool, cookIn, cfg.tradeFeeBps);
+    const est = estimateBuy(pool, cookIn, poolTradeFeeBps(pool, cfg));
     quote = {
       cookIn: rawToUi(cookIn, COOK_DECIMALS),
       tokensOut: rawToUi(est.tokensOutRaw, decs),
@@ -836,10 +841,11 @@ export async function getLaunchpadToken(args: {
 
   return {
     ...view,
+    // This pool's own snapshotted schedule, not the global one — see ./fees.
     fees: {
-      tradePct: cfg.tradeFeeBps / 100,
-      creatorSharePct: cfg.creatorFeeBps / 100,
-      referralSharePct: cfg.referralFeeBps / 100,
+      tradePct: poolTradeFeeBps(pool, cfg) / 100,
+      creatorSharePct: poolFeeShareBps(pool, cfg, "creator") / 100,
+      referralSharePct: poolFeeShareBps(pool, cfg, "referral") / 100,
     },
     quote,
     position: position
@@ -851,7 +857,7 @@ export async function getLaunchpadToken(args: {
           estimatedValueCook:
             tradeable && BigInt(position.shares) > 0n
               ? rawToUi(
-                  estimateSell(pool, BigInt(position.shares), cfg.tradeFeeBps).netRaw,
+                  estimateSell(pool, BigInt(position.shares), poolTradeFeeBps(pool, cfg)).netRaw,
                   COOK_DECIMALS,
                 )
               : null,
@@ -1191,7 +1197,8 @@ export async function launchpadBuy(args: {
   }
 
   const decs = await tokenDecimals(pool, cfg);
-  const est = estimateBuy(pool, paymentRaw, cfg.tradeFeeBps);
+  const feeBps = poolTradeFeeBps(pool, cfg);
+  const est = estimateBuy(pool, paymentRaw, feeBps);
 
   const built = await buildBuyTx({
     buyer,
@@ -1223,7 +1230,7 @@ export async function launchpadBuy(args: {
     tradeFee: {
       amount: rawToUi(est.feeRaw, COOK_DECIMALS),
       symbol: COOK_SYMBOL,
-      pct: cfg.tradeFeeBps / 100,
+      pct: feeBps / 100,
     },
     priceCookPerToken: spotPriceCook(after, COOK_DECIMALS, decs),
     graduationProgressPct: graduationProgressPct(after.paymentRaisedNet, pool.graduationTarget),
@@ -1287,7 +1294,8 @@ export async function launchpadSell(args: {
     );
   }
 
-  const est = estimateSell(pool, sharesRaw, cfg.tradeFeeBps);
+  const feeBps = poolTradeFeeBps(pool, cfg);
+  const est = estimateSell(pool, sharesRaw, feeBps);
   // Value the sale in COOK for the spend cap (proceeds are what moves). A dust sell can estimate to 0,
   // which is not a cap violation — let the program reject it as ZeroOutput instead of misreporting it.
   const proceedsCook = Number(rawToUi(est.netRaw, COOK_DECIMALS));
@@ -1312,7 +1320,7 @@ export async function launchpadSell(args: {
     tradeFee: {
       amount: rawToUi(est.feeRaw, COOK_DECIMALS),
       symbol: COOK_SYMBOL,
-      pct: cfg.tradeFeeBps / 100,
+      pct: feeBps / 100,
     },
     remainingShares: rawToUi(BigInt(position.shares) - sharesRaw, decs),
     links: { token: launchpadTokenUrl(pool.tokenMint) },
