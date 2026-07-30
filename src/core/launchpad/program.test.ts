@@ -51,6 +51,16 @@ describe("launchpadErrorMessage", () => {
     }
   });
 
+  // 6039 = GraduationGraceActive, counted off the `#[error_code]` enum in source (Paused = 6000, so the
+  // 40th variant is 6039) — the same method that pins 6011/6040/6046, and 6011 is confirmed against the
+  // deployed program, which reports it for expire_pool on a settled pool.
+  it("explains the graduation grace window at 6039, which only a claim can reach", () => {
+    expect(launchpadErrorMessage(6039)).toContain("grace period");
+    // Its neighbours are deliberately unmapped; nothing may bleed into them.
+    expect(launchpadErrorMessage(6038)).toBeUndefined();
+    expect(launchpadErrorMessage(6037)).toBeUndefined();
+  });
+
   it("explains slippage at 6046, where the audit fix actually appended it", () => {
     expect(launchpadErrorMessage(6046)).toContain("slippage");
     // 6019 must NOT be slippage — that was the IDL's error, and the bug MCP inherited.

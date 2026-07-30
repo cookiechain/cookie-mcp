@@ -5,6 +5,7 @@ import {
   buildCreateParams,
   buildMetadata,
   creatorVestOutstanding,
+  fairClaimSnapshot,
   fairRefundRaw,
   poolPhase,
   launchpadRouteMessage,
@@ -206,8 +207,18 @@ describe("resolveClaimKind", () => {
     expect(resolveClaimKind({ status: "upcoming", expiryMode: "fair" })).toBeNull();
   });
 
-  it("cannot claim in the ended window — the pool is not Expired on-chain yet", () => {
-    expect(resolveClaimKind({ status: "ended", expiryMode: "fair" })).toBeNull();
+  // In the `ended` window the pool is past end_ts but still `Open` on-chain. `claim_fair` expires it
+  // itself (audit #2 lazy_expire, merged as 62525aa), so a Fair refund IS reachable there — and only
+  // Fair: `set_settlement_root` requires an already-`Expired` pool, so no Merkle root can exist for a
+  // jackpot/survivor pool in this window, and Dead has no holder payout at any point.
+  it("claims a Fair refund in the ended window, which settles the pool", () => {
+    expect(resolveClaimKind({ status: "ended", expiryMode: "fair" })).toBe("fair");
+  });
+
+  it("has nothing to claim in the ended window for any other mode", () => {
+    for (const mode of ["dead", "jackpot", "survivor"] as const) {
+      expect(resolveClaimKind({ status: "ended", expiryMode: mode })).toBeNull();
+    }
   });
 });
 
@@ -362,8 +373,63 @@ describe("positionAction", () => {
     expect(positionAction({ status: "upcoming", expiryMode: "fair" }, held)).toBeNull();
   });
 
-  it("offers NOTHING in the ended window — selling reverts and claiming is not open yet", () => {
-    expect(positionAction({ status: "ended", expiryMode: "fair" }, held)).toBeNull();
+  // Selling always reverts in the ended window (past end_ts), but a Fair claim settles the pool itself,
+  // so it is the one actionable thing there.
+  it("offers the Fair claim in the ended window, and nothing for the other modes", () => {
+    expect(positionAction({ status: "ended", expiryMode: "fair" }, held)).toMatchObject({
+      tool: "claim_launchpad",
+      kind: "fair",
+    });
+    expect(
+      positionAction({ status: "ended", expiryMode: "fair" }, { ...held, claimed: true }),
+    ).toBeNull();
+    expect(positionAction({ status: "ended", expiryMode: "fair" }, empty)).toBeNull();
+    for (const mode of ["dead", "jackpot", "survivor"] as const) {
+      expect(positionAction({ status: "ended", expiryMode: mode }, held)).toBeNull();
+    }
+  });
+});
+
+describe("fairClaimSnapshot", () => {
+  const ENDED = {
+    status: "ended" as const,
+    expiryLiquidity: "0", // the program only writes these at the expiry transition
+    totalExpiryShares: "0",
+    totalActiveShares: "120390305",
+  };
+
+  // Without this, a Fair claim in the ended window reports `claimed: null` — the pool's own snapshot is
+  // still zeroed at the moment the claim is built, because `claim_fair` is what fills it in.
+  it("reconstructs the snapshot lazy_expire is about to write", () => {
+    expect(fairClaimSnapshot(ENDED, 19_800_000n)).toEqual({
+      expiryLiquidity: "19800000",
+      totalExpiryShares: "120390305",
+    });
+  });
+
+  it("uses the pool's own snapshot once it is settled on-chain", () => {
+    const settled = {
+      status: "expired" as const,
+      expiryLiquidity: "19800000",
+      totalExpiryShares: "120390305",
+      totalActiveShares: "0", // zeroed after settlement — must NOT be used as the divisor
+    };
+    expect(fairClaimSnapshot(settled, null)).toMatchObject({
+      expiryLiquidity: "19800000",
+      totalExpiryShares: "120390305",
+    });
+  });
+
+  it("gives up rather than guessing when the vault balance is unavailable", () => {
+    expect(fairClaimSnapshot(ENDED, null)).toBeNull();
+    expect(fairClaimSnapshot(ENDED, 0n)).toBeNull();
+  });
+
+  // End to end: the reconstructed snapshot feeds the same refund formula, and reproduces the real
+  // 0.0198 COOK refund measured on pool 8tZWFQ5V… from its pre-expiry vault balance.
+  it("feeds fairRefundRaw to the same answer the settled pool gives", () => {
+    const snap = fairClaimSnapshot(ENDED, 19_800_000n)!;
+    expect(fairRefundRaw(snap, 120_390_305n)).toBe(19_800_000n);
   });
 });
 
@@ -488,5 +554,30 @@ describe("launchpadSimError", () => {
       "Program log: b",
     ]);
     expect(e.message).toContain("Program log: b");
+  });
+
+  // A Fair claim on an `ended` pool needs the program to expire the pool as part of the claim. Where that
+  // is absent the revert is 6011, whose generic reading — "it has graduated or expired" — is the exact
+  // opposite of the truth, so the claim path overrides just that code.
+  it("lets a caller override one code's reading without touching the others", () => {
+    const hints = { 6011: { message: "not settled yet", hint: "retry shortly" } };
+    const e = launchpadSimError(
+      "claim",
+      { InstructionError: [1, { Custom: 6011 }] },
+      null,
+      null,
+      hints,
+    );
+    expect(e.message).toBe("not settled yet");
+    expect(e.hint).toBe("retry shortly");
+    // Without the override, the same code keeps the table's wording.
+    expect(
+      launchpadSimError("buy", { InstructionError: [1, { Custom: 6011 }] }, null).message,
+    ).toContain("not in a tradeable state");
+    // An unrelated code is unaffected by the presence of the override.
+    expect(
+      launchpadSimError("claim", { InstructionError: [1, { Custom: 6012 }] }, null, null, hints)
+        .message,
+    ).toContain("trading has not opened yet");
   });
 });

@@ -85,6 +85,10 @@ const LAUNCHPAD_ERRORS: Record<number, string> = {
   6025: "there is nothing to claim",
   6026: "this has already been claimed",
   6035: "self-referral is not allowed",
+  // Reachable from a CLAIM, not a trade: `claim_fair` on an `ended` pool expires it first, and that
+  // transition refuses a migratable pool that met its graduation target until its 1-hour grace window
+  // runs out, so it still has a chance to graduate instead of a claimant forcing it into expiry.
+  6039: "this pool met its graduation target, so it has a one-hour grace period to graduate before it can be expired or claimed against",
   6040: "the anti-snipe window caps how much one wallet can buy right after launch",
   // Appended by the min-out audit fix, so it only exists on post-audit builds. Harmless to keep in the
   // shared table: a pre-audit build can never emit 6046.

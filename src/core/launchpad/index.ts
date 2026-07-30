@@ -50,7 +50,12 @@ import {
 } from "./api";
 import { estimateBuy, estimateSell, graduationProgressPct, spotPriceCook } from "./curve";
 import { poolFeeShareBps, poolTradeFeeBps } from "./fees";
-import { fetchCreatorFeeVaults, fetchPoolPrograms, fetchPositionsForPools } from "./positions";
+import {
+  decodeTokenAmount,
+  fetchCreatorFeeVaults,
+  fetchPoolPrograms,
+  fetchPositionsForPools,
+} from "./positions";
 import { launchpadErrorMessage, launchpadProgramIdFromTx } from "./program";
 
 const MIN_DURATION_SECS = 60;
@@ -72,14 +77,26 @@ function programErrorCode(blob: string): number | null {
  * is which launchpad deployment produced them — the codes are enum ordinals, so the same number means
  * different things in different builds (see `program.ts`).
  */
+/**
+ * A caller-supplied reading of one program error code, for a case where the generic table's wording is
+ * wrong in this specific context. Only the codes present here are overridden.
+ */
+export interface SimCodeHint {
+  message: string;
+  hint: string;
+}
+
 export function launchpadSimError(
   what: string,
   err: unknown,
   logs: string[] | null,
   programId?: string | null,
+  codeHints?: Record<number, SimCodeHint>,
 ): CookieMcpError {
   const blob = `${JSON.stringify(err)} ${logs?.join(" ") ?? ""}`;
   const code = programErrorCode(blob);
+  const override = code != null ? codeHints?.[code] : undefined;
+  if (override) return new CookieMcpError(override.message, override.hint);
   const known = code != null ? launchpadErrorMessage(code, programId) : undefined;
   if (known) {
     return new CookieMcpError(`${what} would fail: ${known}`, "nothing was sent");
@@ -154,7 +171,12 @@ export function sendFailure(what: string, e: unknown): CookieMcpError {
  * Simulate an API-built, partial-signed legacy transaction, add our signature and send it.
  * The API sets the fee payer and blockhash, so we confirm against the window it returned.
  */
-async function submitBuilt(built: BuiltTx, keypair: Keypair, what: string): Promise<string> {
+async function submitBuilt(
+  built: BuiltTx,
+  keypair: Keypair,
+  what: string,
+  codeHints?: Record<number, SimCodeHint>,
+): Promise<string> {
   if (!built.transactionBase64) {
     throw new CookieMcpError(
       `the launchpad returned no ${what} transaction`,
@@ -181,6 +203,7 @@ async function submitBuilt(built: BuiltTx, keypair: Keypair, what: string): Prom
       sim.value.err,
       sim.value.logs ?? null,
       launchpadProgramIdFromTx(tx),
+      codeHints,
     );
   }
 
@@ -252,7 +275,10 @@ export function launchpadRouteMessage(
     case "ended":
       return {
         error: `${sym} has no swap route: its MomoSwap launch window has closed and the pool has not been settled on-chain yet`,
-        hint: "it never graduated, so there is no market; once the pool is expired on-chain, claim_launchpad settles a curve position",
+        hint:
+          pool.expiryMode === "fair"
+            ? "it never graduated, so there is no market; claim_launchpad settles the pool and pays a curve position its pro-rata refund"
+            : "it never graduated, so there is no market; once the pool is expired on-chain, claim_launchpad settles a curve position",
       };
     case "live":
       return {
@@ -489,9 +515,19 @@ export function positionAction(
   >,
 ): PositionAction | null {
   const hasShares = BigInt(position.shares) > 0n;
-  // `ended` = trading closed but nobody has settled the pool on-chain yet, so there is nothing the
-  // holder can do: selling reverts (past end_ts) and claiming reverts (state is still Open).
-  if (pool.status === "ended") return null;
+  // `ended` = trading closed but nobody has settled the pool on-chain yet. Selling always reverts (past
+  // end_ts), but a FAIR refund is actionable: `claim_fair` expires the pool itself. Every other mode has
+  // to wait for the expiry transition, so there is still nothing for its holders to do here.
+  if (pool.status === "ended") {
+    return hasShares && pool.expiryMode === "fair" && !position.claimed
+      ? {
+          tool: "claim_launchpad",
+          kind: "fair",
+          reason:
+            "the launch window closed in Fair mode — claiming settles the pool and pays your pro-rata refund",
+        }
+      : null;
+  }
   if (pool.status === "graduated") {
     if (hasShares && !position.graduatedTokensClaimed) {
       return {
@@ -826,6 +862,16 @@ export async function getLaunchpadToken(args: {
     notes.push(
       "This pool graduated — curve buyers claim their real SPL tokens with claim_launchpad, then " +
         "trade them normally with trade/get_quote.",
+    );
+  }
+  if (phase === "ended") {
+    notes.push(
+      "The launch window has closed but the pool is not settled on-chain yet: trading is over and " +
+        (pool.expiryMode === "fair"
+          ? "a curve holder can claim their pro-rata refund with claim_launchpad, which settles the pool as part of the claim."
+          : pool.expiryMode === "dead"
+            ? 'this is a "dead" expiry — unraised funds go to the treasury, so there is nothing to claim.'
+            : `a ${pool.expiryMode} payout needs the pool expired and its settlement root published first.`),
     );
   }
   if (phase === "expired") {
@@ -1339,6 +1385,12 @@ export function resolveClaimKind(pool: {
   expiryMode: ExpiryMode;
 }): ClaimKind | null {
   if (pool.status === "graduated") return "graduated_tokens";
+  // `ended` = past end_ts but not yet `Expired` on-chain. `claim_fair` expires the pool itself in that
+  // window (audit #2's lazy_expire, lib.rs:566), so a Fair refund is reachable BEFORE settlement — and
+  // Fair only: `claim_winner` needs a settlement root, which `set_settlement_root` will only write on an
+  // already-`Expired` pool, and Dead has no holder payout at all. On a deployment without lazy_expire the
+  // program reverts 6011, which surfaces at simulation before anything is signed — see claimLaunchpad.
+  if (pool.status === "ended") return pool.expiryMode === "fair" ? "fair" : null;
   if (pool.status !== "expired") return null;
   if (pool.expiryMode === "fair") return "fair";
   if (pool.expiryMode === "jackpot" || pool.expiryMode === "survivor") return "winner";
@@ -1369,6 +1421,33 @@ export function fairRefundRaw(
   if (sharesRaw > totalShares) return null; // a share of more than the whole snapshot is nonsense
   const refund = (liquidity * sharesRaw) / totalShares;
   return refund > 0n ? refund : null;
+}
+
+/**
+ * The snapshot a Fair refund is divided out of (pure).
+ *
+ * An `Expired` pool carries it already. A pool still in the `ended` window has `expiry_liquidity` and
+ * `total_expiry_shares` at ZERO — the program only writes them at the expiry transition — so estimating
+ * from the pool alone yields nothing exactly when `claim_fair` is about to do the transition itself.
+ * `lazy_expire` (lib.rs:2177) sets `expiry_liquidity = payment_vault.amount` and `total_expiry_shares =
+ * total_active_shares`, so the pre-image is knowable: pass the vault balance read BEFORE the claim, since
+ * the claim drains it. Null when it could not be read — the estimate is best-effort, never load-bearing.
+ */
+export function fairClaimSnapshot(
+  pool: {
+    status: PoolPhase;
+    expiryLiquidity: string;
+    totalExpiryShares: string;
+    totalActiveShares: string;
+  },
+  vaultAmountRaw: bigint | null,
+): { expiryLiquidity: string; totalExpiryShares: string } | null {
+  if (pool.status !== "ended") return pool;
+  if (vaultAmountRaw == null || vaultAmountRaw <= 0n) return null;
+  return {
+    expiryLiquidity: vaultAmountRaw.toString(),
+    totalExpiryShares: pool.totalActiveShares,
+  };
 }
 
 export interface ClaimLaunchpadResult {
@@ -1408,9 +1487,12 @@ export async function claimLaunchpad(args: {
       phase === "live"
         ? "claims open after the pool graduates or expires; sell on the curve to exit now"
         : phase === "ended"
-          ? // Trading is closed but the pool is still `Open` on-chain, so no claim path is reachable
-            // yet. Anyone can call expire_pool to unblock it; nothing automates that today.
-            `the launch window closed at ${new Date(pool.endTs * 1000).toISOString()} but the pool has not been settled on-chain yet — claims open once expire_pool has been called for it`
+          ? // Trading is closed but the pool is still `Open` on-chain. A Fair refund no longer lands here
+            // (claim_fair expires the pool itself), so this is a Dead / Jackpot / Survivor pool, and
+            // neither of those can be claimed until the pool is actually `Expired`.
+            pool.expiryMode === "dead"
+            ? `the launch window closed at ${new Date(pool.endTs * 1000).toISOString()} and this is a Dead-mode expiry — unraised funds are swept to the treasury, so there is no holder payout at any point`
+            : `the launch window closed at ${new Date(pool.endTs * 1000).toISOString()} but the pool is not settled on-chain yet — a ${pool.expiryMode} payout needs the pool expired and its settlement root published. Expiry is permissionless and normally happens within seconds; re-read the pool shortly`
           : phase === "upcoming"
             ? "the launch has not opened yet — there is nothing to claim"
             : "Dead-mode expiries sweep unraised funds to the treasury — there is no holder payout",
@@ -1458,12 +1540,21 @@ export async function claimLaunchpad(args: {
   // A Fair refund has to be measured BEFORE the claim lands: `claim_fair` sets `user.shares = 0`
   // (lib.rs:585), so reading the position afterwards always yields 0. `claim_graduated_tokens` leaves
   // shares in place, which is why that branch can read them after.
-  const sharesBefore =
+  // Same reason the payment vault has to be read first when the pool is not yet settled: the claim both
+  // snapshots it and pays out of it, so afterwards it no longer describes what the refund was divided by.
+  const [sharesBefore, vaultBefore] = await Promise.all([
     kind === "fair"
-      ? await fetchPosition(pool.pubkey, claimant)
+      ? fetchPosition(pool.pubkey, claimant)
           .then((p) => (p ? BigInt(p.shares) : null))
           .catch(() => null)
-      : null;
+      : Promise.resolve(null),
+    kind === "fair" && phase === "ended"
+      ? getConnection()
+          .getAccountInfo(new PublicKey(pool.paymentVault))
+          .then((info) => decodeTokenAmount(info?.data))
+          .catch(() => null)
+      : Promise.resolve(null),
+  ]);
 
   const built = await buildClaimTx({
     kind,
@@ -1472,7 +1563,21 @@ export async function claimLaunchpad(args: {
     ...(amount ? { amount } : {}),
     ...(proof ? { proof } : {}),
   });
-  const signature = await submitBuilt(built, keypair, "claim");
+  // A Fair claim on an `ended` pool relies on the program expiring it for us (audit #2's lazy_expire).
+  // A deployment without that fix reverts `InvalidPoolState` (6011) — and the generic reading of 6011,
+  // "the pool has graduated or expired", is exactly backwards here: it has done neither, which is the
+  // problem. This lands at SIMULATION, so nothing is signed, sent or spent either way.
+  const codeHints =
+    phase === "ended" && kind === "fair"
+      ? {
+          6011: {
+            message:
+              "the pool has not been settled on-chain yet, and this deployment cannot settle it as part of the claim",
+            hint: "expiry is permissionless and normally happens within seconds of the launch window closing — re-read the pool and retry; nothing was sent",
+          },
+        }
+      : undefined;
+  const signature = await submitBuilt(built, keypair, "claim", codeHints);
 
   // Report what landed: shares → SPL tokens 1:1 for graduated claims, COOK for payouts. Best-effort —
   // the claim already succeeded, so a failed estimate must never turn into a thrown error.
@@ -1483,7 +1588,8 @@ export async function claimLaunchpad(args: {
   } else if (kind === "winner" && amount) {
     claimed = { estimate: rawToUi(amount, COOK_DECIMALS), symbol: COOK_SYMBOL };
   } else if (kind === "fair" && sharesBefore != null) {
-    const refund = fairRefundRaw(pool, sharesBefore);
+    const snapshot = fairClaimSnapshot({ ...pool, status: phase }, vaultBefore);
+    const refund = snapshot ? fairRefundRaw(snapshot, sharesBefore) : null;
     if (refund != null) {
       claimed = { estimate: rawToUi(refund, COOK_DECIMALS), symbol: COOK_SYMBOL };
     }

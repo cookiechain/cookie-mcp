@@ -371,8 +371,9 @@ registerTool(
       "fee split, and — when COOKIE_PRIVATE_KEY is set — this wallet's curve position (shares, " +
       "invested COOK, current sell value, what it already claimed) plus pending creator fees if it " +
       "created the launch. Pass `quoteCook` to preview how many tokens a buy of that size would get. " +
-      "A `status` of `ended` means trading closed but the pool is not settled on-chain yet — nothing " +
-      "can be traded or claimed until it is. Read-only.",
+      "A `status` of `ended` means trading closed but the pool is not settled on-chain yet — nothing can " +
+      "be traded, and only a Fair-mode refund can be claimed (the claim settles the pool itself). " +
+      "Read-only.",
     inputSchema: {
       ref: z.string().min(32).max(44).describe(POOL_REF),
       quoteCook: z
@@ -564,10 +565,13 @@ registerTool(
     title: "Claim a launchpad payout",
     description:
       "Settle a launchpad position. By default the right claim is picked from the pool's state: " +
-      "graduated → your real SPL tokens; expired in fair mode → a pro-rata COOK refund; expired in " +
-      "jackpot/survivor mode → your Merkle payout (the proof is fetched for you). Creators can pass " +
+      "graduated → your real SPL tokens; expired (or `ended`) in fair mode → a pro-rata COOK refund; " +
+      "expired in jackpot/survivor mode → your Merkle payout (the proof is fetched for you). A fair " +
+      "refund works even on an `ended` pool that has not been settled on-chain yet — the claim settles " +
+      "it too; the other modes have to wait for the expiry transition. Creators can pass " +
       "kind=creator_vest to claim their vested allocation after graduation. Dead-mode expiries have " +
-      "no holder payout. Requires COOKIE_PRIVATE_KEY.",
+      "no holder payout. Simulates before sending, so a claim that cannot land costs nothing. " +
+      "Requires COOKIE_PRIVATE_KEY.",
     inputSchema: {
       ref: z.string().min(32).max(44).describe(POOL_REF),
       kind: z
