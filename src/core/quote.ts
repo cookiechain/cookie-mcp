@@ -6,6 +6,7 @@ import { CookieMcpError } from "./errors";
 import { fetchTokens } from "./cookiescan";
 import { quoteMultiRoute, type CandyShopMultiRoute } from "./candyshop";
 import { rawToUi, uiToRaw } from "./format";
+import { noRouteError } from "./launchpad";
 
 export interface QuoteResult {
   input: { mint: string; symbol: string | null; amount: string };
@@ -114,17 +115,21 @@ export async function getQuote(args: {
     throw new CookieMcpError("amount must be greater than 0", "pass a positive input amount");
   }
 
-  const { multiRoute } = await quoteMultiRoute(
-    args.inputMint,
-    args.outputMint,
-    amountRaw.toString(),
-    slippageBps,
-  );
+  // A launchpad token that hasn't graduated has no DEX pool at all, so "no route" is expected and the
+  // agent should be sent to the launchpad tools instead — see noRouteError.
+  let multiRoute: CandyShopMultiRoute | undefined;
+  try {
+    ({ multiRoute } = await quoteMultiRoute(
+      args.inputMint,
+      args.outputMint,
+      amountRaw.toString(),
+      slippageBps,
+    ));
+  } catch (e) {
+    throw await noRouteError([args.inputMint, args.outputMint], e);
+  }
   if (!multiRoute || !multiRoute.segments?.length) {
-    throw new CookieMcpError(
-      "no route found for this pair",
-      "the pair may lack liquidity; try a smaller amount or a more liquid token",
-    );
+    throw await noRouteError([args.inputMint, args.outputMint]);
   }
   return formatQuote(multiRoute, {
     inputMint: args.inputMint,

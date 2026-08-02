@@ -1,0 +1,1668 @@
+// MomoSwap launchpad (momoswap.fun) — launch a token on a bonding curve, trade the curve, and claim
+// payouts. Non-custodial: the launchpad API builds and partial-signs each transaction (it leases the
+// pre-ground `momo` mint the program requires, pins metadata to IPFS, and wraps/unwraps COOK), then
+// we simulate it on our RPC, add the wallet signature locally and send + confirm.
+//
+// ⚠️ Pre-graduation, a holder's tokens are program-tracked **curve shares**, not SPL tokens — they do
+// NOT show up in `get_balance` and cannot be swapped with `trade`. Selling back to the curve
+// (launchpad_sell) is the only exit until the pool graduates; after graduation the holder claims the
+// real SPL token (claim_launchpad) and trades it normally.
+import { PublicKey, Transaction, type Connection, type Keypair } from "@solana/web3.js";
+import { getMint } from "@solana/spl-token";
+
+import {
+  COOK_DECIMALS,
+  COOK_MINT,
+  COOK_SYMBOL,
+  explorerTxUrl,
+  launchpadPoolUrl,
+  launchpadTokenUrl,
+  PROGRAM_IDS,
+} from "../config";
+import { confirmSent } from "../confirm";
+import { CookieMcpError } from "../errors";
+import { rawToUi, uiToRaw } from "../format";
+import { getConnection } from "../rpc";
+import { assertWithinSpendCap, ownPublicKey, requireWallet } from "../wallet";
+import {
+  buildBuyTx,
+  buildClaimCreatorFeesTx,
+  buildClaimTx,
+  buildCreatePoolTx,
+  buildSellTx,
+  fetchLaunchpadConfig,
+  fetchPendingCreatorFees,
+  fetchPoolByAddress,
+  fetchPoolByMint,
+  fetchPools,
+  fetchPosition,
+  fetchWinnerProof,
+  uploadImage,
+  type BuiltTx,
+  type ClaimKind,
+  type CreatePoolParams,
+  type ExpiryMode,
+  type LaunchpadConfig,
+  type LaunchpadMetadata,
+  type LaunchpadPool,
+  type LaunchpadPosition,
+  type PoolStatus,
+} from "./api";
+import { estimateBuy, estimateSell, graduationProgressPct, spotPriceCook } from "./curve";
+import { poolFeeShareBps, poolTradeFeeBps } from "./fees";
+import {
+  decodeTokenAmount,
+  fetchCreatorFeeVaults,
+  fetchPoolPrograms,
+  fetchPositionsForPools,
+} from "./positions";
+import { launchpadErrorMessage, launchpadProgramIdFromTx } from "./program";
+
+const MIN_DURATION_SECS = 60;
+const MAX_DURATION_SECS = 604_800; // 7 days, enforced on-chain
+const DEFAULT_DURATION_SECS = 86_400;
+const MAX_NAME_LEN = 32;
+const MAX_SYMBOL_LEN = 10;
+
+function programErrorCode(blob: string): number | null {
+  const m =
+    blob.match(/"Custom"\s*:\s*(\d+)/) ?? blob.match(/custom program error: 0x([0-9a-f]+)/i);
+  if (!m) return null;
+  const raw = m[1]!;
+  return /^0x/i.test(m[0]) || m[0].includes("0x") ? parseInt(raw, 16) : parseInt(raw, 10);
+}
+
+/**
+ * Turn a failed simulation into an actionable error, translating known program error codes. `programId`
+ * is which launchpad deployment produced them — the codes are enum ordinals, so the same number means
+ * different things in different builds (see `program.ts`).
+ */
+/**
+ * A caller-supplied reading of one program error code, for a case where the generic table's wording is
+ * wrong in this specific context. Only the codes present here are overridden.
+ */
+export interface SimCodeHint {
+  message: string;
+  hint: string;
+}
+
+export function launchpadSimError(
+  what: string,
+  err: unknown,
+  logs: string[] | null,
+  programId?: string | null,
+  codeHints?: Record<number, SimCodeHint>,
+): CookieMcpError {
+  const blob = `${JSON.stringify(err)} ${logs?.join(" ") ?? ""}`;
+  const code = programErrorCode(blob);
+  const override = code != null ? codeHints?.[code] : undefined;
+  if (override) return new CookieMcpError(override.message, override.hint);
+  const known = code != null ? launchpadErrorMessage(code, programId) : undefined;
+  if (known) {
+    return new CookieMcpError(`${what} would fail: ${known}`, "nothing was sent");
+  }
+  if (/BlockhashNotFound|blockhash/i.test(blob)) {
+    return new CookieMcpError(
+      `${what} simulation failed: blockhash not found`,
+      "Cookie Chain finalization may be stalled — check chain_health; retry shortly",
+    );
+  }
+  if (/insufficient|0x1\b/i.test(blob)) {
+    return new CookieMcpError(
+      `${what} simulation failed: insufficient funds`,
+      "check the wallet's COOK balance (it also pays rent for new accounts and the network fee)",
+    );
+  }
+  const tail = logs?.slice(-3).join(" | ");
+  return new CookieMcpError(
+    `${what} simulation failed${tail ? `: ${tail}` : ""}`,
+    "the pool state may have changed; re-read it and retry — nothing was sent",
+  );
+}
+
+/**
+ * The API's blockhash has to be alive on the node WE send to. It usually is — but the launchpad
+ * builds against its own RPC, so a lagging node upstream yields a blockhash that expired before we
+ * ever saw it. Fail loudly here rather than at preflight, because at this point nothing is signed and
+ * nothing is sent. A read error is not treated as a failure: never block a good send on a flaky probe.
+ */
+async function assertBlockhashUsable(
+  conn: Connection,
+  built: BuiltTx,
+  what: string,
+): Promise<void> {
+  let valid: boolean;
+  try {
+    valid = (await conn.isBlockhashValid(built.blockhash, { commitment: "confirmed" })).value;
+  } catch {
+    return;
+  }
+  if (valid) return;
+  throw new CookieMcpError(
+    `the launchpad built this ${what} transaction against a stale blockhash, so it cannot be sent`,
+    "the launchpad API's RPC node is lagging behind the chain — nothing was sent and no funds moved; " +
+      "retry in a few minutes, and if it persists the launchpad API needs to be pointed at a synced node",
+  );
+}
+
+/** Translate a send-time failure so a raw web3 error never reaches the agent untranslated. */
+export function sendFailure(what: string, e: unknown): CookieMcpError {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (/Blockhash not found|block height exceeded|Node is behind/i.test(msg)) {
+    return new CookieMcpError(
+      `the ${what} transaction expired before it could be sent`,
+      "the blockhash the launchpad built with is no longer valid on this RPC — nothing was sent; " +
+        "retry, and if it persists the launchpad API's node is out of sync with the chain",
+    );
+  }
+  if (/insufficient lamports|insufficient funds/i.test(msg)) {
+    return new CookieMcpError(
+      `insufficient funds to send the ${what}`,
+      "top up native COOK for rent and fees — nothing was sent",
+    );
+  }
+  return new CookieMcpError(
+    `the ${what} transaction could not be sent: ${msg}`,
+    "nothing was sent",
+  );
+}
+
+/**
+ * Simulate an API-built, partial-signed legacy transaction, add our signature and send it.
+ * The API sets the fee payer and blockhash, so we confirm against the window it returned.
+ */
+async function submitBuilt(
+  built: BuiltTx,
+  keypair: Keypair,
+  what: string,
+  codeHints?: Record<number, SimCodeHint>,
+): Promise<string> {
+  if (!built.transactionBase64) {
+    throw new CookieMcpError(
+      `the launchpad returned no ${what} transaction`,
+      "retry; if it persists the launchpad API may be degraded",
+    );
+  }
+  const conn = getConnection();
+  let tx: Transaction;
+  try {
+    tx = Transaction.from(Buffer.from(built.transactionBase64, "base64"));
+  } catch {
+    throw new CookieMcpError(
+      `the ${what} transaction returned by the launchpad was malformed`,
+      "retry; if it persists the launchpad API may be degraded",
+    );
+  }
+
+  const sim = await conn.simulateTransaction(tx);
+  if (sim.value.err) {
+    // The transaction itself says which deployment the API built against, which is what the error
+    // codes belong to — no need to ask the chain.
+    throw launchpadSimError(
+      what,
+      sim.value.err,
+      sim.value.logs ?? null,
+      launchpadProgramIdFromTx(tx),
+      codeHints,
+    );
+  }
+
+  // The simulation above proves the PROGRAM accepts the transaction, but it says nothing about the
+  // blockhash: web3.js's legacy `simulateTransaction(Transaction)` overwrites `recentBlockhash` with a
+  // fresh one before simulating. The blockhash we actually send is the API's, and the API builds
+  // against its own RPC node — when that node lags, the blockhash is already expired on arrival and
+  // the send dies at preflight with a raw, untranslated web3 error. Check it while we can still say
+  // that nothing was sent. Most of the API-built transactions are co-signed by server-side keypairs
+  // (the leased mint and the vaults on a launch), so refreshing the blockhash locally is not an option
+  // — it would invalidate their signatures.
+  await assertBlockhashUsable(conn, built, what);
+
+  tx.partialSign(keypair);
+  let signature: string;
+  try {
+    signature = await conn.sendRawTransaction(tx.serialize());
+  } catch (e) {
+    throw sendFailure(what, e);
+  }
+  // A confirm timeout does NOT mean the transaction failed — it may still land, and a blind retry here
+  // would buy or launch twice. confirmSent turns that into an explicit warning with the signature.
+  return confirmSent(
+    conn,
+    { signature, blockhash: built.blockhash, lastValidBlockHeight: built.lastValidBlockHeight },
+    what,
+  );
+}
+
+/** A pool reference is either the pool PDA or the token mint — resolve both to the pool. */
+async function resolvePool(ref: string): Promise<LaunchpadPool> {
+  try {
+    return await fetchPoolByAddress(ref);
+  } catch {
+    try {
+      return (await fetchPoolByMint(ref)).pool;
+    } catch {
+      throw new CookieMcpError(
+        `no launchpad pool found for "${ref}"`,
+        "pass the token mint or the pool address of a MomoSwap launch (get_launchpad_pools lists them)",
+      );
+    }
+  }
+}
+
+// --- cross-tool handoff -------------------------------------------------------------------------
+
+/**
+ * Explain why a mint has no swap route when the reason is the launchpad (pure — the caller supplies
+ * the pool). A live curve has no DEX pool at all, so aggregators legitimately find nothing; the agent
+ * needs to be sent to the launchpad tools instead of concluding the token is untradeable. Returns
+ * null for a graduated pool: that token DOES have a market, so a missing route is a real liquidity
+ * problem and the caller's own message is the honest one.
+ */
+export function launchpadRouteMessage(
+  pool: Pick<
+    LaunchpadPool,
+    | "pubkey"
+    | "symbol"
+    | "expiryMode"
+    | "launchTs"
+    | "endTs"
+    | "paymentRaisedNet"
+    | "graduationTarget"
+  > & { status: PoolPhase },
+): { error: string; hint: string } | null {
+  const sym = pool.symbol || "this token";
+  switch (pool.status) {
+    case "ended":
+      return {
+        error: `${sym} has no swap route: its MomoSwap launch window has closed and the pool has not been settled on-chain yet`,
+        hint:
+          pool.expiryMode === "fair"
+            ? "it never graduated, so there is no market; claim_launchpad settles the pool and pays a curve position its pro-rata refund"
+            : "it never graduated, so there is no market; once the pool is expired on-chain, claim_launchpad settles a curve position",
+      };
+    case "live":
+      return {
+        error: `${sym} has no swap route: it is still trading on its MomoSwap launchpad bonding curve, which DEX aggregators cannot route`,
+        hint:
+          `buy it with launchpad_buy and sell it with launchpad_sell (pool ${pool.pubkey}) — it becomes ` +
+          `swappable only after the launch graduates (${graduationProgressPct(pool.paymentRaisedNet, pool.graduationTarget)}% of the target raised)`,
+      };
+    case "upcoming":
+      return {
+        error: `${sym} is not tradeable yet: its MomoSwap launch opens at ${new Date(pool.launchTs * 1000).toISOString()}`,
+        hint: "check it with get_launchpad_token, then buy on the curve with launchpad_buy once it opens",
+      };
+    case "expired":
+      return {
+        error: `${sym} has no market: its MomoSwap launch expired without reaching the graduation target, so it never got a pool`,
+        hint:
+          pool.expiryMode === "fair"
+            ? "if you bought on the curve, claim_launchpad returns your pro-rata refund"
+            : pool.expiryMode === "dead"
+              ? "there is no market and no holder payout — unraised funds went to the treasury"
+              : "if you placed in the settlement, claim_launchpad pays out your Merkle allocation",
+      };
+    default:
+      return null;
+  }
+}
+
+/**
+ * A swap route lookup came back empty. If one of the mints is a launchpad token whose curve is still
+ * the only venue, return an error pointing at the launchpad tools; otherwise null so the caller keeps
+ * its own message. **Never throws** — a launchpad lookup must not replace a swap error with a
+ * lookup error.
+ */
+export async function launchpadRouteRedirect(mints: string[]): Promise<CookieMcpError | null> {
+  for (const mint of mints) {
+    if (!mint || mint === COOK_MINT) continue;
+    try {
+      const { pool } = await fetchPoolByMint(mint);
+      const msg = launchpadRouteMessage({ ...pool, status: poolPhase(pool, nowSeconds()) });
+      if (msg) return new CookieMcpError(msg.error, msg.hint);
+    } catch {
+      /* not a launchpad mint, or the launchpad API is unreachable — fall through */
+    }
+  }
+  return null;
+}
+
+/**
+ * The error the swap paths (`get_quote`, `trade`) should raise when no route exists: the launchpad
+ * redirect when that is the real reason, else the original upstream error, else the generic message.
+ * Lives here because only the launchpad can explain the interesting case.
+ */
+export async function noRouteError(mints: string[], upstream?: unknown): Promise<unknown> {
+  // Only second-guess route-shaped failures; a timeout or an outage must surface as itself.
+  const msg = upstream instanceof Error ? upstream.message : "";
+  const routeShaped = !upstream || /route|liquidity|pool/i.test(msg);
+  if (routeShaped) {
+    const redirect = await launchpadRouteRedirect(mints);
+    if (redirect) return redirect;
+  }
+  return (
+    upstream ??
+    new CookieMcpError(
+      "no route found for this pair",
+      "the pair may lack liquidity; try a smaller amount or a more liquid token",
+    )
+  );
+}
+
+/** The launch token's decimals, read from the mint (falls back to the launchpad default). */
+async function tokenDecimals(pool: LaunchpadPool, cfg: LaunchpadConfig): Promise<number> {
+  try {
+    return (await getMint(getConnection(), new PublicKey(pool.tokenMint))).decimals;
+  } catch {
+    return cfg.defaultTokenDecimals;
+  }
+}
+
+// --- reads ---------------------------------------------------------------------------------------
+
+export interface LaunchpadPoolView {
+  pool: string;
+  mint: string;
+  name: string;
+  symbol: string;
+  /** Derived phase, not the raw API status — see poolPhase (can be `ended`). */
+  status: PoolPhase;
+  expiryMode: ExpiryMode;
+  creator: string;
+  metadataUri: string;
+  priceCook: number;
+  raisedCook: string;
+  graduationTargetCook: string;
+  graduationProgressPct: number;
+  tokensSold: string;
+  saleSupply: string;
+  participants: number;
+  launchAt: string;
+  /** When trading closes. Past this, `status` reads `ended` until the pool is settled on-chain. */
+  endsAt: string;
+  antiSnipe: boolean;
+  minBuyCook: string;
+  maxBuyPerWalletCook: string | null;
+  links: { launchpad: string; token: string };
+}
+
+/**
+ * The pool's real phase, which is NOT always the API's `status`.
+ *
+ * On-chain, `buy`/`sell` require `now <= end_ts` and the claim paths require state `Expired`. A pool
+ * past `end_ts` but still on-chain `Open` is therefore neither tradeable nor claimable, and taking
+ * `status` at face value would have us advertise it as tradeable when every trade reverts, and tell
+ * holders to "sell to exit" when they cannot. `ended` names that window.
+ *
+ * The launchpad API now derives `ended` itself (momoswap-frontend #3), so on a current deployment this
+ * agrees with `status` rather than correcting it. It still has to be derived locally: the deployed API
+ * predates that release and reports the window as `live`, and the boundary is only knowable from
+ * `end_ts` anyway. Same alias either way — `PoolPhase` is `PoolStatus` now that `ended` is in it.
+ */
+export type PoolPhase = PoolStatus;
+
+export function poolPhase(
+  pool: Pick<LaunchpadPool, "status" | "endTs">,
+  nowSec: number,
+): PoolPhase {
+  return pool.status === "live" && nowSec > pool.endTs ? "ended" : pool.status;
+}
+
+const nowSeconds = (): number => Math.floor(Date.now() / 1000);
+
+/** Project a raw pool account into the agent-facing view (pure — all inputs are supplied). */
+export function mapPoolView(
+  pool: LaunchpadPool,
+  tokenDecs: number,
+  paymentDecs: number = COOK_DECIMALS,
+  nowSec: number = nowSeconds(),
+): LaunchpadPoolView {
+  return {
+    pool: pool.pubkey,
+    mint: pool.tokenMint,
+    name: pool.name,
+    symbol: pool.symbol,
+    status: poolPhase(pool, nowSec),
+    expiryMode: pool.expiryMode,
+    creator: pool.creator,
+    metadataUri: pool.uri,
+    priceCook: spotPriceCook(pool, paymentDecs, tokenDecs),
+    raisedCook: rawToUi(pool.paymentRaisedNet, paymentDecs),
+    graduationTargetCook: rawToUi(pool.graduationTarget, paymentDecs),
+    graduationProgressPct: graduationProgressPct(pool.paymentRaisedNet, pool.graduationTarget),
+    tokensSold: rawToUi(pool.tokensSold, tokenDecs),
+    saleSupply: rawToUi(pool.saleTokenSupply, tokenDecs),
+    participants: Number(pool.participantCount),
+    launchAt: new Date(pool.launchTs * 1000).toISOString(),
+    endsAt: new Date(pool.endTs * 1000).toISOString(),
+    antiSnipe: pool.antiSnipe,
+    minBuyCook: rawToUi(pool.minBuy, paymentDecs),
+    maxBuyPerWalletCook:
+      BigInt(pool.maxBuyPerWallet) > 0n ? rawToUi(pool.maxBuyPerWallet, paymentDecs) : null,
+    links: { launchpad: launchpadPoolUrl(pool.pubkey), token: launchpadTokenUrl(pool.tokenMint) },
+  };
+}
+
+export interface GetLaunchpadPoolsResult {
+  count: number;
+  status: PoolStatus | "all";
+  program: string;
+  pools: LaunchpadPoolView[];
+}
+
+export async function getLaunchpadPools(args: {
+  status?: PoolStatus | "all";
+  limit?: number;
+}): Promise<GetLaunchpadPoolsResult> {
+  const status = args.status ?? "live";
+  const [cfg, pools] = await Promise.all([fetchLaunchpadConfig(), fetchPools(status)]);
+  const limit = Math.min(Math.max(args.limit ?? 20, 1), 100);
+  // Most-progressed first — for live pools that's "closest to graduating".
+  const sorted = [...pools].sort(
+    (a, b) =>
+      graduationProgressPct(b.paymentRaisedNet, b.graduationTarget) -
+      graduationProgressPct(a.paymentRaisedNet, a.graduationTarget),
+  );
+  return {
+    count: pools.length,
+    status,
+    // Report the deployment these pools actually live on, not a build-time constant — the launchpad
+    // has been redeployed under a new id before. Falls back to the configured id if the read fails.
+    program: await resolvePoolsProgramId(sorted[0]?.pubkey),
+    pools: sorted.slice(0, limit).map((p) => mapPoolView(p, cfg.defaultTokenDecimals)),
+  };
+}
+
+/** The program owning `pool`, for reporting. Never throws — a read tool must not fail over a label. */
+async function resolvePoolsProgramId(pool: string | undefined): Promise<string> {
+  if (!pool) return PROGRAM_IDS.momoswapLaunchpad;
+  try {
+    const owners = await fetchPoolPrograms(getConnection(), [pool]);
+    return owners.get(pool)?.toBase58() ?? PROGRAM_IDS.momoswapLaunchpad;
+  } catch {
+    return PROGRAM_IDS.momoswapLaunchpad;
+  }
+}
+
+export interface PositionView {
+  owner: string;
+  shares: string;
+  investedCook: string;
+  withdrawnCook: string;
+  estimatedValueCook: string | null;
+  claimed: { refund: boolean; winnings: boolean; graduatedTokens: boolean };
+}
+
+// --- get_launchpad_positions ---------------------------------------------------------------------
+
+/** What the holder can do about a position right now, if anything. */
+export interface PositionAction {
+  tool: "launchpad_sell" | "claim_launchpad" | "claim_creator_fees";
+  kind: ClaimKind | "sell" | "creator_fees";
+  reason: string;
+}
+
+/**
+ * The action a position calls for (pure). Curve shares are not SPL tokens, so "do nothing" is rarely
+ * right: after graduation the tokens sit unclaimed, and a Fair expiry leaves a refund on the table.
+ * Returns null when the position is settled or there is genuinely nothing to collect.
+ */
+export function positionAction(
+  pool: { status: PoolPhase; expiryMode: ExpiryMode },
+  position: Pick<
+    LaunchpadPosition,
+    "shares" | "claimed" | "winnerClaimed" | "graduatedTokensClaimed"
+  >,
+): PositionAction | null {
+  const hasShares = BigInt(position.shares) > 0n;
+  // `ended` = trading closed but nobody has settled the pool on-chain yet. Selling always reverts (past
+  // end_ts), but a FAIR refund is actionable: `claim_fair` expires the pool itself. Every other mode has
+  // to wait for the expiry transition, so there is still nothing for its holders to do here.
+  if (pool.status === "ended") {
+    return hasShares && pool.expiryMode === "fair" && !position.claimed
+      ? {
+          tool: "claim_launchpad",
+          kind: "fair",
+          reason:
+            "the launch window closed in Fair mode — claiming settles the pool and pays your pro-rata refund",
+        }
+      : null;
+  }
+  if (pool.status === "graduated") {
+    if (hasShares && !position.graduatedTokensClaimed) {
+      return {
+        tool: "claim_launchpad",
+        kind: "graduated_tokens",
+        reason: "the pool graduated and your SPL tokens are still unclaimed",
+      };
+    }
+    return null;
+  }
+  if (pool.status === "live") {
+    return hasShares
+      ? {
+          tool: "launchpad_sell",
+          kind: "sell",
+          reason: "the curve is still live — you can sell these shares back to it",
+        }
+      : null;
+  }
+  if (pool.status !== "expired") return null;
+  if (!hasShares) return null;
+  if (pool.expiryMode === "fair" && !position.claimed) {
+    return {
+      tool: "claim_launchpad",
+      kind: "fair",
+      reason: "the launch expired in Fair mode — your pro-rata refund is unclaimed",
+    };
+  }
+  if (
+    (pool.expiryMode === "jackpot" || pool.expiryMode === "survivor") &&
+    !position.winnerClaimed
+  ) {
+    return {
+      tool: "claim_launchpad",
+      kind: "winner",
+      reason: `the launch expired in ${pool.expiryMode} mode — claim_launchpad checks whether you placed in the settlement`,
+    };
+  }
+  return null; // dead mode, or already claimed
+}
+
+/** Unclaimed creator vesting on a pool this wallet created (pure). */
+export function creatorVestOutstanding(
+  pool: Pick<LaunchpadPool, "creatorVestAmount" | "creatorVestClaimed">,
+): bigint {
+  const total = BigInt(pool.creatorVestAmount);
+  const claimed = BigInt(pool.creatorVestClaimed);
+  return total > claimed ? total - claimed : 0n;
+}
+
+export interface LaunchpadPositionEntry {
+  pool: string;
+  mint: string;
+  symbol: string;
+  status: PoolPhase;
+  expiryMode: ExpiryMode;
+  shares: string;
+  investedCook: string;
+  withdrawnCook: string;
+  /** What selling the remaining shares back to a LIVE curve would pay; null once it isn't live. */
+  estimatedValueCook: string | null;
+  action: PositionAction | null;
+  links: { launchpad: string; token: string };
+}
+
+export interface LaunchpadCreatorEntry {
+  pool: string;
+  mint: string;
+  symbol: string;
+  status: PoolPhase;
+  unclaimedFeesCook: string;
+  /** Creator vesting is denominated in the LAUNCH TOKEN, not COOK — hence the explicit name. */
+  unclaimedVestTokens: string | null;
+  actions: PositionAction[];
+}
+
+export interface GetLaunchpadPositionsResult {
+  owner: string;
+  poolsScanned: number;
+  positions: LaunchpadPositionEntry[];
+  created: LaunchpadCreatorEntry[];
+  totals: {
+    investedCook: string;
+    withdrawnCook: string;
+    liveValueCook: string;
+    unclaimedCreatorFeesCook: string;
+    actionsPending: number;
+  };
+  notes: string[];
+}
+
+/**
+ * Every launchpad position a wallet holds, plus anything it can claim — the view `get_balance` cannot
+ * give, because pre-graduation shares are program state rather than SPL tokens. Reads the
+ * `UserPosition` PDAs directly in batches (see positions.ts), so cost is ~1 RPC round trip per 100
+ * pools rather than one HTTP call each. No key needed when `owner` is passed.
+ */
+export async function getLaunchpadPositions(args: {
+  owner?: string;
+  includeClosed?: boolean;
+}): Promise<GetLaunchpadPositionsResult> {
+  const owner = args.owner?.trim() || ownPublicKey();
+  if (!owner) {
+    throw new CookieMcpError(
+      "no wallet to look up",
+      "pass `owner` (any address), or set COOKIE_PRIVATE_KEY to use your own",
+    );
+  }
+  try {
+    new PublicKey(owner);
+  } catch {
+    throw new CookieMcpError(`"${owner}" is not a valid address`, "pass a base58 wallet address");
+  }
+
+  const conn = getConnection();
+  const [cfg, pools] = await Promise.all([fetchLaunchpadConfig(), fetchPools("all")]);
+  const decs = cfg.defaultTokenDecimals;
+  const poolKeys = pools.map((p) => p.pubkey);
+  const created = pools.filter((p) => p.creator === owner);
+
+  // Read each pool's owning program first: PDA seeds are program-scoped, and pools created before a
+  // redeploy stay on the old program id forever, so a single hardcoded id would silently miss them.
+  const programs = await fetchPoolPrograms(conn, poolKeys);
+  const [positions, feeVaults] = await Promise.all([
+    fetchPositionsForPools(conn, owner, poolKeys, programs),
+    created.length
+      ? fetchCreatorFeeVaults(
+          conn,
+          created.map((p) => p.pubkey),
+          programs,
+        )
+      : new Map(),
+  ]);
+
+  let investedRaw = 0n;
+  let withdrawnRaw = 0n;
+  let liveValueRaw = 0n;
+  let actionsPending = 0;
+
+  const now = nowSeconds();
+  const entries: LaunchpadPositionEntry[] = [];
+  for (const pool of pools) {
+    const position = positions.get(pool.pubkey);
+    if (!position) continue;
+    const phase = poolPhase(pool, now);
+    const shares = BigInt(position.shares);
+    const action = positionAction({ status: phase, expiryMode: pool.expiryMode }, position);
+    if (shares === 0n && !action && !args.includeClosed) continue; // fully exited and settled
+
+    investedRaw += BigInt(position.totalPaymentIn);
+    withdrawnRaw += BigInt(position.totalPaymentOut);
+    let value: string | null = null;
+    if (phase === "live" && shares > 0n) {
+      const net = estimateSell(pool, shares, poolTradeFeeBps(pool, cfg)).netRaw;
+      liveValueRaw += net;
+      value = rawToUi(net, COOK_DECIMALS);
+    }
+    // A live curve's "sell" is an option, not an outstanding obligation — only claims count as pending.
+    if (action && action.tool === "claim_launchpad") actionsPending += 1;
+
+    entries.push({
+      pool: pool.pubkey,
+      mint: pool.tokenMint,
+      symbol: pool.symbol,
+      status: phase,
+      expiryMode: pool.expiryMode,
+      shares: rawToUi(position.shares, decs),
+      investedCook: rawToUi(position.totalPaymentIn, COOK_DECIMALS),
+      withdrawnCook: rawToUi(position.totalPaymentOut, COOK_DECIMALS),
+      estimatedValueCook: value,
+      action,
+      links: { launchpad: launchpadPoolUrl(pool.pubkey), token: launchpadTokenUrl(pool.tokenMint) },
+    });
+  }
+
+  let feesRaw = 0n;
+  const createdEntries: LaunchpadCreatorEntry[] = [];
+  for (const pool of created) {
+    const fees = (feeVaults as Map<string, bigint>).get(pool.pubkey) ?? 0n;
+    const vest = creatorVestOutstanding(pool);
+    if (fees === 0n && vest === 0n && !args.includeClosed) continue;
+    feesRaw += fees;
+    const actions: PositionAction[] = [];
+    if (fees > 0n) {
+      actions.push({
+        tool: "claim_creator_fees",
+        kind: "creator_fees",
+        reason: `${rawToUi(fees, COOK_DECIMALS)} ${COOK_SYMBOL} of creator trading fees is unclaimed`,
+      });
+    }
+    // Vesting is linear from graduation, so the claimable slice may be smaller than what is left.
+    if (vest > 0n && pool.status === "graduated") {
+      actions.push({
+        tool: "claim_launchpad",
+        kind: "creator_vest",
+        reason: `${rawToUi(vest, decs)} ${pool.symbol} of your creator allocation is still vesting/unclaimed — claim the vested portion with kind=creator_vest`,
+      });
+    }
+    actionsPending += actions.length;
+    createdEntries.push({
+      pool: pool.pubkey,
+      mint: pool.tokenMint,
+      symbol: pool.symbol,
+      status: poolPhase(pool, now),
+      unclaimedFeesCook: rawToUi(fees, COOK_DECIMALS),
+      unclaimedVestTokens: vest > 0n ? rawToUi(vest, decs) : null,
+      actions,
+    });
+  }
+
+  const notes: string[] = [];
+  if (entries.length) {
+    notes.push(
+      "Shares on a live curve are program state, not SPL tokens — they never appear in get_balance.",
+    );
+  }
+  if (actionsPending) {
+    notes.push(`${actionsPending} position(s) have something unclaimed — see each entry's action.`);
+  }
+  if (!entries.length && !createdEntries.length) {
+    notes.push(
+      args.includeClosed
+        ? "This wallet has never traded on the MomoSwap launchpad."
+        : "Nothing outstanding. Pass includeClosed=true to also list fully exited positions.",
+    );
+  }
+
+  return {
+    owner,
+    poolsScanned: pools.length,
+    positions: entries,
+    created: createdEntries,
+    totals: {
+      investedCook: rawToUi(investedRaw, COOK_DECIMALS),
+      withdrawnCook: rawToUi(withdrawnRaw, COOK_DECIMALS),
+      liveValueCook: rawToUi(liveValueRaw, COOK_DECIMALS),
+      unclaimedCreatorFeesCook: rawToUi(feesRaw, COOK_DECIMALS),
+      actionsPending,
+    },
+    notes,
+  };
+}
+
+export interface GetLaunchpadTokenResult extends LaunchpadPoolView {
+  fees: { tradePct: number; creatorSharePct: number; referralSharePct: number };
+  quote: { cookIn: string; tokensOut: string } | null;
+  position: PositionView | null;
+  pendingCreatorFeesCook: number | null;
+  notes: string[];
+}
+
+/** Identity + curve price for a launchpad mint, for callers that only need to describe the token. */
+export interface LaunchpadTokenIdentity {
+  pool: string;
+  status: PoolPhase;
+  note: string;
+  name: string;
+  symbol: string;
+  decimals: number;
+  metadataUri: string;
+  /** Curve spot price in COOK. The curve IS this token's only market pre-graduation. */
+  priceCook: number;
+}
+
+/**
+ * Describe a mint purely from its launchpad pool, for `get_token_info` to fall back on when the
+ * Cookiescan registry has never heard of it. **Every launch is in exactly that state for a while**, so
+ * this is the normal path for a fresh token, not an edge case.
+ * Returns null when the mint is not a launchpad token (or the launchpad API is unreachable).
+ */
+export async function launchpadTokenIdentity(mint: string): Promise<LaunchpadTokenIdentity | null> {
+  try {
+    const [cfg, { pool }] = await Promise.all([fetchLaunchpadConfig(), fetchPoolByMint(mint)]);
+    const decimals = await tokenDecimals(pool, cfg);
+    const status = poolPhase(pool, nowSeconds());
+    const msg = launchpadRouteMessage({ ...pool, status });
+    return {
+      pool: pool.pubkey,
+      status,
+      // Every phase has a route message except a graduated pool, which trades normally and so needs no
+      // explanation beyond "it came from the launchpad".
+      note: msg?.hint ?? "this token launched on the MomoSwap launchpad and has graduated",
+      name: pool.name,
+      symbol: pool.symbol,
+      decimals,
+      metadataUri: pool.uri,
+      priceCook: spotPriceCook(pool, COOK_DECIMALS, decimals),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function getLaunchpadToken(args: {
+  ref: string;
+  quoteCook?: string | number;
+}): Promise<GetLaunchpadTokenResult> {
+  const [cfg, pool] = await Promise.all([fetchLaunchpadConfig(), resolvePool(args.ref)]);
+  const decs = await tokenDecimals(pool, cfg);
+  const owner = ownPublicKey();
+
+  const [position, pendingCreatorFees] = await Promise.all([
+    owner ? fetchPosition(pool.pubkey, owner).catch(() => null) : Promise.resolve(null),
+    owner && owner === pool.creator
+      ? fetchPendingCreatorFees(pool.pubkey).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+
+  const view = mapPoolView(pool, decs);
+  const phase = poolPhase(pool, nowSeconds());
+  const tradeable = phase === "live";
+
+  let quote: { cookIn: string; tokensOut: string } | null = null;
+  // Quote from the curve for pools that still have one — including a launch that hasn't opened yet.
+  if (args.quoteCook != null && (tradeable || phase === "upcoming")) {
+    const cookIn = uiToRaw(args.quoteCook, COOK_DECIMALS);
+    const est = estimateBuy(pool, cookIn, poolTradeFeeBps(pool, cfg));
+    quote = {
+      cookIn: rawToUi(cookIn, COOK_DECIMALS),
+      tokensOut: rawToUi(est.tokensOutRaw, decs),
+    };
+  }
+
+  const notes: string[] = [];
+  if (phase === "live") {
+    notes.push(
+      "Pre-graduation holdings are program-tracked curve shares, not SPL tokens: they do not appear " +
+        "in get_balance and cannot be swapped with trade. Use launchpad_sell to exit.",
+    );
+  }
+  if (phase === "graduated") {
+    notes.push(
+      "This pool graduated — curve buyers claim their real SPL tokens with claim_launchpad, then " +
+        "trade them normally with trade/get_quote.",
+    );
+  }
+  if (phase === "ended") {
+    notes.push(
+      "The launch window has closed but the pool is not settled on-chain yet: trading is over and " +
+        (pool.expiryMode === "fair"
+          ? "a curve holder can claim their pro-rata refund with claim_launchpad, which settles the pool as part of the claim."
+          : pool.expiryMode === "dead"
+            ? 'this is a "dead" expiry — unraised funds go to the treasury, so there is nothing to claim.'
+            : `a ${pool.expiryMode} payout needs the pool expired and its settlement root published first.`),
+    );
+  }
+  if (phase === "expired") {
+    notes.push(
+      `This launch expired without graduating; settlement mode is "${pool.expiryMode}"` +
+        (pool.expiryMode === "fair"
+          ? " — curve buyers can claim a pro-rata refund with claim_launchpad."
+          : pool.expiryMode === "dead"
+            ? " — unraised funds are swept to the treasury; there is nothing to claim."
+            : " — winners claim their Merkle payout with claim_launchpad once the root is set."),
+    );
+  }
+
+  return {
+    ...view,
+    // This pool's own snapshotted schedule, not the global one — see ./fees.
+    fees: {
+      tradePct: poolTradeFeeBps(pool, cfg) / 100,
+      creatorSharePct: poolFeeShareBps(pool, cfg, "creator") / 100,
+      referralSharePct: poolFeeShareBps(pool, cfg, "referral") / 100,
+    },
+    quote,
+    position: position
+      ? {
+          owner: position.owner,
+          shares: rawToUi(position.shares, decs),
+          investedCook: rawToUi(position.totalPaymentIn, COOK_DECIMALS),
+          withdrawnCook: rawToUi(position.totalPaymentOut, COOK_DECIMALS),
+          estimatedValueCook:
+            tradeable && BigInt(position.shares) > 0n
+              ? rawToUi(
+                  estimateSell(pool, BigInt(position.shares), poolTradeFeeBps(pool, cfg)).netRaw,
+                  COOK_DECIMALS,
+                )
+              : null,
+          claimed: {
+            refund: position.claimed,
+            winnings: position.winnerClaimed,
+            graduatedTokens: position.graduatedTokensClaimed,
+          },
+        }
+      : null,
+    pendingCreatorFeesCook: pendingCreatorFees,
+    notes,
+  };
+}
+
+// --- deploy_token -------------------------------------------------------------------------------
+
+export interface DeployTokenArgs {
+  name: string;
+  symbol: string;
+  description?: string;
+  imageBase64?: string;
+  imageMimeType?: string;
+  imageUrl?: string;
+  website?: string;
+  twitter?: string;
+  telegram?: string;
+  durationSecs?: number;
+  expiryMode?: ExpiryMode;
+  antiSnipe?: boolean;
+  minBuyCook?: string | number;
+  maxBuyPerWalletCook?: string | number;
+  devBuyCook?: string | number;
+  /** Deliberately launch with no logo. Required to bypass `assertLogoDecision`. */
+  noLogo?: boolean;
+}
+
+/**
+ * Refuse a launch that has no logo unless the caller says it means it (pure).
+ *
+ * A prose "ALWAYS give the token a logo" in the tool description does not work — it competes with a
+ * dozen optional params, and the only consequence used to arrive as a `warning` on the RESULT, i.e.
+ * after mint + freeze authority are renounced and the metadata is immutable. A logo cannot be added
+ * later, so the check has to happen while the launch can still be stopped. Opting out is one flag.
+ */
+export function assertLogoDecision(
+  args: Pick<DeployTokenArgs, "imageBase64" | "imageUrl" | "noLogo">,
+): void {
+  if (args.imageBase64?.trim() || args.imageUrl?.trim() || args.noLogo) return;
+  throw new CookieMcpError(
+    "this launch has no logo, and a launch is irreversible",
+    "pass imageBase64 (preferred — attach an image you generated, with imageMimeType) or imageUrl; " +
+      "the launchpad pins it to IPFS. The metadata is immutable, so a logo can never be added later " +
+      "and most launchpad UIs will show a blank image. Set noLogo: true to launch anyway.",
+  );
+}
+
+/** Assemble the off-chain metadata JSON the launchpad pins to IPFS (pure). */
+export function buildMetadata(args: DeployTokenArgs, imageUrl?: string): LaunchpadMetadata {
+  const extensions: Record<string, string> = {};
+  if (args.website?.trim()) extensions.website = args.website.trim();
+  if (args.twitter?.trim()) {
+    const h = args.twitter.trim().replace(/^@/, "");
+    extensions.twitter = /^https?:\/\//i.test(h) ? h : `https://x.com/${h}`;
+  }
+  if (args.telegram?.trim()) {
+    const h = args.telegram.trim().replace(/^@/, "");
+    extensions.telegram = /^https?:\/\//i.test(h) ? h : `https://t.me/${h}`;
+  }
+  return {
+    name: args.name.trim(),
+    symbol: args.symbol.trim().toUpperCase(),
+    ...(args.description?.trim() ? { description: args.description.trim() } : {}),
+    ...(imageUrl ? { image: imageUrl } : {}),
+    ...(Object.keys(extensions).length ? { extensions } : {}),
+  };
+}
+
+/** Validate + assemble on-chain `PoolParams` (pure). `launchTs` 0 lets the API stamp "now". */
+export function buildCreateParams(args: DeployTokenArgs, launchTs = 0): CreatePoolParams {
+  const name = args.name?.trim() ?? "";
+  const symbol = args.symbol?.trim().toUpperCase() ?? "";
+  if (!name || name.length > MAX_NAME_LEN) {
+    throw new CookieMcpError(
+      `name must be 1–${MAX_NAME_LEN} characters`,
+      "shorten the token name (the full name lives in the metadata too)",
+    );
+  }
+  if (!symbol || symbol.length > MAX_SYMBOL_LEN) {
+    throw new CookieMcpError(
+      `symbol must be 1–${MAX_SYMBOL_LEN} characters`,
+      "use a short ticker, e.g. MOMO",
+    );
+  }
+  const durationSecs = args.durationSecs ?? DEFAULT_DURATION_SECS;
+  if (!Number.isFinite(durationSecs) || durationSecs < MIN_DURATION_SECS) {
+    throw new CookieMcpError(
+      `durationSecs must be at least ${MIN_DURATION_SECS}`,
+      "this is how long the launch stays open to reach the graduation target",
+    );
+  }
+  if (durationSecs > MAX_DURATION_SECS) {
+    throw new CookieMcpError(
+      `durationSecs must be at most ${MAX_DURATION_SECS} (7 days)`,
+      "pick a shorter launch window",
+    );
+  }
+  const expiryMode = args.expiryMode ?? "fair";
+  return {
+    name,
+    symbol,
+    launch_ts: launchTs,
+    duration_secs: Math.floor(durationSecs),
+    expiry_mode: expiryMode,
+    migratable: true,
+    anti_snipe: args.antiSnipe ?? true,
+    min_buy: (args.minBuyCook != null ? uiToRaw(args.minBuyCook, COOK_DECIMALS) : 0n).toString(),
+    max_buy_per_wallet: (args.maxBuyPerWalletCook != null
+      ? uiToRaw(args.maxBuyPerWalletCook, COOK_DECIMALS)
+      : 0n
+    ).toString(),
+    // The program rejects a per-pool raise cap below the graduation target, and a cap is never
+    // what an agent wants here — leave the raise uncapped.
+    max_payment_raise: "0",
+  };
+}
+
+export interface DeployTokenResult {
+  signature: string;
+  explorerUrl: string;
+  mint: string;
+  pool: string | null;
+  name: string;
+  symbol: string;
+  metadataUri: string | null;
+  costCook: { creationFee: string; devBuy: string; total: string };
+  launch: { opensAt: string; endsAt: string | null; expiryMode: ExpiryMode; antiSnipe: boolean };
+  graduationTargetCook: string;
+  links: { launchpad: string | null; token: string };
+  warning?: string;
+  notes: string[];
+}
+
+/**
+ * Launch a token on the MomoSwap bonding curve. The API pins the metadata, leases a `momo`-suffixed
+ * mint (required on-chain) and partial-signs the mint/vault keypairs; we simulate, sign and send.
+ * Costs the launchpad's creation fee (read live from `/config`) plus rent and any dev buy.
+ */
+export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenResult> {
+  const { keypair } = requireWallet();
+  const creator = keypair.publicKey.toBase58();
+
+  if (args.imageBase64 && args.imageUrl) {
+    throw new CookieMcpError(
+      "pass either imageBase64 or imageUrl, not both",
+      "imageBase64 is preferred when you generated the image yourself",
+    );
+  }
+  if (args.imageBase64 && !args.imageMimeType) {
+    throw new CookieMcpError(
+      "imageMimeType is required with imageBase64",
+      'e.g. "image/png" or "image/jpeg"',
+    );
+  }
+  // Before any network call or spend: a logo is unfixable after the fact.
+  assertLogoDecision(args);
+
+  const cfg = await fetchLaunchpadConfig();
+  if (cfg.paused) {
+    throw new CookieMcpError(
+      "the launchpad is paused — new launches are disabled",
+      "retry later; existing pools can still be traded",
+    );
+  }
+  if (cfg.momoReady !== undefined && cfg.momoReady <= 0) {
+    throw new CookieMcpError(
+      "the launchpad has no pre-ground `momo` mint available right now",
+      "every launch mint must end in `momo`; retry in a few minutes while the grinder refills",
+    );
+  }
+
+  const params = buildCreateParams(args);
+  const creationFeeCook = Number(rawToUi(cfg.creationFeeLamports, COOK_DECIMALS));
+  const devBuyRaw = args.devBuyCook != null ? uiToRaw(args.devBuyCook, COOK_DECIMALS) : 0n;
+  const devBuyCook = Number(rawToUi(devBuyRaw, COOK_DECIMALS));
+  // The cap covers what actually leaves the wallet: the creation fee plus any dev buy. On a zero-fee
+  // deployment with no dev buy that total is 0 — nothing to cap, and asserting on it would reject the
+  // launch with a bogus "amount must be greater than 0" (rent still applies, but rent is not a trade).
+  const capitalAtRisk = creationFeeCook + devBuyCook;
+  if (capitalAtRisk > 0) assertWithinSpendCap(capitalAtRisk, 1);
+
+  // Pin the logo first and reference its URL from the metadata JSON (never inline the base64 blob).
+  let imageUrl = args.imageUrl?.trim() || undefined;
+  if (args.imageBase64) {
+    imageUrl = await uploadImage(args.imageBase64, args.imageMimeType!);
+  }
+  const metadata = buildMetadata(args, imageUrl);
+
+  const built = await buildCreatePoolTx({
+    creator,
+    params,
+    metadata,
+    ...(devBuyRaw > 0n ? { devBuyCook: devBuyRaw.toString() } : {}),
+  });
+  const signature = await submitBuilt(built, keypair, "launch");
+
+  const mint = built.mint ?? null;
+  // The pool PDA is keyed by a random pool_id the API picked, so read it back by mint.
+  let pool: LaunchpadPool | null = null;
+  if (mint) {
+    pool = await fetchPoolByMint(mint)
+      .then((r) => r.pool)
+      .catch(() => null);
+  }
+  if (!mint) {
+    throw new CookieMcpError(
+      "the launch was sent but the launchpad did not report the token mint",
+      `the transaction ${signature} confirmed — check ${explorerTxUrl(signature)} for the new mint`,
+    );
+  }
+
+  const notes = [
+    "Buyers hold program-tracked curve shares until the pool graduates; the SPL token is claimed " +
+      "after graduation (claim_launchpad).",
+  ];
+  if (devBuyRaw > 0n) {
+    notes.push("The dev buy was bundled into the same transaction, so it is the first trade.");
+  }
+
+  return {
+    signature,
+    explorerUrl: explorerTxUrl(signature),
+    mint,
+    pool: pool?.pubkey ?? null,
+    name: params.name,
+    symbol: params.symbol,
+    metadataUri: pool?.uri ?? null,
+    costCook: {
+      creationFee: rawToUi(cfg.creationFeeLamports, COOK_DECIMALS),
+      devBuy: rawToUi(devBuyRaw, COOK_DECIMALS),
+      total: rawToUi(BigInt(cfg.creationFeeLamports) + devBuyRaw, COOK_DECIMALS),
+    },
+    launch: {
+      opensAt: new Date((pool?.launchTs ?? Math.floor(Date.now() / 1000)) * 1000).toISOString(),
+      endsAt: pool ? new Date(pool.endTs * 1000).toISOString() : null,
+      expiryMode: params.expiry_mode,
+      antiSnipe: params.anti_snipe,
+    },
+    graduationTargetCook: rawToUi(pool?.graduationTarget ?? cfg.graduationTarget, COOK_DECIMALS),
+    links: {
+      launchpad: pool ? launchpadPoolUrl(pool.pubkey) : null,
+      token: launchpadTokenUrl(mint),
+    },
+    // Only reachable via noLogo: true now, so state it as the settled consequence rather than a
+    // reproach — assertLogoDecision already gave the caller the chance to change its mind.
+    ...(imageUrl
+      ? {}
+      : {
+          warning:
+            "launched with noLogo — most launchpad UIs will show a blank image, and the metadata is " +
+            "immutable so this cannot be changed",
+        }),
+    notes,
+  };
+}
+
+// --- curve trading ------------------------------------------------------------------------------
+
+/** Guard that a pool is currently tradeable, with a status-specific hint. */
+function assertTradeable(pool: LaunchpadPool, action: string): void {
+  const phase = poolPhase(pool, nowSeconds());
+  if (phase === "live") return;
+  const hint =
+    phase === "upcoming"
+      ? `trading opens at ${new Date(pool.launchTs * 1000).toISOString()}`
+      : phase === "graduated"
+        ? "the pool graduated — the token trades on the open market now (use get_quote / trade)"
+        : phase === "ended"
+          ? // On-chain the pool is still `Open`, so buy/sell revert on `now > end_ts` while the claim
+            // paths revert on the state — there is nothing to do until someone calls expire_pool.
+            `the launch window closed at ${new Date(pool.endTs * 1000).toISOString()} and the pool has not been settled on-chain yet — claims open once it is expired`
+          : "the launch expired — use claim_launchpad to settle your position";
+  throw new CookieMcpError(`cannot ${action}: the pool is ${phase}`, hint);
+}
+
+export interface LaunchpadBuyResult {
+  signature: string;
+  explorerUrl: string;
+  pool: string;
+  mint: string;
+  symbol: string;
+  spent: { amount: string; symbol: string };
+  received: { estimate: string; symbol: string; kind: "curve shares" };
+  tradeFee: { amount: string; symbol: string; pct: number };
+  priceCookPerToken: number;
+  graduationProgressPct: number;
+  links: { token: string };
+  note: string;
+}
+
+/** Buy on the bonding curve with COOK. The API wraps the COOK and creates any missing accounts. */
+export async function launchpadBuy(args: {
+  ref: string;
+  amountCook: string | number;
+  referrer?: string;
+}): Promise<LaunchpadBuyResult> {
+  const { keypair } = requireWallet();
+  const buyer = keypair.publicKey.toBase58();
+
+  assertWithinSpendCap(Number(args.amountCook), 1); // input is COOK, valued 1:1
+  let paymentRaw: bigint;
+  try {
+    paymentRaw = uiToRaw(args.amountCook, COOK_DECIMALS);
+  } catch {
+    throw new CookieMcpError(
+      `invalid amountCook "${args.amountCook}"`,
+      "pass a positive COOK amount, e.g. 5",
+    );
+  }
+  if (paymentRaw <= 0n) {
+    throw new CookieMcpError("amountCook must be greater than 0", "pass a positive COOK amount");
+  }
+  if (args.referrer && args.referrer === buyer) {
+    throw new CookieMcpError(
+      "self-referral is not allowed",
+      "omit referrer, or pass another wallet's address",
+    );
+  }
+
+  const [cfg, pool] = await Promise.all([fetchLaunchpadConfig(), resolvePool(args.ref)]);
+  assertTradeable(pool, "buy");
+  if (BigInt(pool.minBuy) > 0n && paymentRaw < BigInt(pool.minBuy)) {
+    throw new CookieMcpError(
+      `this pool has a minimum buy of ${rawToUi(pool.minBuy, COOK_DECIMALS)} ${COOK_SYMBOL}`,
+      "increase the amount",
+    );
+  }
+
+  const decs = await tokenDecimals(pool, cfg);
+  const feeBps = poolTradeFeeBps(pool, cfg);
+  const est = estimateBuy(pool, paymentRaw, feeBps);
+
+  const built = await buildBuyTx({
+    buyer,
+    pool: pool.pubkey,
+    paymentAmount: paymentRaw.toString(),
+    referrer: args.referrer ?? null,
+  });
+  const signature = await submitBuilt(built, keypair, "buy");
+
+  // Post-trade curve state, so the reported price/progress reflect this buy.
+  const after = {
+    ...pool,
+    paymentRaisedNet: (BigInt(pool.paymentRaisedNet) + est.netRaw).toString(),
+    tokensSold: (BigInt(pool.tokensSold) + est.tokensOutRaw).toString(),
+  };
+
+  return {
+    signature,
+    explorerUrl: explorerTxUrl(signature),
+    pool: pool.pubkey,
+    mint: pool.tokenMint,
+    symbol: pool.symbol,
+    spent: { amount: rawToUi(paymentRaw, COOK_DECIMALS), symbol: COOK_SYMBOL },
+    received: {
+      estimate: rawToUi(est.tokensOutRaw, decs),
+      symbol: pool.symbol,
+      kind: "curve shares",
+    },
+    tradeFee: {
+      amount: rawToUi(est.feeRaw, COOK_DECIMALS),
+      symbol: COOK_SYMBOL,
+      pct: feeBps / 100,
+    },
+    priceCookPerToken: spotPriceCook(after, COOK_DECIMALS, decs),
+    graduationProgressPct: graduationProgressPct(after.paymentRaisedNet, pool.graduationTarget),
+    links: { token: launchpadTokenUrl(pool.tokenMint) },
+    note:
+      "These are program-tracked curve shares, not SPL tokens — they will not show in get_balance. " +
+      "Sell them back to the curve with launchpad_sell, or claim the real token after graduation.",
+  };
+}
+
+export interface LaunchpadSellResult {
+  signature: string;
+  explorerUrl: string;
+  pool: string;
+  mint: string;
+  symbol: string;
+  sold: { shares: string; symbol: string };
+  received: { estimate: string; symbol: string };
+  tradeFee: { amount: string; symbol: string; pct: number };
+  remainingShares: string;
+  links: { token: string };
+}
+
+/** Sell curve shares back to the bonding curve for COOK (unwrapped to native COOK by default). */
+export async function launchpadSell(args: {
+  ref: string;
+  shares: string | number;
+  unwrap?: boolean;
+}): Promise<LaunchpadSellResult> {
+  const { keypair } = requireWallet();
+  const seller = keypair.publicKey.toBase58();
+
+  const [cfg, pool] = await Promise.all([fetchLaunchpadConfig(), resolvePool(args.ref)]);
+  assertTradeable(pool, "sell");
+  const decs = await tokenDecimals(pool, cfg);
+
+  let sharesRaw: bigint;
+  try {
+    sharesRaw = uiToRaw(args.shares, decs);
+  } catch {
+    throw new CookieMcpError(
+      `invalid shares "${args.shares}"`,
+      `pass a positive token amount with at most ${decs} decimals`,
+    );
+  }
+  if (sharesRaw <= 0n) {
+    throw new CookieMcpError("shares must be greater than 0", "pass a positive token amount");
+  }
+
+  const position = await fetchPosition(pool.pubkey, seller);
+  if (!position || BigInt(position.shares) <= 0n) {
+    throw new CookieMcpError(
+      "you have no curve position on this pool",
+      "launchpad_sell only sells shares bought on the bonding curve with launchpad_buy",
+    );
+  }
+  if (sharesRaw > BigInt(position.shares)) {
+    throw new CookieMcpError(
+      `you hold ${rawToUi(position.shares, decs)} ${pool.symbol} shares, less than the ${rawToUi(sharesRaw, decs)} requested`,
+      "lower the amount",
+    );
+  }
+
+  const feeBps = poolTradeFeeBps(pool, cfg);
+  const est = estimateSell(pool, sharesRaw, feeBps);
+  // Value the sale in COOK for the spend cap (proceeds are what moves). A dust sell can estimate to 0,
+  // which is not a cap violation — let the program reject it as ZeroOutput instead of misreporting it.
+  const proceedsCook = Number(rawToUi(est.netRaw, COOK_DECIMALS));
+  if (proceedsCook > 0) assertWithinSpendCap(proceedsCook, 1);
+
+  const built = await buildSellTx({
+    seller,
+    pool: pool.pubkey,
+    tokenShares: sharesRaw.toString(),
+    unwrap: args.unwrap ?? true,
+  });
+  const signature = await submitBuilt(built, keypair, "sell");
+
+  return {
+    signature,
+    explorerUrl: explorerTxUrl(signature),
+    pool: pool.pubkey,
+    mint: pool.tokenMint,
+    symbol: pool.symbol,
+    sold: { shares: rawToUi(sharesRaw, decs), symbol: pool.symbol },
+    received: { estimate: rawToUi(est.netRaw, COOK_DECIMALS), symbol: COOK_SYMBOL },
+    tradeFee: {
+      amount: rawToUi(est.feeRaw, COOK_DECIMALS),
+      symbol: COOK_SYMBOL,
+      pct: feeBps / 100,
+    },
+    remainingShares: rawToUi(BigInt(position.shares) - sharesRaw, decs),
+    links: { token: launchpadTokenUrl(pool.tokenMint) },
+  };
+}
+
+// --- claims -------------------------------------------------------------------------------------
+
+/**
+ * Pick the claim a pool's state calls for (pure):
+ * graduated → the real SPL token; expired+fair → pro-rata refund; expired+jackpot/survivor → the
+ * Merkle payout. `creator_vest` is never auto-selected — it is the creator's own vesting claim.
+ */
+export function resolveClaimKind(pool: {
+  status: PoolPhase;
+  expiryMode: ExpiryMode;
+}): ClaimKind | null {
+  if (pool.status === "graduated") return "graduated_tokens";
+  // `ended` = past end_ts but not yet `Expired` on-chain. `claim_fair` expires the pool itself in that
+  // window (audit #2's lazy_expire, lib.rs:566), so a Fair refund is reachable BEFORE settlement — and
+  // Fair only: `claim_winner` needs a settlement root, which `set_settlement_root` will only write on an
+  // already-`Expired` pool, and Dead has no holder payout at all. On a deployment without lazy_expire the
+  // program reverts 6011, which surfaces at simulation before anything is signed — see claimLaunchpad.
+  if (pool.status === "ended") return pool.expiryMode === "fair" ? "fair" : null;
+  if (pool.status !== "expired") return null;
+  if (pool.expiryMode === "fair") return "fair";
+  if (pool.expiryMode === "jackpot" || pool.expiryMode === "survivor") return "winner";
+  return null; // dead → unraised funds went to the treasury, nothing to claim
+}
+
+/**
+ * What a Fair-mode refund pays out, in raw payment units: the program's own formula,
+ * `mul_div(expiry_liquidity, shares, total_expiry_shares)` (`claim_fair`, lib.rs:579) applied to the
+ * snapshot the pool froze when it expired. Floor division, matching `mul_div`.
+ *
+ * Pure so it can be tested: returns null when there is nothing to compute from — an unexpired pool has
+ * a zeroed snapshot, and the program itself rejects a zero claim (`NothingToClaim`).
+ */
+export function fairRefundRaw(
+  pool: { expiryLiquidity: string; totalExpiryShares: string },
+  sharesRaw: bigint,
+): bigint | null {
+  let liquidity: bigint;
+  let totalShares: bigint;
+  try {
+    liquidity = BigInt(pool.expiryLiquidity);
+    totalShares = BigInt(pool.totalExpiryShares);
+  } catch {
+    return null;
+  }
+  if (sharesRaw <= 0n || totalShares <= 0n || liquidity <= 0n) return null;
+  if (sharesRaw > totalShares) return null; // a share of more than the whole snapshot is nonsense
+  const refund = (liquidity * sharesRaw) / totalShares;
+  return refund > 0n ? refund : null;
+}
+
+/**
+ * The snapshot a Fair refund is divided out of (pure).
+ *
+ * An `Expired` pool carries it already. A pool still in the `ended` window has `expiry_liquidity` and
+ * `total_expiry_shares` at ZERO — the program only writes them at the expiry transition — so estimating
+ * from the pool alone yields nothing exactly when `claim_fair` is about to do the transition itself.
+ * `lazy_expire` (lib.rs:2177) sets `expiry_liquidity = payment_vault.amount` and `total_expiry_shares =
+ * total_active_shares`, so the pre-image is knowable: pass the vault balance read BEFORE the claim, since
+ * the claim drains it. Null when it could not be read — the estimate is best-effort, never load-bearing.
+ */
+export function fairClaimSnapshot(
+  pool: {
+    status: PoolPhase;
+    expiryLiquidity: string;
+    totalExpiryShares: string;
+    totalActiveShares: string;
+  },
+  vaultAmountRaw: bigint | null,
+): { expiryLiquidity: string; totalExpiryShares: string } | null {
+  if (pool.status !== "ended") return pool;
+  if (vaultAmountRaw == null || vaultAmountRaw <= 0n) return null;
+  return {
+    expiryLiquidity: vaultAmountRaw.toString(),
+    totalExpiryShares: pool.totalActiveShares,
+  };
+}
+
+export interface ClaimLaunchpadResult {
+  signature: string;
+  explorerUrl: string;
+  pool: string;
+  mint: string;
+  symbol: string;
+  kind: ClaimKind;
+  claimed: { estimate: string; symbol: string } | null;
+  links: { token: string };
+  note?: string;
+}
+
+/**
+ * Claim what a launch owes you: the SPL token after graduation, a Fair-mode refund, a
+ * Jackpot/Survivor Merkle payout, or (creators) the vested creator allocation.
+ */
+export async function claimLaunchpad(args: {
+  ref: string;
+  kind?: ClaimKind | "auto";
+}): Promise<ClaimLaunchpadResult> {
+  const { keypair } = requireWallet();
+  const claimant = keypair.publicKey.toBase58();
+
+  const [cfg, pool] = await Promise.all([fetchLaunchpadConfig(), resolvePool(args.ref)]);
+  const decs = await tokenDecimals(pool, cfg);
+
+  const phase = poolPhase(pool, nowSeconds());
+  const requested = args.kind && args.kind !== "auto" ? args.kind : null;
+  const kind = requested ?? resolveClaimKind({ status: phase, expiryMode: pool.expiryMode });
+  if (!kind) {
+    throw new CookieMcpError(
+      `there is nothing to claim on this pool (status ${phase}${
+        phase === "expired" ? `, ${pool.expiryMode} mode` : ""
+      })`,
+      phase === "live"
+        ? "claims open after the pool graduates or expires; sell on the curve to exit now"
+        : phase === "ended"
+          ? // Trading is closed but the pool is still `Open` on-chain. A Fair refund no longer lands here
+            // (claim_fair expires the pool itself), so this is a Dead / Jackpot / Survivor pool, and
+            // neither of those can be claimed until the pool is actually `Expired`.
+            pool.expiryMode === "dead"
+            ? `the launch window closed at ${new Date(pool.endTs * 1000).toISOString()} and this is a Dead-mode expiry — unraised funds are swept to the treasury, so there is no holder payout at any point`
+            : `the launch window closed at ${new Date(pool.endTs * 1000).toISOString()} but the pool is not settled on-chain yet — a ${pool.expiryMode} payout needs the pool expired and its settlement root published. Expiry is permissionless and normally happens within seconds; re-read the pool shortly`
+          : phase === "upcoming"
+            ? "the launch has not opened yet — there is nothing to claim"
+            : "Dead-mode expiries sweep unraised funds to the treasury — there is no holder payout",
+    );
+  }
+
+  // The API pre-validates fair/winner/graduated_tokens against the position, but not creator_vest —
+  // that one only fails at the program's `has_one = creator` constraint, which reads as a raw anchor
+  // error. Check it here so a non-creator (or a pool with no vest) gets a real explanation.
+  if (kind === "creator_vest") {
+    if (pool.creator !== claimant) {
+      throw new CookieMcpError(
+        "only the launch's creator can claim the creator vest",
+        `the pool's creator is ${pool.creator}`,
+      );
+    }
+    if (BigInt(pool.creatorVestAmount) <= 0n) {
+      throw new CookieMcpError(
+        "this pool has no creator vest to claim",
+        "the creator allocation is only set aside at graduation — this pool has not graduated",
+      );
+    }
+    if (BigInt(pool.creatorVestClaimed) >= BigInt(pool.creatorVestAmount)) {
+      throw new CookieMcpError(
+        "the whole creator vest has already been claimed",
+        `${rawToUi(pool.creatorVestAmount, decs)} ${pool.symbol} was vested and fully claimed`,
+      );
+    }
+  }
+
+  let amount: string | undefined;
+  let proof: number[][] | undefined;
+  if (kind === "winner") {
+    const win = await fetchWinnerProof(pool.pubkey, claimant);
+    if (!win) {
+      throw new CookieMcpError(
+        "this wallet has no winning allocation in the pool's settlement",
+        `${pool.expiryMode} mode pays out only the top wallets, and only once the settlement root is set`,
+      );
+    }
+    amount = win.amount;
+    proof = win.proof;
+  }
+
+  // A Fair refund has to be measured BEFORE the claim lands: `claim_fair` sets `user.shares = 0`
+  // (lib.rs:585), so reading the position afterwards always yields 0. `claim_graduated_tokens` leaves
+  // shares in place, which is why that branch can read them after.
+  // Same reason the payment vault has to be read first when the pool is not yet settled: the claim both
+  // snapshots it and pays out of it, so afterwards it no longer describes what the refund was divided by.
+  const [sharesBefore, vaultBefore] = await Promise.all([
+    kind === "fair"
+      ? fetchPosition(pool.pubkey, claimant)
+          .then((p) => (p ? BigInt(p.shares) : null))
+          .catch(() => null)
+      : Promise.resolve(null),
+    kind === "fair" && phase === "ended"
+      ? getConnection()
+          .getAccountInfo(new PublicKey(pool.paymentVault))
+          .then((info) => decodeTokenAmount(info?.data))
+          .catch(() => null)
+      : Promise.resolve(null),
+  ]);
+
+  const built = await buildClaimTx({
+    kind,
+    claimant,
+    pool: pool.pubkey,
+    ...(amount ? { amount } : {}),
+    ...(proof ? { proof } : {}),
+  });
+  // A Fair claim on an `ended` pool relies on the program expiring it for us (audit #2's lazy_expire).
+  // A deployment without that fix reverts `InvalidPoolState` (6011) — and the generic reading of 6011,
+  // "the pool has graduated or expired", is exactly backwards here: it has done neither, which is the
+  // problem. This lands at SIMULATION, so nothing is signed, sent or spent either way.
+  const codeHints =
+    phase === "ended" && kind === "fair"
+      ? {
+          6011: {
+            message:
+              "the pool has not been settled on-chain yet, and this deployment cannot settle it as part of the claim",
+            hint: "expiry is permissionless and normally happens within seconds of the launch window closing — re-read the pool and retry; nothing was sent",
+          },
+        }
+      : undefined;
+  const signature = await submitBuilt(built, keypair, "claim", codeHints);
+
+  // Report what landed: shares → SPL tokens 1:1 for graduated claims, COOK for payouts. Best-effort —
+  // the claim already succeeded, so a failed estimate must never turn into a thrown error.
+  let claimed: { estimate: string; symbol: string } | null = null;
+  if (kind === "graduated_tokens") {
+    const position = await fetchPosition(pool.pubkey, claimant).catch(() => null);
+    if (position) claimed = { estimate: rawToUi(position.shares, decs), symbol: pool.symbol };
+  } else if (kind === "winner" && amount) {
+    claimed = { estimate: rawToUi(amount, COOK_DECIMALS), symbol: COOK_SYMBOL };
+  } else if (kind === "fair" && sharesBefore != null) {
+    const snapshot = fairClaimSnapshot({ ...pool, status: phase }, vaultBefore);
+    const refund = snapshot ? fairRefundRaw(snapshot, sharesBefore) : null;
+    if (refund != null) {
+      claimed = { estimate: rawToUi(refund, COOK_DECIMALS), symbol: COOK_SYMBOL };
+    }
+  }
+
+  return {
+    signature,
+    explorerUrl: explorerTxUrl(signature),
+    pool: pool.pubkey,
+    mint: pool.tokenMint,
+    symbol: pool.symbol,
+    kind,
+    claimed,
+    links: { token: launchpadTokenUrl(pool.tokenMint) },
+    ...(kind === "graduated_tokens"
+      ? { note: "The SPL token is now in your wallet — trade it with trade / get_quote." }
+      : {}),
+  };
+}
+
+export interface ClaimCreatorFeesResult {
+  signature: string;
+  explorerUrl: string;
+  pool: string;
+  mint: string;
+  symbol: string;
+  claimed: { amount: string; symbol: string };
+  links: { token: string };
+}
+
+/**
+ * Sweep the creator's share of trading fees (35% of the 1% trade fee at time of writing) from a
+ * launch you created. Requires the wallet to be the pool's creator; unwraps to native COOK.
+ */
+export async function claimCreatorFees(args: {
+  ref: string;
+  unwrap?: boolean;
+}): Promise<ClaimCreatorFeesResult> {
+  const { keypair } = requireWallet();
+  const creator = keypair.publicKey.toBase58();
+
+  const pool = await resolvePool(args.ref);
+  if (pool.creator !== creator) {
+    throw new CookieMcpError(
+      "this wallet did not create that launch, so it has no creator fees to claim",
+      `the pool's creator is ${pool.creator}`,
+    );
+  }
+
+  const pending = await fetchPendingCreatorFees(pool.pubkey);
+  if (!(pending > 0)) {
+    throw new CookieMcpError(
+      "no creator fees to claim yet",
+      "creator fees accrue as the pool is traded (35% of the trade fee) — check back after some volume",
+    );
+  }
+
+  const built = await buildClaimCreatorFeesTx({
+    creator,
+    pool: pool.pubkey,
+    unwrap: args.unwrap ?? true,
+  });
+  const signature = await submitBuilt(built, keypair, "creator-fee claim");
+
+  return {
+    signature,
+    explorerUrl: explorerTxUrl(signature),
+    pool: pool.pubkey,
+    mint: pool.tokenMint,
+    symbol: pool.symbol,
+    claimed: { amount: String(pending), symbol: COOK_SYMBOL },
+    links: { token: launchpadTokenUrl(pool.tokenMint) },
+  };
+}
+
+export type { ClaimKind, ExpiryMode, PoolStatus, LaunchpadPosition };

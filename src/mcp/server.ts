@@ -40,6 +40,19 @@ import {
   acceptOffer,
 } from "../core/nft";
 import { bridge, bridgeStatus, type BridgeDirection } from "../core/bridge";
+import {
+  deployToken,
+  claimCreatorFees,
+  claimLaunchpad,
+  getLaunchpadPools,
+  getLaunchpadPositions,
+  getLaunchpadToken,
+  launchpadBuy,
+  launchpadSell,
+  type ClaimKind,
+  type ExpiryMode,
+  type PoolStatus,
+} from "../core/launchpad";
 
 type ToolContent = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
 
@@ -63,7 +76,7 @@ function tool<A>(fn: (args: A) => Promise<unknown>) {
   };
 }
 
-const server = new McpServer({ name: "cookie-mcp", version: "0.3.0" });
+const server = new McpServer({ name: "cookie-mcp", version: "0.4.0" });
 
 // Simply-typed alias for registerTool. The SDK's generic signature infers handler args from the zod
 // inputSchema via deep conditional types that TS reports as TS2589 ("excessively deep") and OOMs on;
@@ -313,39 +326,280 @@ registerTool(
   tool(async (a: { amount: string | number }) => unstake(a)),
 );
 
-// Launchpad — the Cookiebox DBC launchpad has been removed; MomoSwap launchpad support is coming.
-// These tools stay registered so callers can discover them, but they return a coming-soon notice.
-const LAUNCHPAD_COMING_SOON = {
-  status: "coming_soon",
-  message:
-    "Token launches are temporarily unavailable. The Cookiebox launchpad has been retired and " +
-    "MomoSwap launchpad support is on the way — this tool will start working once it ships.",
-} as const;
+// Launchpad — MomoSwap (momoswap.fun): tokens launch on a bonding curve priced in COOK and
+// graduate to the open market once the raise target is hit. IMPORTANT for agents: before
+// graduation a buyer's holdings are program-tracked curve *shares*, not SPL tokens — they never
+// appear in get_balance and cannot be routed by trade/get_quote. launchpad_sell is the only exit
+// until graduation; after it, claim_launchpad hands over the real SPL token.
+const POOL_REF = "the token mint or the launchpad pool address (either works)";
+
+registerTool(
+  "get_launchpad_pools",
+  {
+    title: "List launchpad launches",
+    description:
+      "Browse MomoSwap launchpad pools: name/symbol/mint, curve price in COOK, amount raised vs the " +
+      "graduation target (with progress %), participants, settlement mode and the launch window. " +
+      "Defaults to `live` launches (currently tradeable), sorted closest-to-graduation first. " +
+      "`ended` means the launch window closed but nobody has settled the pool on-chain yet, so it is " +
+      "neither tradeable nor claimable — filter for it explicitly, or use `all`, since a `live` filter " +
+      "may or may not include such pools depending on the launchpad's deployed version. " +
+      "Read-only — no key needed.",
+    inputSchema: {
+      status: z
+        .enum(["live", "upcoming", "ended", "graduated", "expired", "all"])
+        .optional()
+        .describe("lifecycle filter (default live)"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .optional()
+        .describe("max pools to return (default 20)"),
+    },
+  },
+  tool(async (a: { status?: PoolStatus | "all"; limit?: number }) => getLaunchpadPools(a)),
+);
+
+registerTool(
+  "get_launchpad_token",
+  {
+    title: "Launchpad token detail",
+    description:
+      "Full state of one launchpad launch: curve price, raise vs graduation target, settlement mode, " +
+      "fee split, and — when COOKIE_PRIVATE_KEY is set — this wallet's curve position (shares, " +
+      "invested COOK, current sell value, what it already claimed) plus pending creator fees if it " +
+      "created the launch. Pass `quoteCook` to preview how many tokens a buy of that size would get. " +
+      "A `status` of `ended` means trading closed but the pool is not settled on-chain yet — nothing can " +
+      "be traded, and only a Fair-mode refund can be claimed (the claim settles the pool itself). " +
+      "Read-only.",
+    inputSchema: {
+      ref: z.string().min(32).max(44).describe(POOL_REF),
+      quoteCook: z
+        .union([z.number().positive(), z.string()])
+        .optional()
+        .describe("optional COOK amount to quote a buy for, e.g. 10"),
+    },
+  },
+  tool(async (a: { ref: string; quoteCook?: string | number }) => getLaunchpadToken(a)),
+);
+
+registerTool(
+  "get_launchpad_positions",
+  {
+    title: "My launchpad positions",
+    description:
+      "Every MomoSwap launchpad position a wallet holds, across all launches — the view get_balance " +
+      "CANNOT give, because pre-graduation holdings are program-tracked curve shares rather than SPL " +
+      "tokens. Per position: shares, COOK invested vs withdrawn, what a live curve would pay to sell " +
+      "now, and the `action` if something is outstanding (unclaimed tokens after graduation, an " +
+      "unclaimed Fair-mode refund, a settlement payout). Also lists launches this wallet created that " +
+      "have unclaimed creator fees or vesting. Use this to answer 'what do I hold / what can I claim'. " +
+      "Reads only: pass `owner` for any wallet, or omit it to use COOKIE_PRIVATE_KEY's.",
+    inputSchema: {
+      owner: z
+        .string()
+        .min(32)
+        .max(44)
+        .optional()
+        .describe("wallet to inspect (defaults to your own wallet)"),
+      includeClosed: z
+        .boolean()
+        .optional()
+        .describe("also list fully exited / already-settled positions (default false)"),
+    },
+  },
+  tool(async (a: { owner?: string; includeClosed?: boolean }) => getLaunchpadPositions(a)),
+);
 
 registerTool(
   "deploy_token",
   {
-    title: "Launch a token (coming soon)",
+    title: "Launch a token",
     description:
-      "Launch a new token on a Cookie Chain launchpad. ⚠️ COMING SOON — token launches are " +
-      "temporarily unavailable while the launchpad migrates to MomoSwap. Not functional yet; " +
-      "takes no arguments and returns a coming-soon notice.",
-    inputSchema: {},
+      "Launch a new token on the MomoSwap launchpad (bonding curve priced in COOK, graduates to the " +
+      "open market at the raise target). Mint + freeze authority are renounced and the metadata is " +
+      "immutable, so a launch is FINAL — nothing about the token can be changed afterwards. Costs the " +
+      "launchpad's creation fee, read live from its config (0 on the current deployment, so a launch " +
+      "usually costs only account rent) plus any devBuyCook; when the fee or dev buy is non-zero, " +
+      "COOKIE_MAX_TRADE_COOK must allow the total or the launch is refused by the spend cap. " +
+      "A LOGO IS REQUIRED: pass `imageBase64` (preferred — attach an image you generated, with " +
+      "`imageMimeType`) or `imageUrl` and the launchpad pins it to IPFS. Launching without one is " +
+      "refused unless you set `noLogo: true`, because the metadata is immutable and a logo can never " +
+      "be added later. The mint address is chosen by the launchpad (the program requires one ending " +
+      "in `momo`). Set `devBuyCook` to make your own buy the atomic first trade. Requires " +
+      "COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      name: z.string().min(1).max(32).describe("token name, max 32 chars"),
+      symbol: z.string().min(1).max(10).describe("ticker, max 10 chars (upper-cased)"),
+      description: z.string().max(1000).optional().describe("short description for the token page"),
+      imageBase64: z
+        .string()
+        .optional()
+        .describe("logo bytes as base64 (preferred; a data: prefix is fine) — pinned to IPFS"),
+      imageMimeType: z
+        .string()
+        .optional()
+        .describe('MIME type of imageBase64, e.g. "image/png" (required with imageBase64)'),
+      imageUrl: z
+        .string()
+        .optional()
+        .describe("alternative to imageBase64: an already-hosted https image URL"),
+      website: z.string().optional().describe("project website URL"),
+      twitter: z.string().optional().describe("X/Twitter handle or URL"),
+      telegram: z.string().optional().describe("Telegram handle or URL"),
+      durationSecs: z
+        .number()
+        .int()
+        .min(60)
+        .max(604800)
+        .optional()
+        .describe("how long the launch stays open, 60s–7d (default 86400)"),
+      expiryMode: z
+        .enum(["dead", "fair", "jackpot", "survivor"])
+        .optional()
+        .describe(
+          "what happens if it never graduates: fair = pro-rata refund (default), dead = unraised " +
+            "funds swept to treasury, jackpot = Merkle payout to the top 10%, survivor = top 3",
+        ),
+      antiSnipe: z
+        .boolean()
+        .optional()
+        .describe("cap each wallet during the opening window (default true)"),
+      minBuyCook: z
+        .union([z.number().positive(), z.string()])
+        .optional()
+        .describe("minimum buy per trade in COOK (default none)"),
+      maxBuyPerWalletCook: z
+        .union([z.number().positive(), z.string()])
+        .optional()
+        .describe("lifetime cap per wallet in COOK (default none)"),
+      devBuyCook: z
+        .union([z.number().positive(), z.string()])
+        .optional()
+        .describe("optional COOK amount to buy atomically in the launch transaction"),
+      noLogo: z
+        .boolean()
+        .optional()
+        .describe(
+          "launch deliberately without a logo. Only set this if the user asked for it — the token " +
+            "metadata is immutable, so no logo can ever be added and most UIs show a blank image",
+        ),
+    },
   },
-  tool(async () => LAUNCHPAD_COMING_SOON),
+  tool(
+    async (a: {
+      name: string;
+      symbol: string;
+      description?: string;
+      imageBase64?: string;
+      imageMimeType?: string;
+      imageUrl?: string;
+      website?: string;
+      twitter?: string;
+      telegram?: string;
+      durationSecs?: number;
+      expiryMode?: ExpiryMode;
+      antiSnipe?: boolean;
+      minBuyCook?: string | number;
+      maxBuyPerWalletCook?: string | number;
+      devBuyCook?: string | number;
+      noLogo?: boolean;
+    }) => deployToken(a),
+  ),
+);
+
+registerTool(
+  "launchpad_buy",
+  {
+    title: "Buy on a launchpad curve",
+    description:
+      "Buy a launchpad token on its bonding curve with COOK (the launchpad wraps the COOK and opens " +
+      "any missing accounts). ⚠️ You receive program-tracked CURVE SHARES, not SPL tokens: they will " +
+      "not show in get_balance and trade cannot swap them — exit with launchpad_sell, or claim the " +
+      "real token with claim_launchpad after the pool graduates. There is no slippage parameter (the " +
+      "program has no min-out), so the fill can move if others trade first. A 1% trade fee applies. " +
+      "Simulates before sending; honors the spend cap. Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      ref: z.string().min(32).max(44).describe(POOL_REF),
+      amountCook: z
+        .union([z.number().positive(), z.string()])
+        .describe("how much COOK to spend, e.g. 10"),
+      referrer: z
+        .string()
+        .min(32)
+        .max(44)
+        .optional()
+        .describe("optional referrer wallet that earns the referral fee share (not your own)"),
+    },
+  },
+  tool(async (a: { ref: string; amountCook: string | number; referrer?: string }) =>
+    launchpadBuy(a),
+  ),
+);
+
+registerTool(
+  "launchpad_sell",
+  {
+    title: "Sell on a launchpad curve",
+    description:
+      "Sell curve shares back to a launchpad bonding curve for COOK (unwrapped to native COOK by " +
+      "default). Only works while the pool is live and only for shares bought via launchpad_buy — a " +
+      "graduated token's SPL balance is sold with `trade` instead. A 1% trade fee applies. Simulates " +
+      "before sending. Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      ref: z.string().min(32).max(44).describe(POOL_REF),
+      shares: z
+        .union([z.number().positive(), z.string()])
+        .describe("how many tokens (curve shares) to sell, as a UI amount"),
+      unwrap: z.boolean().optional().describe("unwrap the proceeds to native COOK (default true)"),
+    },
+  },
+  tool(async (a: { ref: string; shares: string | number; unwrap?: boolean }) => launchpadSell(a)),
+);
+
+registerTool(
+  "claim_launchpad",
+  {
+    title: "Claim a launchpad payout",
+    description:
+      "Settle a launchpad position. By default the right claim is picked from the pool's state: " +
+      "graduated → your real SPL tokens; expired (or `ended`) in fair mode → a pro-rata COOK refund; " +
+      "expired in jackpot/survivor mode → your Merkle payout (the proof is fetched for you). A fair " +
+      "refund works even on an `ended` pool that has not been settled on-chain yet — the claim settles " +
+      "it too; the other modes have to wait for the expiry transition. Creators can pass " +
+      "kind=creator_vest to claim their vested allocation after graduation. Dead-mode expiries have " +
+      "no holder payout. Simulates before sending, so a claim that cannot land costs nothing. " +
+      "Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      ref: z.string().min(32).max(44).describe(POOL_REF),
+      kind: z
+        .enum(["auto", "graduated_tokens", "fair", "winner", "creator_vest"])
+        .optional()
+        .describe("which claim to make (default auto — chosen from the pool state)"),
+    },
+  },
+  tool(async (a: { ref: string; kind?: ClaimKind | "auto" }) => claimLaunchpad(a)),
 );
 
 registerTool(
   "claim_creator_fees",
   {
-    title: "Claim creator fees (coming soon)",
+    title: "Claim launch creator fees",
     description:
-      "Claim the creator trading fees a token you launched has earned. ⚠️ COMING SOON — creator-fee " +
-      "claiming is unavailable while the launchpad migrates to MomoSwap. Not functional yet; takes " +
-      "no arguments and returns a coming-soon notice.",
-    inputSchema: {},
+      "Sweep the creator's share of trading fees (35% of the 1% trade fee) from a launchpad token you " +
+      "created, into your wallet as native COOK. Only the pool's creator can claim; fails early with " +
+      "the pending amount when nothing has accrued yet. Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      ref: z.string().min(32).max(44).describe(POOL_REF),
+      unwrap: z
+        .boolean()
+        .optional()
+        .describe("unwrap the swept fees to native COOK (default true)"),
+    },
   },
-  tool(async () => LAUNCHPAD_COMING_SOON),
+  tool(async (a: { ref: string; unwrap?: boolean }) => claimCreatorFees(a)),
 );
 
 // Liquidity — Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM. Every op simulates before

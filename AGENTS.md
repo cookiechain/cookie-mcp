@@ -17,6 +17,8 @@ src/
     errors.ts          #   CookieMcpError — the one error type surfaced to agents
     format.ts          #   rawToUi / uiToRaw / shortAddr — always go through these
     http.ts            #   fetchJson with retry policy
+    launchpad/         #   MomoSwap launchpad: api (HTTP client) + curve (quote math) + positions (PDAs)
+                       #   + program (which deployment: PDA scope + error-code build)
     liquidity/         #   create/add/remove/lock/claim across damm, cpAmm, clmm, cookieswap
     nft/               #   Baked Bazaar: auctionHouse (writes) + bazaar (reads)
   idl/                 # committed IDLs (cp_amm, whirlpool)
@@ -62,6 +64,9 @@ No key needed for read-only work: `npx tsx scripts/smoke-cores.ts` hits live poo
   - every money-moving action calls `assertWithinSpendCap()` and **simulates before send**.
   - never log or embed secrets; never put a token in a remote URL.
 - **HTTP:** use `fetchJson` (it has the retry policy), not bare `fetch`.
+- **Venue APIs that build transactions** (Candy Shop swaps, the MomoSwap launchpad) hand back a
+  base64 transaction: deserialize it, **simulate on our RPC**, sign locally, then send. Never let a
+  venue submit on our behalf and never send an unsimulated build.
 - **Formatting:** Prettier + ESLint are enforced by `yarn test`; run `yarn format` before committing.
 
 ## Testing

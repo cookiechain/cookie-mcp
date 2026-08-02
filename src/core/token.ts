@@ -2,6 +2,7 @@
 import { COOK_MINT, COOK_SYMBOL, explorerTokenUrl } from "./config";
 import { CookieMcpError } from "./errors";
 import { fetchToken, fetchTokens, fetchCookPriceUsd, type CookiescanToken } from "./cookiescan";
+import { launchpadTokenIdentity, type LaunchpadTokenIdentity } from "./launchpad";
 
 export interface TokenInfo {
   mint: string;
@@ -21,6 +22,16 @@ export interface TokenInfo {
   supply: number | null;
   updateAuthority: string | null;
   explorerUrl: string;
+  /**
+   * Present only when the mint has no market because it lives on the MomoSwap launchpad — a
+   * pre-graduation curve has no DEX pool, so price/liquidity read as 0 and swaps find no route.
+   */
+  launchpad?: { pool: string; status: string; note: string };
+}
+
+/** A token with no price AND no liquidity may simply be on a launchpad curve — worth a lookup. */
+export function looksUnpriced(info: TokenInfo): boolean {
+  return !info.priceUsd && !info.priceCook && !info.liquidityCook;
 }
 
 export function mapTokenInfo(t: CookiescanToken, cookPriceUsd?: number | null): TokenInfo {
@@ -52,6 +63,51 @@ export function mapTokenInfo(t: CookiescanToken, cookPriceUsd?: number | null): 
   };
 }
 
+/**
+ * The curve price, but only when quoting it as *the* price is honest — i.e. while the curve is the
+ * token's live market. Once a launch has `ended`/`expired` the curve is frozen and nobody can transact
+ * at that number; once it has `graduated` the real market is a DEX pool and the curve price is stale.
+ * In both cases reporting it as `priceCook` would be a price nothing can be traded at.
+ */
+function tradeableCurvePrice(lp: LaunchpadTokenIdentity): number | null {
+  if (lp.status !== "live") return null;
+  return lp.priceCook > 0 && Number.isFinite(lp.priceCook) ? lp.priceCook : null;
+}
+
+/**
+ * Describe a token the Cookiescan registry has never indexed, purely from its launchpad pool (pure).
+ * Every market field stays null on purpose — a pre-graduation curve has no DEX market, and inventing
+ * a liquidity or market-cap figure from curve reserves would be a fabricated number. The curve price
+ * is filled only while it is live (see above), and `launchpad` says why it is not swappable.
+ */
+export function launchpadOnlyTokenInfo(
+  mint: string,
+  lp: LaunchpadTokenIdentity,
+  cookPriceUsd?: number | null,
+): TokenInfo {
+  const priceCook = tradeableCurvePrice(lp);
+  return {
+    mint,
+    name: lp.name || null,
+    symbol: lp.symbol || null,
+    decimals: lp.decimals,
+    description: null,
+    logo: null,
+    priceUsd: priceCook != null && cookPriceUsd != null ? priceCook * cookPriceUsd : null,
+    priceCook,
+    change24hPct: null,
+    marketCapUsd: null,
+    liquidityCook: null,
+    liquidityUsd: null,
+    volume24h: null,
+    holderCount: null,
+    supply: null,
+    updateAuthority: null,
+    explorerUrl: explorerTokenUrl(mint),
+    launchpad: { pool: lp.pool, status: lp.status, note: lp.note },
+  };
+}
+
 export async function getTokenInfo(mint: string): Promise<TokenInfo> {
   const [t, cookPriceUsd] = await Promise.all([fetchToken(mint), fetchCookPriceUsd()]);
   if (mint === COOK_MINT && t) {
@@ -61,13 +117,39 @@ export async function getTokenInfo(mint: string): Promise<TokenInfo> {
       symbol: COOK_SYMBOL,
     };
   }
+  // Not in the registry: before giving up, ask the launchpad. A freshly launched token is in exactly
+  // this state until Cookiescan indexes it, so this is the normal path for a new launch — and it used
+  // to throw, which meant the `launchpad` field below could never be reached for the very tokens it
+  // exists to explain.
   if (!t) {
-    throw new CookieMcpError(
-      `token ${mint} not found in the Cookiescan registry`,
-      "check the mint address; brand-new tokens can take a moment to be indexed",
-    );
+    const lp = await launchpadTokenIdentity(mint);
+    if (!lp) {
+      throw new CookieMcpError(
+        `token ${mint} not found in the Cookiescan registry`,
+        "check the mint address; brand-new tokens can take a moment to be indexed",
+      );
+    }
+    return launchpadOnlyTokenInfo(mint, lp, cookPriceUsd);
   }
-  return mapTokenInfo(t, cookPriceUsd);
+
+  const info = mapTokenInfo(t, cookPriceUsd);
+  // Only pay for the launchpad lookup when the market data is empty — otherwise every call would hit
+  // a second API for nothing. Best-effort: a launchpad outage must not fail a plain token read.
+  if (looksUnpriced(info)) {
+    const lp = await launchpadTokenIdentity(mint);
+    if (lp) {
+      info.launchpad = { pool: lp.pool, status: lp.status, note: lp.note };
+      // The registry knows the mint but has no market for it — fill in the curve price it cannot see.
+      // Test `!info.priceCook`, not `== null`: Cookiescan reports an unpriced token as 0, which is the
+      // same thing `looksUnpriced` treats as absent, and `== null` would never fire here.
+      const curve = tradeableCurvePrice(lp);
+      if (!info.priceCook && curve != null) {
+        info.priceCook = curve;
+        if (cookPriceUsd != null) info.priceUsd = curve * cookPriceUsd;
+      }
+    }
+  }
+  return info;
 }
 
 // --- search --------------------------------------------------------------------------------------

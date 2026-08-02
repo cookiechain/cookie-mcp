@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { mapTokenInfo, searchTokenRegistry } from "./token";
+import { launchpadOnlyTokenInfo, looksUnpriced, mapTokenInfo, searchTokenRegistry } from "./token";
 import type { CookiescanToken } from "./cookiescan";
 
 const token: CookiescanToken = {
@@ -49,6 +49,90 @@ describe("mapTokenInfo", () => {
     expect(t.symbol).toBeNull();
     expect(t.priceUsd).toBeNull();
     expect(t.decimals).toBeNull();
+  });
+});
+
+describe("launchpadOnlyTokenInfo", () => {
+  // The case this exists for: a token launched minutes ago is NOT in the Cookiescan registry yet, so
+  // get_token_info used to throw — which meant the `launchpad` field could never be populated for the
+  // very tokens it was written to explain. Shape mirrors the real MCPLC launch of 2026-07-29.
+  const lp = {
+    pool: "EKkxjFhWdiqqaTnUyyKPxPFWdaXU4Ji2A5jWykG3wFBb",
+    status: "live" as const,
+    note: "buy it with launchpad_buy and sell it with launchpad_sell",
+    name: "MCP Live Check",
+    symbol: "MCPLC",
+    decimals: 6,
+    metadataUri: "ipfs://QmcyEAYSknmhyTgKkDrGmHL6AvtyFK7kmMxcTgaoKc5WJ3",
+    priceCook: 0.0001644650512581547,
+  };
+
+  it("describes an unindexed launchpad token instead of failing", () => {
+    const t = launchpadOnlyTokenInfo("HvnJCQjeGxvn27WEoYk1UbdDwXhRGuQkase17NiVmomo", lp);
+    expect(t.symbol).toBe("MCPLC");
+    expect(t.name).toBe("MCP Live Check");
+    expect(t.decimals).toBe(6);
+    expect(t.priceCook).toBe(lp.priceCook);
+    expect(t.launchpad).toEqual({ pool: lp.pool, status: "live", note: lp.note });
+  });
+
+  it("leaves every market field null rather than inventing one from curve reserves", () => {
+    const t = launchpadOnlyTokenInfo("HvnJCQjeGxvn27WEoYk1UbdDwXhRGuQkase17NiVmomo", lp);
+    expect(t.liquidityCook).toBeNull();
+    expect(t.liquidityUsd).toBeNull();
+    expect(t.marketCapUsd).toBeNull();
+    expect(t.volume24h).toBeNull();
+    expect(t.holderCount).toBeNull();
+    expect(t.supply).toBeNull();
+    expect(t.change24hPct).toBeNull();
+  });
+
+  it("converts the curve price to USD only when the COOK price is known", () => {
+    expect(launchpadOnlyTokenInfo("m", lp, 2).priceUsd).toBeCloseTo(lp.priceCook * 2, 18);
+    expect(launchpadOnlyTokenInfo("m", lp).priceUsd).toBeNull();
+    expect(launchpadOnlyTokenInfo("m", lp, null).priceUsd).toBeNull();
+  });
+
+  it("reports no price rather than 0 when the curve price is unusable", () => {
+    for (const bad of [0, NaN, Infinity]) {
+      const t = launchpadOnlyTokenInfo("m", { ...lp, priceCook: bad }, 2);
+      expect(t.priceCook).toBeNull();
+      expect(t.priceUsd).toBeNull();
+    }
+  });
+
+  it("quotes the curve price ONLY while the curve is live", () => {
+    // A frozen (ended/expired) curve and a graduated pool both have a price nothing can trade at:
+    // reporting it as `priceCook` would be a fiction. The `launchpad` field still explains the token.
+    for (const status of ["ended", "expired", "graduated", "upcoming"] as const) {
+      const t = launchpadOnlyTokenInfo("m", { ...lp, status }, 2);
+      expect(t.priceCook).toBeNull();
+      expect(t.priceUsd).toBeNull();
+      expect(t.launchpad?.status).toBe(status);
+    }
+    expect(launchpadOnlyTokenInfo("m", lp, 2).priceCook).toBe(lp.priceCook);
+  });
+});
+
+describe("looksUnpriced", () => {
+  it("is false for a token with any market data (so no launchpad lookup is made)", () => {
+    expect(looksUnpriced(mapTokenInfo(token))).toBe(false);
+    expect(looksUnpriced(mapTokenInfo({ ...token, price: {}, marketData: { liquidity: 5 } }))).toBe(
+      false,
+    );
+  });
+
+  it("is true when price and liquidity are all absent or zero — the launchpad-curve signature", () => {
+    expect(looksUnpriced(mapTokenInfo({ mint: "Xmint" }))).toBe(true);
+    expect(
+      looksUnpriced(
+        mapTokenInfo({
+          mint: "Xmint",
+          price: { usd: "0", native: 0 },
+          marketData: { liquidity: 0 },
+        }),
+      ),
+    ).toBe(true);
   });
 });
 
