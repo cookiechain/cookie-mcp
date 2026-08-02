@@ -42,11 +42,11 @@ async function main() {
   _resetWalletCache();
   console.log(`  dummy wallet: ${ownPublicKey()}`);
 
-  await expectError("cap: 999999 COOK exceeds the per-trade cap", () =>
-    trade({ inputMint: COOK, outputMint: MON, amount: 999999 }),
+  await expectError("amount 0 is refused before anything is quoted", () =>
+    trade({ inputMint: COOK, outputMint: MON, amount: 0 }),
   );
 
-  await expectError("within-cap trade runs quote→build→simulate, fails at sim (unfunded)", () =>
+  await expectError("trade runs quote→build→simulate, fails at sim (unfunded)", () =>
     trade({ inputMint: COOK, outputMint: MON, amount: 1 }),
   );
 

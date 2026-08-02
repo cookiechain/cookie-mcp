@@ -34,7 +34,7 @@ import {
 import { confirmSent } from "./confirm";
 import { CookieMcpError } from "./errors";
 import { getConnection, getSolanaConnection } from "./rpc";
-import { requireWallet, assertWithinSpendCap, ownPublicKey } from "./wallet";
+import { requireWallet, ownPublicKey } from "./wallet";
 import { uiToRaw } from "./format";
 
 // Standard Solana SPL no-op program used by Hyperlane for log emission.
@@ -350,9 +350,6 @@ export async function bridge(args: {
     );
   }
 
-  const amountUi = Number(args.amount);
-  // COOK is 1:1 across the bridge, so it is always valued at 1 COOK for the spend cap.
-  assertWithinSpendCap(amountUi, 1);
   let amountRaw: bigint;
   try {
     amountRaw = uiToRaw(args.amount, route.sourceDecimals);

@@ -89,7 +89,7 @@ async function main() {
   );
 
   console.log("\nGuards (unfunded wallet, nothing sent):");
-  await expectFailure("deploy_token over the spend cap (2,000 COOK creation fee)", () =>
+  await expectFailure("deploy_token with no logo and no explicit opt-out", () =>
     lp.deployToken({ name: "Verify", symbol: "VRFY" }),
   );
   await expectFailure("deploy_token with a bad duration", () =>

@@ -7,7 +7,6 @@ import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 
 import { CookieMcpError } from "./errors";
-import { MAX_TRADE_COOK } from "./config";
 
 // Accepts a keygen JSON byte array, a { secretKey: [...] } object, or a base58 secret.
 export function decodeSecret(raw: string): Uint8Array {
@@ -86,31 +85,4 @@ export function ownPublicKey(): string | null {
 
 export function _resetWalletCache(): void {
   _loaded = undefined;
-}
-
-// Value a money-moving input in COOK and assert it's within the cap. priceCook is the input's
-// COOK-denominated price (1 for COOK). Throws if unvaluable or over cap; cap 0 disables the check.
-export function assertWithinSpendCap(
-  amountUi: number,
-  priceCook: number | null,
-  cap: number = MAX_TRADE_COOK,
-): number {
-  if (!Number.isFinite(amountUi) || amountUi <= 0) {
-    throw new CookieMcpError("amount must be greater than 0", "pass a positive input amount");
-  }
-  if (cap <= 0) return NaN;
-  if (priceCook == null || !Number.isFinite(priceCook) || priceCook <= 0) {
-    throw new CookieMcpError(
-      "cannot value the input in COOK to enforce the spend cap",
-      "the input token has no known COOK price; trade a token with a price, or set COOKIE_MAX_TRADE_COOK=0 to disable the cap",
-    );
-  }
-  const valueCook = amountUi * priceCook;
-  if (valueCook > cap) {
-    throw new CookieMcpError(
-      `input is worth ~${valueCook.toFixed(4)} COOK, over the ${cap} COOK per-trade cap`,
-      `lower the amount, or raise COOKIE_MAX_TRADE_COOK (currently ${cap})`,
-    );
-  }
-  return valueCook;
 }

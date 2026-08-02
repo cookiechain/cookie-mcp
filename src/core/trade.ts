@@ -1,5 +1,5 @@
 // trade — swap via Candy Shop, non-custodial: quote → Candy Shop builds the tx → simulate on our RPC
-// → sign locally → submit → confirm. The spend cap (valued in COOK) is enforced before anything is built.
+// → sign locally → submit → confirm.
 import { VersionedTransaction, Transaction, type Keypair } from "@solana/web3.js";
 
 import {
@@ -19,7 +19,7 @@ import {
   routePoolAddresses,
 } from "./candyshop";
 import { getConnection } from "./rpc";
-import { requireWallet, assertWithinSpendCap } from "./wallet";
+import { requireWallet } from "./wallet";
 import { rawToUi, uiToRaw } from "./format";
 import { noRouteError } from "./launchpad";
 
@@ -115,10 +115,6 @@ export async function trade(args: {
 
   const { input, output } = await resolveMeta(args.inputMint, args.outputMint);
 
-  // Spend cap first — before quoting or building anything.
-  const amountUi = Number(args.amount);
-  assertWithinSpendCap(amountUi, input.priceCook);
-
   let amountRaw: bigint;
   try {
     amountRaw = uiToRaw(args.amount, input.dec);
@@ -127,6 +123,9 @@ export async function trade(args: {
       `invalid amount "${args.amount}"`,
       `amount is a UI amount of the input token (max ${input.dec} decimals)`,
     );
+  }
+  if (amountRaw <= 0n) {
+    throw new CookieMcpError("amount must be greater than 0", "pass a positive input amount");
   }
 
   // "No route" for a launchpad token that hasn't graduated is expected — it trades on its bonding

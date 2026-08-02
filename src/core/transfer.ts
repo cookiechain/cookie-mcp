@@ -1,5 +1,5 @@
 // transfer — send native COOK (SystemProgram) or an SPL/Token-2022 token (idempotent ATA create +
-// transfer-checked). Same safety as trade: spend cap first, then simulate-before-send on confirmed.
+// transfer-checked). Same safety as trade: simulate-before-send on confirmed.
 import { PublicKey, Transaction, SystemProgram } from "@solana/web3.js";
 import {
   getAssociatedTokenAddressSync,
@@ -12,7 +12,7 @@ import { confirmSent } from "./confirm";
 import { CookieMcpError } from "./errors";
 import { fetchToken } from "./cookiescan";
 import { getConnection } from "./rpc";
-import { requireWallet, assertWithinSpendCap } from "./wallet";
+import { requireWallet } from "./wallet";
 import { rawToUi, uiToRaw } from "./format";
 
 export function parsePubkey(addr: string, label: string): PublicKey {
@@ -46,7 +46,6 @@ export async function transfer(args: {
   const conn = getConnection();
   const from = keypair.publicKey;
   const to = parsePubkey(args.to, "recipient");
-  const amountUi = Number(args.amount);
   const isNative = isNativeTransfer(args.mint);
 
   const tx = new Transaction();
@@ -54,12 +53,14 @@ export async function transfer(args: {
   let symbol: string | null = COOK_SYMBOL;
 
   if (isNative) {
-    assertWithinSpendCap(amountUi, 1);
     let lamports: bigint;
     try {
       lamports = uiToRaw(args.amount, COOK_DECIMALS);
     } catch {
       throw new CookieMcpError(`invalid amount "${args.amount}"`, "COOK has up to 9 decimals");
+    }
+    if (lamports <= 0n) {
+      throw new CookieMcpError("amount must be greater than 0", "pass a positive amount");
     }
     tx.add(SystemProgram.transfer({ fromPubkey: from, toPubkey: to, lamports: Number(lamports) }));
   } else {
@@ -76,7 +77,6 @@ export async function transfer(args: {
 
     const registryToken = await fetchToken(mint);
     symbol = registryToken?.metadata?.symbol ?? null;
-    assertWithinSpendCap(amountUi, registryToken?.price?.native ?? null);
 
     let rawAmount: bigint;
     try {
@@ -86,6 +86,9 @@ export async function transfer(args: {
         `invalid amount "${args.amount}"`,
         `${symbol ?? mint} has up to ${decimals} decimals`,
       );
+    }
+    if (rawAmount <= 0n) {
+      throw new CookieMcpError("amount must be greater than 0", "pass a positive amount");
     }
 
     const sourceAta = getAssociatedTokenAddressSync(mintPk, from, false, tokenProgram);

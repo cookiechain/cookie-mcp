@@ -32,14 +32,6 @@ export const EXPLORER_URL =
 export const DEFAULT_SLIPPAGE_BPS =
   Number.parseInt(process.env.COOKIE_SLIPPAGE_BPS ?? "", 10) || 500;
 
-// Hard per-transaction spend cap in COOK; money-moving tools refuse inputs valued above it. 0 disables.
-export const MAX_TRADE_COOK = (() => {
-  const raw = process.env.COOKIE_MAX_TRADE_COOK?.trim();
-  if (raw == null || raw === "") return 100;
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : 100;
-})();
-
 // Native/wrapped COOK is Solana's NATIVE_MINT, 9 decimals, shown as COOK.
 export const COOK_MINT = "So11111111111111111111111111111111111111112";
 export const COOK_DECIMALS = 9;

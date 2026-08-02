@@ -6,7 +6,7 @@
 // directly (see cookiebox src/solana/clmm/*). The ONE fork trap the IDL retarget can't fix: Orca
 // hardcodes its mainnet position-NFT metadata-update-authority into openPositionWithMetadata ixs — that
 // pubkey is invalid on Cookie Chain, so we rewrite it to the Cookie treasury (patchMetadataAuth) before
-// signing. Every op routes through the shared simulate-first / spend-capped sender.
+// signing. Every op routes through the shared simulate-first sender.
 import {
   ComputeBudgetProgram,
   Keypair,
@@ -34,11 +34,10 @@ import {
 import { Percentage } from "@orca-so/common-sdk";
 import type { TransactionBuilder } from "@orca-so/common-sdk";
 
-import { COOK_MINT, DEFAULT_SLIPPAGE_BPS, explorerTxUrl } from "../config";
+import { DEFAULT_SLIPPAGE_BPS, explorerTxUrl } from "../config";
 import { CookieMcpError } from "../errors";
-import { assertWithinSpendCap } from "../wallet";
+
 import { uiToRaw } from "../format";
-import { fetchTokens } from "../cookiescan";
 import { signSendConfirm, LP_NOTE } from "./send";
 import whirlpoolIdl from "../../idl/whirlpool.json" with { type: "json" };
 
@@ -157,20 +156,6 @@ async function sendBuilders(
 }
 
 // --- helpers --------------------------------------------------------------------------------------
-
-/** COOK price (native) for spend-cap valuation of a deposited token; 1 for COOK itself, null if unknown. */
-async function priceCookOf(mint: string): Promise<number | null> {
-  if (mint === COOK_MINT) return 1;
-  const t = (await fetchTokens()).find((x) => x.mint === mint);
-  return t?.price?.native ?? null;
-}
-
-/** Cap whichever side is COOK (best-effort; other priced tokens are also capped). */
-async function capSide(mint: string, uiAmount: number): Promise<void> {
-  if (uiAmount <= 0) return;
-  const price = await priceCookOf(mint);
-  if (price != null) assertWithinSpendCap(uiAmount, price);
-}
 
 async function resolveMint(
   conn: Connection,
@@ -351,8 +336,6 @@ export async function addClmmLiquidity(
 
   const rawA = args.amountA != null ? new BN(uiToRaw(args.amountA, decA).toString()) : new BN(0);
   const rawB = args.amountB != null ? new BN(uiToRaw(args.amountB, decB).toString()) : new BN(0);
-  await capSide(data.tokenMintA.toBase58(), Number(args.amountA ?? 0));
-  await capSide(data.tokenMintB.toBase58(), Number(args.amountB ?? 0));
 
   const slippage = Percentage.fromFraction(DEFAULT_SLIPPAGE_BPS, 10_000);
   const { lowerBound, upperBound } = PriceMath.getSlippageBoundForSqrtPrice(
@@ -581,10 +564,6 @@ export async function createClmmPool(
   };
   const [a, b] = Buffer.compare(x.mint.toBuffer(), y.mint.toBuffer()) < 0 ? [x, y] : [y, x];
   const [ma, mb] = await Promise.all([resolveMint(conn, a.mint), resolveMint(conn, b.mint)]);
-
-  // Cap the COOK side (a brand-new token side usually has no price → not capped).
-  await capSide(a.str, a.ui);
-  await capSide(b.str, b.ui);
 
   // Initial price = tokenB per tokenA. Prefer the explicit price; else the deposit ratio.
   const price =

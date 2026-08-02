@@ -9,10 +9,9 @@ import BN from "bn.js";
 import Decimal from "decimal.js";
 import { Raydium, TxVersion, PoolUtils, ClmmConfigLayout } from "@raydium-io/raydium-sdk-v2";
 
-import { COOK_MINT, DEFAULT_SLIPPAGE_BPS, explorerTxUrl } from "../config";
+import { DEFAULT_SLIPPAGE_BPS, explorerTxUrl } from "../config";
 import { CookieMcpError } from "../errors";
-import { fetchTokens } from "../cookiescan";
-import { assertWithinSpendCap } from "../wallet";
+
 import { uiToRaw } from "../format";
 
 export const SAMM_PROGRAM_ID = "WTzkPUoprVx7PDc1tfKA5sS7k1ynCgU89WtwZhksHX5";
@@ -88,12 +87,6 @@ async function execTx(built: {
   return txId;
 }
 
-async function priceCookOf(mint: string): Promise<number | null> {
-  if (mint === COOK_MINT) return 1;
-  const t = (await fetchTokens()).find((x) => x.mint === mint);
-  return t?.price?.native ?? null;
-}
-
 export async function addSammLiquidity(
   conn: Connection,
   keypair: Keypair,
@@ -108,15 +101,9 @@ export async function addSammLiquidity(
   const decA = poolInfo.mintA.decimals;
   const decB = poolInfo.mintB.decimals;
   const useA = args.amountA != null;
-  const uiAmount = Number(useA ? args.amountA : args.amountB);
   const baseAmount = new BN(
     uiToRaw(useA ? args.amountA! : args.amountB!, useA ? decA : decB).toString(),
   );
-
-  // Cap whichever side is COOK (a new/unpriced token side isn't capped).
-  const sideMint = useA ? poolInfo.mintA.address : poolInfo.mintB.address;
-  const price = await priceCookOf(sideMint);
-  if (price != null) assertWithinSpendCap(uiAmount, price);
 
   const { tickLower, tickUpper } = fullRangeTicks(poolInfo.config.tickSpacing);
 
@@ -308,12 +295,6 @@ export async function createSammPool(
   };
   const [a, b] = Buffer.compare(x.mint.toBuffer(), y.mint.toBuffer()) < 0 ? [x, y] : [y, x];
   const [ma, mb] = await Promise.all([resolveMint(conn, a.mint), resolveMint(conn, b.mint)]);
-
-  // Cap the COOK side (a brand-new token side usually has no price → not capped).
-  for (const side of [a, b]) {
-    const price = await priceCookOf(side.str);
-    if (price != null) assertWithinSpendCap(side.ui, price);
-  }
 
   const price = resolveInitialPrice(args.initialPrice, a.ui, b.ui);
 

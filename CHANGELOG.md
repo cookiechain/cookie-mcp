@@ -19,8 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `claim_launchpad` — settle a position: the SPL token after graduation, a Fair-mode pro-rata refund,
     a Jackpot/Survivor Merkle payout (proof fetched for you), or a creator's vested allocation.
   - `deploy_token` and `claim_creator_fees` work again (0.3.0 left them as coming-soon stubs), now on
-    MomoSwap. A launch pins the logo + metadata to IPFS and costs the launchpad's 2,000 COOK creation
-    fee, so `COOKIE_MAX_TRADE_COOK` must allow it; `devBuyCook` makes your own buy the first trade.
+    MomoSwap. A launch pins the logo + metadata to IPFS and costs the launchpad's creation fee, read
+    live from its config; `devBuyCook` makes your own buy the first trade.
   - A pool's `status` may read **`ended`** — the launch window closed but the pool has not been settled
     on-chain yet, and until it is, nothing on it can be traded or claimed.
   - `MOMOSWAP_API_URL` (default `https://api.momoswap.fun`). The launchpad API builds and partial-signs
@@ -35,6 +35,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Removed the `COOKIE_MAX_TRADE_COOK` spend cap.** It forced large actions to be split into identical
+  repeats and refused outright when a token had no COOK price to value the input with. Read-only
+  without a key and simulate-before-send are unchanged.
 - **CLMM positions are now opened as Token-2022 NFTs** (`open_position_with_token_extensions` instead
   of the legacy Metaplex `open_position_with_metadata`). This is required for locking: the program
   freezes the position token account, which only works when the mint's freeze authority is the position

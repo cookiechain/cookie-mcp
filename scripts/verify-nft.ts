@@ -21,7 +21,6 @@ async function tryOp(label: string, fn: () => Promise<unknown>): Promise<void> {
 
 async function main() {
   process.env.COOKIE_PRIVATE_KEY = bs58.encode(Keypair.generate().secretKey);
-  process.env.COOKIE_MAX_TRADE_COOK = "0"; // disable the cap so writes reach build/simulate
   const nft = await import("../src/core/nft");
 
   console.log("Reads:");

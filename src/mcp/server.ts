@@ -6,7 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-import { DEFAULT_SLIPPAGE_BPS, MAX_TRADE_COOK } from "../core/config";
+import { DEFAULT_SLIPPAGE_BPS } from "../core/config";
 import { CookieMcpError, toToolError } from "../core/errors";
 import { getChainHealth } from "../core/health";
 import { getPools } from "../core/pools";
@@ -238,8 +238,7 @@ registerTool(
     title: "Swap (Candy Shop)",
     description:
       "Execute a swap via the Candy Shop aggregator: quotes, simulates, signs locally with the " +
-      "configured wallet, submits, and confirms. Non-custodial. Enforces the per-trade spend cap " +
-      `(COOKIE_MAX_TRADE_COOK, currently ${MAX_TRADE_COOK} COOK). Requires COOKIE_PRIVATE_KEY. ` +
+      "configured wallet, submits, and confirms. Non-custodial. Requires COOKIE_PRIVATE_KEY. " +
       "`amount` is a UI amount of the input token. Returns the tx signature + explorer link.",
     inputSchema: {
       inputMint: z
@@ -276,8 +275,8 @@ registerTool(
     title: "Transfer COOK or a token",
     description:
       "Send native COOK (omit `mint` or use the COOK mint) or an SPL/Token-2022 token to another " +
-      "wallet, creating the recipient's token account if needed. Simulates before sending and " +
-      `enforces the spend cap (COOKIE_MAX_TRADE_COOK, ${MAX_TRADE_COOK} COOK). Requires COOKIE_PRIVATE_KEY.`,
+      "wallet, creating the recipient's token account if needed. Simulates before sending. " +
+      "Requires COOKIE_PRIVATE_KEY.",
     inputSchema: {
       to: z.string().min(32).max(44).describe("recipient wallet address (base58)"),
       mint: z
@@ -299,7 +298,7 @@ registerTool(
     description:
       "Stake COOK into the bCOOK liquid-staking pool (SPL Stake Pool): deposits COOK and mints bCOOK to " +
       "your wallet (≈ amount × 0.995 / rate, after the 0.5% deposit fee). bCOOK keeps earning as the rate " +
-      "rises and stays liquid/transferable. Simulates first; honors the spend cap. Requires COOKIE_PRIVATE_KEY.",
+      "rises and stays liquid/transferable. Simulates first. Requires COOKIE_PRIVATE_KEY.",
     inputSchema: {
       amount: z
         .union([z.number().positive(), z.string()])
@@ -422,8 +421,7 @@ registerTool(
       "open market at the raise target). Mint + freeze authority are renounced and the metadata is " +
       "immutable, so a launch is FINAL — nothing about the token can be changed afterwards. Costs the " +
       "launchpad's creation fee, read live from its config (0 on the current deployment, so a launch " +
-      "usually costs only account rent) plus any devBuyCook; when the fee or dev buy is non-zero, " +
-      "COOKIE_MAX_TRADE_COOK must allow the total or the launch is refused by the spend cap. " +
+      "usually costs only account rent) plus any devBuyCook. " +
       "A LOGO IS REQUIRED: pass `imageBase64` (preferred — attach an image you generated, with " +
       "`imageMimeType`) or `imageUrl` and the launchpad pins it to IPFS. Launching without one is " +
       "refused unless you set `noLogo: true`, because the metadata is immutable and a logo can never " +
@@ -520,7 +518,7 @@ registerTool(
       "not show in get_balance and trade cannot swap them — exit with launchpad_sell, or claim the " +
       "real token with claim_launchpad after the pool graduates. There is no slippage parameter (the " +
       "program has no min-out), so the fill can move if others trade first. A 1% trade fee applies. " +
-      "Simulates before sending; honors the spend cap. Requires COOKIE_PRIVATE_KEY.",
+      "Simulates before sending. Requires COOKIE_PRIVATE_KEY.",
     inputSchema: {
       ref: z.string().min(32).max(44).describe(POOL_REF),
       amountCook: z
@@ -603,7 +601,7 @@ registerTool(
 );
 
 // Liquidity — Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM. Every op simulates before
-// sending and honors the spend cap; all are live-verified on Cookie Chain.
+// sending; all are live-verified on Cookie Chain.
 registerTool(
   "create_pool",
   {
@@ -675,7 +673,7 @@ registerTool(
     description:
       "Add liquidity to a pool by opening a new position; the venue (Cookiebox DAMM v2, Cookiebox CLMM, " +
       "or CookieSwap SAMM) is auto-detected from the pool. Concentrated-liquidity venues (CLMM/SAMM) " +
-      "open a full-range position by default. Simulates before sending; honors the spend cap. Requires " +
+      "open a full-range position by default. Simulates before sending. Requires " +
       "COOKIE_PRIVATE_KEY.",
     inputSchema: {
       poolPk: z.string().min(32).max(44).describe("pool address (see get_pools)"),
@@ -750,7 +748,7 @@ registerTool(
 
 // NFT marketplace — Baked Bazaar (Metaplex Auction House on Cookie Chain). Reads use the marketplace
 // indexer; every write builds the auction-house tx, simulates, signs locally, and confirms. COOK-
-// spending tools (buy_nft, make_offer) honor the spend cap. Requires COOKIE_PRIVATE_KEY for writes.
+// Requires COOKIE_PRIVATE_KEY for writes.
 registerTool(
   "get_nft_listings",
   {
@@ -909,8 +907,7 @@ registerTool(
     description:
       "Buy a listed NFT at its current listing price: funds escrow, bids, and settles the sale in one " +
       "transaction; the NFT lands in your wallet. Optionally pass `maxPrice` (COOK) as a guard. " +
-      "Simulates before sending; enforces the per-trade spend cap (COOKIE_MAX_TRADE_COOK). Requires " +
-      "COOKIE_PRIVATE_KEY.",
+      "Simulates before sending. Requires COOKIE_PRIVATE_KEY.",
     inputSchema: {
       mint: z.string().min(32).max(44).describe("the listed NFT mint to buy"),
       maxPrice: z
@@ -928,8 +925,8 @@ registerTool(
     title: "Make an offer on an NFT (Baked Bazaar)",
     description:
       "Place a public offer (bid) on an NFT at `price` COOK. The COOK is escrowed with the auction " +
-      "house until the offer is accepted or you cancel it. Simulates before sending; enforces the " +
-      "spend cap. Requires COOKIE_PRIVATE_KEY.",
+      "house until the offer is accepted or you cancel it. Simulates before sending. " +
+      "Requires COOKIE_PRIVATE_KEY.",
     inputSchema: {
       mint: z.string().min(32).max(44).describe("the NFT mint to bid on"),
       price: z.union([z.number().positive(), z.string()]).describe("offer price in COOK"),
@@ -987,8 +984,8 @@ registerTool(
       "account) or 'solana-to-cookie' (locks SPL COOK on Solana, credits native COOK on Cookie). " +
       "`to` is the recipient on the DESTINATION chain (base58; both chains share your keypair, so it " +
       "defaults to your own wallet). `amount` is a UI amount of COOK. Signs and sends one transaction " +
-      "on the source chain; a relayer delivers on the far side in a few minutes. Enforces the spend " +
-      "cap and simulates first. Requires COOKIE_PRIVATE_KEY plus COOKIE_WARP_PROGRAM_ID / " +
+      "on the source chain; a relayer delivers on the far side in a few minutes. Simulates first. " +
+      "Requires COOKIE_PRIVATE_KEY plus COOKIE_WARP_PROGRAM_ID / " +
       "SOLANA_WARP_PROGRAM_ID. Returns the source tx signature and the Hyperlane message id (use " +
       "bridge_status to confirm delivery); pass waitForDelivery to poll up to ~3 min inline. A wait " +
       "that times out is not a failure — the transfer is still in flight; re-check with bridge_status.",

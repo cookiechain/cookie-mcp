@@ -4,16 +4,15 @@
 // high-level position-creating and position-finding paths derive PDAs against Meteora's *mainnet*
 // program id, which fails on the fork (ConstraintSeeds), so we build those instructions ourselves via
 // the Cookie anchor Program with Cookie-derived accounts (see ./cpAmm.ts). All ops are live-verified on
-// Cookie Chain. Simulate-before-send + spend cap on the COOK side.
+// Cookie Chain. Simulate-before-send on every op.
 import { Keypair, PublicKey, type Connection } from "@solana/web3.js";
 import BN from "bn.js";
 
-import { COOK_MINT, explorerTxUrl } from "../config";
+import { explorerTxUrl } from "../config";
 import { CookieMcpError } from "../errors";
 import { getConnection } from "../rpc";
-import { requireWallet, assertWithinSpendCap } from "../wallet";
+import { requireWallet } from "../wallet";
 import { uiToRaw } from "../format";
-import { fetchTokens } from "../cookiescan";
 import { signSendConfirm, LP_NOTE } from "./send";
 import {
   buildCpAmmDeps,
@@ -100,13 +99,6 @@ async function loadPool(conn: Connection, poolStr: string): Promise<PoolCtx> {
   };
 }
 
-/** COOK price (native) for the spend-cap valuation of a deposited token. */
-async function priceCookOf(mint: string): Promise<number | null> {
-  if (mint === COOK_MINT) return 1;
-  const t = (await fetchTokens()).find((x) => x.mint === mint);
-  return t?.price?.native ?? null;
-}
-
 export interface LpResult {
   signature: string;
   pool: string;
@@ -132,12 +124,6 @@ export async function addLiquidity(args: {
   }
   const maxA = args.amountA != null ? uiToRaw(args.amountA, ctx.aDecimals) : 0n;
   const maxB = args.amountB != null ? uiToRaw(args.amountB, ctx.bDecimals) : 0n;
-
-  // Spend cap on whichever side is COOK (best-effort; both sides valued in COOK when priced).
-  const capA = ctx.state.tokenAMint.toBase58();
-  const capB = ctx.state.tokenBMint.toBase58();
-  if (maxA > 0n) assertWithinSpendCap(Number(args.amountA), await priceCookOf(capA));
-  if (maxB > 0n) assertWithinSpendCap(Number(args.amountB), await priceCookOf(capB));
 
   const liquidityDelta = ctx.deps.cpAmm.getLiquidityDelta({
     maxAmountTokenA: new BN(maxA.toString()),
@@ -325,15 +311,6 @@ export async function createPool(args: {
   })();
   const [a, b] =
     Buffer.compare(rawA.mint.toBuffer(), rawB.mint.toBuffer()) < 0 ? [rawA, rawB] : [rawB, rawA];
-
-  // Cap the COOK side (valued 1:1). A brand-new token side usually has no price, so it isn't capped.
-  for (const side of [a, b]) {
-    if (side.str === COOK_MINT) assertWithinSpendCap(side.ui, 1);
-    else {
-      const p = await priceCookOf(side.str);
-      if (p != null) assertWithinSpendCap(side.ui, p);
-    }
-  }
 
   const { initSqrtPrice, liquidityDelta } = deps.cpAmm.preparePoolCreationParams({
     tokenAAmount: a.raw,

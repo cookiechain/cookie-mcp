@@ -27,7 +27,7 @@ import { COOK_DECIMALS, COOK_SYMBOL, explorerTxUrl, explorerAddressUrl } from ".
 import { confirmSent } from "./confirm";
 import { CookieMcpError } from "./errors";
 import { getConnection } from "./rpc";
-import { requireWallet, assertWithinSpendCap } from "./wallet";
+import { requireWallet } from "./wallet";
 import { rawToUi, uiToRaw } from "./format";
 
 // --- Cookie Chain bCOOK stake pool (canonical SPL Stake Pool program) ---------------------------
@@ -213,7 +213,6 @@ export async function stake(args: { amount: string | number }): Promise<StakeRes
   const conn = getConnection();
 
   const amountUi = Number(args.amount);
-  assertWithinSpendCap(amountUi, 1); // input is COOK, valued 1:1
   let lamports: bigint;
   try {
     lamports = uiToRaw(args.amount, COOK_DECIMALS);
@@ -278,7 +277,6 @@ export async function unstake(args: { amount: string | number }): Promise<Unstak
 
   const amountUi = Number(args.amount);
   const pool = await fetchStakePool(conn);
-  assertWithinSpendCap(amountUi, pool.rate); // input is bCOOK, valued in COOK at the pool rate
   let poolTokens: bigint;
   try {
     poolTokens = uiToRaw(args.amount, BCOOK_DECIMALS);

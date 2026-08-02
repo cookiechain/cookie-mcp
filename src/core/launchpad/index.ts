@@ -23,7 +23,7 @@ import { confirmSent } from "../confirm";
 import { CookieMcpError } from "../errors";
 import { rawToUi, uiToRaw } from "../format";
 import { getConnection } from "../rpc";
-import { assertWithinSpendCap, ownPublicKey, requireWallet } from "../wallet";
+import { ownPublicKey, requireWallet } from "../wallet";
 import {
   buildBuyTx,
   buildClaimCreatorFeesTx,
@@ -1086,14 +1086,7 @@ export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenRes
   }
 
   const params = buildCreateParams(args);
-  const creationFeeCook = Number(rawToUi(cfg.creationFeeLamports, COOK_DECIMALS));
   const devBuyRaw = args.devBuyCook != null ? uiToRaw(args.devBuyCook, COOK_DECIMALS) : 0n;
-  const devBuyCook = Number(rawToUi(devBuyRaw, COOK_DECIMALS));
-  // The cap covers what actually leaves the wallet: the creation fee plus any dev buy. On a zero-fee
-  // deployment with no dev buy that total is 0 — nothing to cap, and asserting on it would reject the
-  // launch with a bogus "amount must be greater than 0" (rent still applies, but rent is not a trade).
-  const capitalAtRisk = creationFeeCook + devBuyCook;
-  if (capitalAtRisk > 0) assertWithinSpendCap(capitalAtRisk, 1);
 
   // Pin the logo first and reference its URL from the metadata JSON (never inline the base64 blob).
   let imageUrl = args.imageUrl?.trim() || undefined;
@@ -1213,7 +1206,6 @@ export async function launchpadBuy(args: {
   const { keypair } = requireWallet();
   const buyer = keypair.publicKey.toBase58();
 
-  assertWithinSpendCap(Number(args.amountCook), 1); // input is COOK, valued 1:1
   let paymentRaw: bigint;
   try {
     paymentRaw = uiToRaw(args.amountCook, COOK_DECIMALS);
@@ -1342,10 +1334,6 @@ export async function launchpadSell(args: {
 
   const feeBps = poolTradeFeeBps(pool, cfg);
   const est = estimateSell(pool, sharesRaw, feeBps);
-  // Value the sale in COOK for the spend cap (proceeds are what moves). A dust sell can estimate to 0,
-  // which is not a cap violation — let the program reject it as ZeroOutput instead of misreporting it.
-  const proceedsCook = Number(rawToUi(est.netRaw, COOK_DECIMALS));
-  if (proceedsCook > 0) assertWithinSpendCap(proceedsCook, 1);
 
   const built = await buildSellTx({
     seller,

@@ -46,8 +46,8 @@ design. It is a community project for the whole Cookie Chain ecosystem.
   accept offers (Cookie Chain's Metaplex Auction House marketplace).
 - **Bridge** COOK 1:1 between Cookie Chain and Solana mainnet over [Hyperlane](https://hyperlane.cookiescan.io).
 
-Safe by default: read-only until you add a key, a hard per-transaction spend cap, and every
-money-moving action is simulated before it is sent.
+Safe by default: read-only until you add a key, and every money-moving action is simulated before it
+is sent.
 
 ## Install
 
@@ -137,9 +137,8 @@ path to a keypair file.
     -- npx -y cookie-mcp
   ```
 
-Your key never leaves your machine, is used only to sign locally, and is redacted from all output. The
-per-transaction spend cap (`COOKIE_MAX_TRADE_COOK`, default 100 COOK) limits how much any single action
-can spend.
+Your key never leaves your machine, is used only to sign locally, and is redacted from all output.
+Every money-moving action is simulated before it is sent.
 
 ## Try it
 
@@ -148,7 +147,7 @@ Once it's registered, just talk to your agent naturally:
 - _"What's the health of Cookie Chain right now?"_ → `chain_health`
 - _"Find the cookhouse token and show me its price and liquidity."_ → `search_tokens` → `get_token_info`
 - _"Quote swapping 10 COOK for bCOOK."_ → `get_quote`
-- _"Swap 10 COOK for bCOOK."_ → `get_quote` → `trade` (needs a key; capped + simulated first)
+- _"Swap 10 COOK for bCOOK."_ → `get_quote` → `trade` (needs a key; simulated first)
 - _"What COOKHOUSE NFTs are listed, and buy the cheapest under 50 COOK."_ → `search_nfts` → `buy_nft`
 
 The agent resolves names to mint addresses with `search_tokens` / `search_nfts`, then acts on the mint —
@@ -156,13 +155,12 @@ it never turns a name straight into a trade.
 
 ## Configuration
 
-| Variable                | Default                               | Purpose                                                |
-| ----------------------- | ------------------------------------- | ------------------------------------------------------ |
-| `COOKIE_RPC_URL`        | `https://rpc.cookiescan.io`           | Cookie Chain RPC.                                      |
-| `COOKIE_PRIVATE_KEY`    | —                                     | Wallet key for money-moving tools. Read-only if unset. |
-| `COOKIE_MAX_TRADE_COOK` | `100`                                 | Per-transaction spend cap in COOK (`0` disables).      |
-| `COOKIE_SLIPPAGE_BPS`   | `500`                                 | Default slippage (bps).                                |
-| `SOLANA_RPC_URL`        | `https://api.mainnet-beta.solana.com` | Solana mainnet RPC (bridge only).                      |
+| Variable              | Default                               | Purpose                                                |
+| --------------------- | ------------------------------------- | ------------------------------------------------------ |
+| `COOKIE_RPC_URL`      | `https://rpc.cookiescan.io`           | Cookie Chain RPC.                                      |
+| `COOKIE_PRIVATE_KEY`  | —                                     | Wallet key for money-moving tools. Read-only if unset. |
+| `COOKIE_SLIPPAGE_BPS` | `500`                                 | Default slippage (bps).                                |
+| `SOLANA_RPC_URL`      | `https://api.mainnet-beta.solana.com` | Solana mainnet RPC (bridge only).                      |
 
 The Candy Shop API, Baked Bazaar API, MomoSwap launchpad API, and the Hyperlane warp-route program ids
 all ship with working mainnet defaults, so you never need to set them — override via env only to target
@@ -183,8 +181,8 @@ APY / fees), launchpad reads `get_launchpad_pools` / `get_launchpad_token` /
 **Launchpad** (need `COOKIE_PRIVATE_KEY`, [MomoSwap](https://momoswap.fun)): `deploy_token` launches a
 token on a COOK bonding curve (a logo is **required** — pass `imageBase64` and it is pinned to IPFS, or
 set `noLogo: true` to launch without one; the metadata is immutable, so a logo cannot be added later.
-Costs the launchpad creation fee, read from its config at call time; raise `COOKIE_MAX_TRADE_COOK` if the fee
-or your `devBuyCook` exceeds it), `launchpad_buy` / `launchpad_sell` trade that curve, `claim_launchpad`
+Costs the launchpad creation fee, read from its config at call time, plus any
+`devBuyCook`), `launchpad_buy` / `launchpad_sell` trade that curve, `claim_launchpad`
 settles a position (the real SPL token after graduation, a Fair-mode refund, or a Jackpot/Survivor payout),
 and `claim_creator_fees` sweeps the creator's share of trading fees from a launch you created.
 
@@ -211,14 +209,14 @@ full-range position by default.
 **NFT marketplace** (need `COOKIE_PRIVATE_KEY`, [Baked Bazaar](https://bakedbazaar.art)): `buy_nft`,
 `list_nft`, `cancel_listing`, `make_offer`, `accept_offer`, `cancel_offer`. Built on the Cookie Chain
 Metaplex Auction House (1% marketplace fee + creator royalties); every action is built and signed
-locally. `buy_nft` / `make_offer` honor the spend cap.
+locally.
 
 **Bridge** (need `COOKIE_PRIVATE_KEY`): `bridge` moves COOK 1:1 between Cookie Chain and Solana mainnet
 over the [Hyperlane](https://hyperlane.cookiescan.io) warp route (`direction` = `cookie-to-solana` |
 `solana-to-cookie`). One source-chain signature dispatches the transfer; a relayer delivers on the far
 side in a few minutes — check with `bridge_status` (a read, by Hyperlane message id). Cookie native COOK
-is 9-decimal; Solana COOK is a 6-decimal Token-2022 mint — amounts are in COOK either way. Honors the
-spend cap and simulates first. The mainnet warp-route program ids ship as defaults, so `bridge` works
+is 9-decimal; Solana COOK is a 6-decimal Token-2022 mint — amounts are in COOK either way. Simulates
+first. The mainnet warp-route program ids ship as defaults, so `bridge` works
 out of the box — override `COOKIE_WARP_PROGRAM_ID` / `SOLANA_WARP_PROGRAM_ID` only for a different
 deployment.
 
@@ -228,8 +226,8 @@ JSON; failures return `{ error, hint }` — never a stack trace, never your key.
 ## Safety
 
 Non-custodial and local: no hosted server, no remote key storage. The key stays in `COOKIE_PRIVATE_KEY`,
-signs locally, and is redacted from all output. Read-only until a key is set; every trade/transfer is
-capped (`COOKIE_MAX_TRADE_COOK`) and simulated before sending.
+signs locally, and is redacted from all output. Read-only until a key is set; every money-moving action
+is simulated before it is sent.
 
 ## Development
 

@@ -8,7 +8,6 @@ import {
   getWallet,
   ownPublicKey,
   requireWallet,
-  assertWithinSpendCap,
   _resetWalletCache,
 } from "./wallet";
 import { CookieMcpError } from "./errors";
@@ -58,27 +57,5 @@ describe("getWallet read-only mode", () => {
   it("errors clearly (no secret leak) on an unparseable key", () => {
     process.env.COOKIE_PRIVATE_KEY = "not-a-valid-key!!!";
     expect(() => getWallet()).toThrow(/could not be parsed/);
-  });
-});
-
-describe("assertWithinSpendCap", () => {
-  it("passes when value is under the cap", () => {
-    expect(assertWithinSpendCap(10, 1, 100)).toBeCloseTo(10);
-    expect(assertWithinSpendCap(50, 0.5, 100)).toBeCloseTo(25);
-  });
-  it("throws when value exceeds the cap", () => {
-    expect(() => assertWithinSpendCap(200, 1, 100)).toThrow(/spend cap|cap/);
-    expect(() => assertWithinSpendCap(300, 0.5, 100)).toThrow(/cap/);
-  });
-  it("throws when the input can't be valued in COOK", () => {
-    expect(() => assertWithinSpendCap(10, null, 100)).toThrow(/cannot value/);
-    expect(() => assertWithinSpendCap(10, 0, 100)).toThrow(/cannot value/);
-  });
-  it("throws on non-positive amount", () => {
-    expect(() => assertWithinSpendCap(0, 1, 100)).toThrow(/greater than 0/);
-    expect(() => assertWithinSpendCap(-5, 1, 100)).toThrow(/greater than 0/);
-  });
-  it("skips the check when the cap is disabled (0)", () => {
-    expect(assertWithinSpendCap(999999, null, 0)).toBeNaN();
   });
 });

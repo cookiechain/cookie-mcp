@@ -1,7 +1,7 @@
 // Baked Bazaar NFT marketplace — high-level actions + reads. Reads come from the bazaar indexer
 // (bazaar.ts); every write builds a Metaplex Auction House tx (auctionHouse.ts), simulates, signs
 // locally, sends over our RPC, confirms, and tells the indexer. Non-custodial; the COOK-spending
-// tools (buy_nft, make_offer) honor the per-trade spend cap.
+// tools (buy_nft, make_offer) simulate before sending.
 import {
   PublicKey,
   Transaction,
@@ -18,7 +18,7 @@ import { COOK_DECIMALS, COOK_SYMBOL, explorerTxUrl } from "../config";
 import { CookieMcpError } from "../errors";
 import { rawToUi, uiToRaw, shortAddr } from "../format";
 import { getConnection } from "../rpc";
-import { requireWallet, ownPublicKey, assertWithinSpendCap } from "../wallet";
+import { requireWallet, ownPublicKey } from "../wallet";
 import { signSendConfirm } from "../liquidity/send";
 import {
   AH_SELLER_FEE_BPS,
@@ -445,8 +445,6 @@ export async function buyNft(args: {
       "raise maxPrice or wait for a cheaper listing",
     );
   }
-  assertWithinSpendCap(priceUi, 1); // spending COOK, valued 1:1
-
   const mint = new PublicKey(args.mint);
   const seller = new PublicKey(listing.seller);
   const sellerTokenAccount = new PublicKey(listing.sellerTokenAccount);
@@ -499,7 +497,6 @@ export async function makeOffer(args: {
   const conn = getConnection();
   const mint = new PublicKey(args.mint);
   const price = toLamports(args.price, "price");
-  assertWithinSpendCap(priceCook(price), 1);
 
   const ixs: TransactionInstruction[] = [];
   const fund = await fundEscrowIx(conn, buyer, price);
