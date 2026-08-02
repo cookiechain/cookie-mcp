@@ -40,6 +40,12 @@ const EXPECTED_TOOLS = [
   "lock_liquidity",
   "claim_fees",
   "search_nfts",
+  "resolve_domain",
+  "get_owned_domains",
+  "register_domain",
+  "set_primary_domain",
+  "transfer_domain",
+  "update_domain",
 ];
 
 async function main() {

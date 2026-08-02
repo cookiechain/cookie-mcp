@@ -1,0 +1,484 @@
+{
+  "address": "H43Qtq4AMQ86y7yc3YtCKZJ2QMhhnCcHyZKeFeoQn7PA",
+  "metadata": {
+    "name": "cookie_domains",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Created with Anchor"
+  },
+  "instructions": [
+    {
+      "name": "clear_primary_domain",
+      "discriminator": [131, 7, 197, 14, 30, 164, 251, 111],
+      "accounts": [
+        {
+          "name": "primary",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [112, 114, 105, 109, 97, 114, 121] },
+              { "kind": "account", "path": "owner" }
+            ]
+          }
+        },
+        { "name": "owner", "signer": true }
+      ],
+      "args": []
+    },
+    {
+      "name": "initialize_config",
+      "discriminator": [208, 127, 21, 1, 194, 190, 196, 70],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }]
+          }
+        },
+        { "name": "payer", "writable": true, "signer": true },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        { "name": "admin", "type": "pubkey" },
+        { "name": "fee_receiver", "type": "pubkey" },
+        { "name": "cook_usd_price_micro", "type": "u64" },
+        { "name": "short_name_usd_cents", "type": "u64" },
+        { "name": "long_name_usd_cents", "type": "u64" },
+        { "name": "native_decimals", "type": "u8" }
+      ]
+    },
+    {
+      "name": "register_domain",
+      "discriminator": [236, 7, 208, 151, 173, 149, 73, 104],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }]
+          }
+        },
+        {
+          "name": "domain",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [100, 111, 109, 97, 105, 110] },
+              { "kind": "arg", "path": "name" }
+            ]
+          }
+        },
+        { "name": "payer", "writable": true, "signer": true },
+        { "name": "fee_receiver", "writable": true, "relations": ["config"] },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [{ "name": "name", "type": "string" }]
+    },
+    {
+      "name": "set_primary_domain",
+      "discriminator": [18, 2, 170, 172, 190, 140, 242, 27],
+      "accounts": [
+        {
+          "name": "primary",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [112, 114, 105, 109, 97, 114, 121] },
+              { "kind": "account", "path": "owner" }
+            ]
+          }
+        },
+        { "name": "domain" },
+        { "name": "owner", "writable": true, "signer": true },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "transfer_domain",
+      "discriminator": [129, 115, 193, 43, 174, 5, 241, 52],
+      "accounts": [
+        { "name": "domain", "writable": true },
+        { "name": "current_owner", "signer": true }
+      ],
+      "args": [{ "name": "new_owner", "type": "pubkey" }]
+    },
+    {
+      "name": "transfer_domain_with_primary_cleanup",
+      "discriminator": [49, 62, 30, 1, 52, 213, 52, 255],
+      "accounts": [
+        { "name": "domain", "writable": true },
+        {
+          "name": "primary",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [112, 114, 105, 109, 97, 114, 121] },
+              { "kind": "account", "path": "current_owner" }
+            ]
+          }
+        },
+        { "name": "current_owner", "signer": true }
+      ],
+      "args": [{ "name": "new_owner", "type": "pubkey" }]
+    },
+    {
+      "name": "update_admin",
+      "discriminator": [161, 176, 40, 213, 60, 184, 179, 228],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }]
+          }
+        },
+        { "name": "admin", "signer": true, "relations": ["config"] }
+      ],
+      "args": [{ "name": "new_admin", "type": "pubkey" }]
+    },
+    {
+      "name": "update_cook_usd_price",
+      "discriminator": [48, 169, 53, 46, 176, 100, 91, 82],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }]
+          }
+        },
+        { "name": "admin", "signer": true, "relations": ["config"] }
+      ],
+      "args": [{ "name": "new_cook_usd_price_micro", "type": "u64" }]
+    },
+    {
+      "name": "update_fee_receiver",
+      "discriminator": [112, 13, 173, 123, 235, 202, 24, 246],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }]
+          }
+        },
+        { "name": "admin", "signer": true, "relations": ["config"] }
+      ],
+      "args": [{ "name": "new_fee_receiver", "type": "pubkey" }]
+    },
+    {
+      "name": "update_metadata",
+      "discriminator": [170, 182, 43, 239, 97, 78, 225, 186],
+      "accounts": [
+        { "name": "domain", "writable": true },
+        { "name": "owner", "signer": true }
+      ],
+      "args": [{ "name": "new_metadata", "type": "pubkey" }]
+    },
+    {
+      "name": "update_resolver",
+      "discriminator": [108, 227, 28, 163, 123, 230, 190, 84],
+      "accounts": [
+        { "name": "domain", "writable": true },
+        { "name": "owner", "signer": true }
+      ],
+      "args": [{ "name": "new_resolver", "type": "pubkey" }]
+    },
+    {
+      "name": "update_usd_pricing",
+      "discriminator": [215, 29, 9, 228, 42, 190, 18, 147],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }]
+          }
+        },
+        { "name": "admin", "signer": true, "relations": ["config"] }
+      ],
+      "args": [
+        { "name": "short_name_usd_cents", "type": "u64" },
+        { "name": "long_name_usd_cents", "type": "u64" }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Config",
+      "discriminator": [155, 12, 170, 224, 30, 250, 204, 130]
+    },
+    {
+      "name": "DomainAccount",
+      "discriminator": [35, 146, 98, 112, 13, 230, 231, 153]
+    },
+    {
+      "name": "PrimaryDomain",
+      "discriminator": [231, 255, 61, 63, 142, 184, 254, 42]
+    }
+  ],
+  "events": [
+    {
+      "name": "AdminUpdated",
+      "discriminator": [69, 82, 49, 171, 43, 3, 80, 161]
+    },
+    {
+      "name": "ConfigInitialized",
+      "discriminator": [181, 49, 200, 156, 19, 167, 178, 91]
+    },
+    {
+      "name": "CookUsdPriceUpdated",
+      "discriminator": [67, 90, 244, 190, 216, 234, 157, 244]
+    },
+    {
+      "name": "DomainMetadataUpdated",
+      "discriminator": [28, 164, 246, 235, 134, 55, 99, 134]
+    },
+    {
+      "name": "DomainRegistered",
+      "discriminator": [225, 126, 10, 149, 131, 238, 145, 224]
+    },
+    {
+      "name": "DomainResolverUpdated",
+      "discriminator": [106, 175, 18, 115, 199, 244, 205, 42]
+    },
+    {
+      "name": "DomainTransferred",
+      "discriminator": [32, 158, 235, 113, 58, 90, 33, 137]
+    },
+    {
+      "name": "FeeReceiverUpdated",
+      "discriminator": [34, 167, 143, 95, 104, 84, 17, 200]
+    },
+    {
+      "name": "PrimaryDomainCleared",
+      "discriminator": [38, 227, 73, 142, 175, 184, 106, 227]
+    },
+    {
+      "name": "PrimaryDomainSet",
+      "discriminator": [10, 66, 30, 107, 119, 38, 10, 176]
+    },
+    {
+      "name": "UsdPricingUpdated",
+      "discriminator": [60, 39, 219, 69, 206, 229, 97, 161]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "NameTooShort",
+      "msg": "Domain name is too short."
+    },
+    { "code": 6001, "name": "NameTooLong", "msg": "Domain name is too long." },
+    { "code": 6002, "name": "InvalidName", "msg": "Invalid domain name." },
+    {
+      "code": 6003,
+      "name": "NotDomainOwner",
+      "msg": "You are not the owner of this domain."
+    },
+    { "code": 6004, "name": "InvalidPrice", "msg": "Invalid price." },
+    { "code": 6005, "name": "InvalidDecimals", "msg": "Invalid decimals." },
+    { "code": 6006, "name": "InvalidAdmin", "msg": "Invalid admin wallet." },
+    {
+      "code": 6007,
+      "name": "InvalidFeeReceiver",
+      "msg": "Invalid fee receiver wallet."
+    },
+    {
+      "code": 6008,
+      "name": "InvalidNewOwner",
+      "msg": "Invalid new owner wallet."
+    },
+    { "code": 6009, "name": "MathOverflow", "msg": "Math overflow." },
+    {
+      "code": 6010,
+      "name": "InvalidPrimaryOwner",
+      "msg": "Invalid primary domain owner."
+    }
+  ],
+  "types": [
+    {
+      "name": "AdminUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "old_admin", "type": "pubkey" },
+          { "name": "new_admin", "type": "pubkey" }
+        ]
+      }
+    },
+    {
+      "name": "Config",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "admin", "type": "pubkey" },
+          { "name": "fee_receiver", "type": "pubkey" },
+          { "name": "cook_usd_price_micro", "type": "u64" },
+          { "name": "short_name_usd_cents", "type": "u64" },
+          { "name": "long_name_usd_cents", "type": "u64" },
+          { "name": "native_decimals", "type": "u8" },
+          { "name": "bump", "type": "u8" }
+        ]
+      }
+    },
+    {
+      "name": "ConfigInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "admin", "type": "pubkey" },
+          { "name": "fee_receiver", "type": "pubkey" },
+          { "name": "cook_usd_price_micro", "type": "u64" },
+          { "name": "short_name_usd_cents", "type": "u64" },
+          { "name": "long_name_usd_cents", "type": "u64" },
+          { "name": "native_decimals", "type": "u8" }
+        ]
+      }
+    },
+    {
+      "name": "CookUsdPriceUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "old_price_micro", "type": "u64" },
+          { "name": "new_price_micro", "type": "u64" }
+        ]
+      }
+    },
+    {
+      "name": "DomainAccount",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "name", "type": "string" },
+          { "name": "owner", "type": "pubkey" },
+          {
+            "name": "resolver",
+            "docs": ["Optional resolver program/account.", "Pubkey::default() means unset."],
+            "type": "pubkey"
+          },
+          {
+            "name": "metadata",
+            "docs": [
+              "Optional metadata account/profile pointer.",
+              "Pubkey::default() means unset."
+            ],
+            "type": "pubkey"
+          },
+          { "name": "created_at", "type": "i64" },
+          { "name": "bump", "type": "u8" }
+        ]
+      }
+    },
+    {
+      "name": "DomainMetadataUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "name", "type": "string" },
+          { "name": "owner", "type": "pubkey" },
+          { "name": "old_metadata", "type": "pubkey" },
+          { "name": "new_metadata", "type": "pubkey" }
+        ]
+      }
+    },
+    {
+      "name": "DomainRegistered",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "name", "type": "string" },
+          { "name": "owner", "type": "pubkey" },
+          { "name": "price_lamports", "type": "u64" }
+        ]
+      }
+    },
+    {
+      "name": "DomainResolverUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "name", "type": "string" },
+          { "name": "owner", "type": "pubkey" },
+          { "name": "old_resolver", "type": "pubkey" },
+          { "name": "new_resolver", "type": "pubkey" }
+        ]
+      }
+    },
+    {
+      "name": "DomainTransferred",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "name", "type": "string" },
+          { "name": "old_owner", "type": "pubkey" },
+          { "name": "new_owner", "type": "pubkey" }
+        ]
+      }
+    },
+    {
+      "name": "FeeReceiverUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "old_fee_receiver", "type": "pubkey" },
+          { "name": "new_fee_receiver", "type": "pubkey" }
+        ]
+      }
+    },
+    {
+      "name": "PrimaryDomain",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "owner", "type": "pubkey" },
+          { "name": "domain_name", "type": "string" },
+          { "name": "bump", "type": "u8" }
+        ]
+      }
+    },
+    {
+      "name": "PrimaryDomainCleared",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "owner", "type": "pubkey" },
+          { "name": "domain_name", "type": "string" }
+        ]
+      }
+    },
+    {
+      "name": "PrimaryDomainSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "owner", "type": "pubkey" },
+          { "name": "domain_name", "type": "string" }
+        ]
+      }
+    },
+    {
+      "name": "UsdPricingUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "old_short_name_usd_cents", "type": "u64" },
+          { "name": "old_long_name_usd_cents", "type": "u64" },
+          { "name": "new_short_name_usd_cents", "type": "u64" },
+          { "name": "new_long_name_usd_cents", "type": "u64" }
+        ]
+      }
+    }
+  ]
+}

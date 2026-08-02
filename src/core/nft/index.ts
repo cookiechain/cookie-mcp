@@ -15,6 +15,7 @@ import {
 } from "@solana/spl-token";
 
 import { COOK_DECIMALS, COOK_SYMBOL, explorerTxUrl } from "../config";
+import { looksLikeName, resolveWallet } from "../domains";
 import { CookieMcpError } from "../errors";
 import { rawToUi, uiToRaw, shortAddr } from "../format";
 import { getConnection } from "../rpc";
@@ -276,15 +277,27 @@ export async function getNft(mint: string): Promise<unknown> {
   };
 }
 
-/** NFTs held by a wallet (default the configured wallet), with any active listing. */
-export async function getWalletNfts(wallet?: string): Promise<unknown> {
+/**
+ * The wallet a read applies to: an explicit address, a `.cook` name, or the configured wallet.
+ * Only a name touches the chain.
+ */
+async function readOwner(wallet?: string): Promise<string> {
+  if (wallet && looksLikeName(wallet)) {
+    return (await resolveWallet(wallet, "wallet address")).pubkey.toBase58();
+  }
   const owner = wallet ?? ownPublicKey();
   if (!owner) {
     throw new CookieMcpError(
       "no wallet address provided and no wallet configured",
-      "pass a `wallet` address, or set COOKIE_PRIVATE_KEY to default to your own wallet",
+      "pass a `wallet` address or .cook name, or set COOKIE_PRIVATE_KEY to default to your own wallet",
     );
   }
+  return owner;
+}
+
+/** NFTs held by a wallet (default the configured wallet), with any active listing. */
+export async function getWalletNfts(wallet?: string): Promise<unknown> {
+  const owner = await readOwner(wallet);
   const nfts = await fetchUserNfts(owner);
   return {
     wallet: owner,
@@ -303,13 +316,7 @@ export async function getWalletNfts(wallet?: string): Promise<unknown> {
 
 /** Offers a wallet has made and offers it has received (on NFTs it holds). Default configured wallet. */
 export async function getNftOffers(wallet?: string): Promise<unknown> {
-  const owner = wallet ?? ownPublicKey();
-  if (!owner) {
-    throw new CookieMcpError(
-      "no wallet address provided and no wallet configured",
-      "pass a `wallet` address, or set COOKIE_PRIVATE_KEY to default to your own wallet",
-    );
-  }
+  const owner = await readOwner(wallet);
   const [made, received] = await Promise.all([fetchOffersBy(owner), fetchOffersReceived(owner)]);
   const view = (o: BazaarOffer) => ({
     mint: o.nftMint,

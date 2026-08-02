@@ -20,6 +20,7 @@ import {
   PROGRAM_IDS,
 } from "../config";
 import { confirmSent } from "../confirm";
+import { resolveWallet } from "../domains";
 import { CookieMcpError } from "../errors";
 import { rawToUi, uiToRaw } from "../format";
 import { getConnection } from "../rpc";
@@ -629,17 +630,16 @@ export async function getLaunchpadPositions(args: {
   owner?: string;
   includeClosed?: boolean;
 }): Promise<GetLaunchpadPositionsResult> {
-  const owner = args.owner?.trim() || ownPublicKey();
+  const requested = args.owner?.trim();
+  // `owner` accepts a `.cook` name as well as an address; only a name costs a lookup.
+  const owner = requested
+    ? (await resolveWallet(requested, "owner")).pubkey.toBase58()
+    : ownPublicKey();
   if (!owner) {
     throw new CookieMcpError(
       "no wallet to look up",
-      "pass `owner` (any address), or set COOKIE_PRIVATE_KEY to use your own",
+      "pass `owner` (any address or .cook name), or set COOKIE_PRIVATE_KEY to use your own",
     );
-  }
-  try {
-    new PublicKey(owner);
-  } catch {
-    throw new CookieMcpError(`"${owner}" is not a valid address`, "pass a base58 wallet address");
   }
 
   const conn = getConnection();

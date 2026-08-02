@@ -6,8 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- **MomoSwap launchpad support** (6 new tools, 32 → 38). Tokens launch on a COOK bonding curve and
-  graduate to the open market once the raise target is met.
+- **MomoSwap launchpad support**. Tokens launch on a COOK bonding curve and graduate to the open market
+  once the raise target is met.
   - `get_launchpad_pools` / `get_launchpad_token` — browse launches and inspect one: curve price, raise
     vs graduation target, settlement mode, fee split, your position, and an optional buy quote.
   - `get_launchpad_positions` — every launch a wallet holds a position in, what it is worth on a live
@@ -27,6 +27,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     each transaction — it holds the pre-ground `momo` mint the program requires and pins metadata — then
     this server simulates it on your RPC, signs with `COOKIE_PRIVATE_KEY` and sends. Custody is unchanged:
     the key never leaves your machine.
+- **CookOven `.cook` name support**. Cookie Chain's name service. The dApp is client-side only,
+  so every read and every instruction here is built straight against the program — no API, no indexer.
+  - `resolve_domain` — who owns a name, when it was registered, its resolver/metadata pointers, and
+    whether it is the owner's primary. If the name is free it returns the **live registration price**
+    instead, so availability and cost are one call.
+  - `get_owned_domains` — every name a wallet owns plus its primary, enumerated on-chain.
+  - `register_domain`, `set_primary_domain` (or `clear: true`), `transfer_domain`, `update_domain`.
+  - **A `.cook` name now works anywhere an address does**: `transfer`, `get_balance`, `get_wallet_nfts`,
+    `get_nft_offers`, `get_launchpad_positions` and `transfer_domain`. A base58 address still costs no
+    extra lookup — only a name triggers one. The `.cook` suffix is optional everywhere.
 - **`lock_liquidity` now supports Cookiebox CLMM**, not just DAMM v2 — the venue is auto-detected from
   the pool like every other liquidity tool. The whirlpool program only offers `LockType::Permanent` and
   it always takes the **whole** position, so unlike DAMM there is no partial amount and no vesting.

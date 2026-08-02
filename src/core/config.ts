@@ -26,6 +26,12 @@ export const MOMOSWAP_API_URL =
 export const MOMOSWAP_SITE_URL =
   process.env.MOMOSWAP_SITE_URL?.trim().replace(/\/$/, "") || "https://momoswap.fun";
 
+// CookOven (book.cookoven.xyz) — the `.cook` name service dApp. It is a pure client-side app: it
+// builds every instruction against the `cookie_domains` program on our own RPC, with no backend of
+// its own, so cookie-mcp hand-encodes the same instructions rather than calling an API.
+export const COOKOVEN_SITE_URL =
+  process.env.COOKOVEN_SITE_URL?.trim().replace(/\/$/, "") || "https://book.cookoven.xyz";
+
 export const EXPLORER_URL =
   process.env.COOKIE_EXPLORER_URL?.trim().replace(/\/$/, "") || "https://cookiescan.io";
 
@@ -51,7 +57,13 @@ export const PROGRAM_IDS = {
   momoswapLaunchpad:
     process.env.MOMOSWAP_LAUNCHPAD_PROGRAM_ID?.trim() ||
     "momoL7wu4TrXjnXMLCLzGsbx8Pm7XGgoYo7FVqDoqcw",
+  // CookOven `.cook` name service (src/idl/cookie_domains.json) — a single deployment, not overridable.
+  cookieDomains: "H43Qtq4AMQ86y7yc3YtCKZJ2QMhhnCcHyZKeFeoQn7PA",
 } as const;
+
+// The `.cook` suffix is presentation only: the on-chain PDA seed and the `DomainAccount.name` field
+// both store the bare label ("bot", not "bot.cook").
+export const COOK_TLD = ".cook";
 
 export const HTTP_TIMEOUT_MS = 12_000;
 

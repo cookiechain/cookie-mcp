@@ -41,6 +41,14 @@ import {
 } from "../core/nft";
 import { bridge, bridgeStatus, type BridgeDirection } from "../core/bridge";
 import {
+  getOwnedDomains,
+  registerDomain,
+  resolveDomain,
+  setPrimaryDomain,
+  transferDomain,
+  updateDomain,
+} from "../core/domains";
+import {
   deployToken,
   claimCreatorFees,
   claimLaunchpad,
@@ -197,15 +205,14 @@ registerTool(
     title: "Wallet balances",
     description:
       "Native COOK + SPL/Token-2022 token balances for a wallet, with USD values. Defaults to the " +
-      "configured wallet (COOKIE_PRIVATE_KEY); pass `wallet` to inspect any address. In read-only " +
-      "mode (no key), `wallet` is required.",
+      "configured wallet (COOKIE_PRIVATE_KEY); pass `wallet` to inspect any address or .cook name. " +
+      "In read-only mode (no key), `wallet` is required.",
     inputSchema: {
       wallet: z
         .string()
-        .min(32)
-        .max(44)
+        .min(1)
         .optional()
-        .describe("wallet address (base58); omit to use the configured wallet"),
+        .describe("wallet address (base58) or .cook name; omit to use the configured wallet"),
     },
   },
   tool(async (a: { wallet?: string }) => {
@@ -278,7 +285,10 @@ registerTool(
       "wallet, creating the recipient's token account if needed. Simulates before sending. " +
       "Requires COOKIE_PRIVATE_KEY.",
     inputSchema: {
-      to: z.string().min(32).max(44).describe("recipient wallet address (base58)"),
+      to: z
+        .string()
+        .min(1)
+        .describe('recipient wallet address (base58) or .cook name (e.g. "bot.cook")'),
       mint: z
         .string()
         .min(32)
@@ -399,10 +409,9 @@ registerTool(
     inputSchema: {
       owner: z
         .string()
-        .min(32)
-        .max(44)
+        .min(1)
         .optional()
-        .describe("wallet to inspect (defaults to your own wallet)"),
+        .describe("wallet address or .cook name to inspect (defaults to your own wallet)"),
       includeClosed: z
         .boolean()
         .optional()
@@ -822,10 +831,9 @@ registerTool(
     inputSchema: {
       wallet: z
         .string()
-        .min(32)
-        .max(44)
+        .min(1)
         .optional()
-        .describe("wallet address (base58); omit to use the configured wallet"),
+        .describe("wallet address (base58) or .cook name; omit to use the configured wallet"),
     },
   },
   tool(async (a: { wallet?: string }) => getWalletNfts(a.wallet)),
@@ -842,10 +850,9 @@ registerTool(
     inputSchema: {
       wallet: z
         .string()
-        .min(32)
-        .max(44)
+        .min(1)
         .optional()
-        .describe("wallet address (base58); omit to use the configured wallet"),
+        .describe("wallet address (base58) or .cook name; omit to use the configured wallet"),
     },
   },
   tool(async (a: { wallet?: string }) => getNftOffers(a.wallet)),
@@ -1032,6 +1039,141 @@ registerTool(
     },
   },
   tool(async (a: { messageId: string; direction: BridgeDirection }) => bridgeStatus(a)),
+);
+
+// CookOven `.cook` names (book.cookoven.xyz) — Cookie Chain's name service. A name is a permanent,
+// non-expiring PDA owned by a wallet. Every tool below accepts the name with or without the `.cook`
+// suffix, and `transfer`, `get_balance`, `get_wallet_nfts`, `get_nft_offers` and
+// `get_launchpad_positions` accept a `.cook` name anywhere they take a wallet address.
+const DOMAIN_NAME_ARG = 'the .cook name, with or without the suffix (e.g. "bot" or "bot.cook")';
+
+registerTool(
+  "resolve_domain",
+  {
+    title: "Resolve a .cook name",
+    description:
+      "Look up a .cook name on the CookOven name service: who owns it, when it was registered, its " +
+      "resolver/metadata pointers, and whether it is the owner's primary name. If the name is NOT " +
+      "registered, returns availability plus the live registration price (short 1–3 character names " +
+      "cost more than 4+ character ones). Use this before register_domain — it is free and touches " +
+      "no key. For the reverse direction (wallet → names) use get_owned_domains.",
+    inputSchema: {
+      name: z.string().min(1).describe(DOMAIN_NAME_ARG),
+    },
+  },
+  tool(async (a: { name: string }) => resolveDomain(a.name)),
+);
+
+registerTool(
+  "get_owned_domains",
+  {
+    title: "List a wallet's .cook names",
+    description:
+      "Every .cook name a wallet owns, plus which one is its primary (the name apps show instead of " +
+      "the raw address). Defaults to the configured wallet; pass `wallet` to inspect any address or " +
+      ".cook name. Reads the registry on-chain — no indexer, no key needed.",
+    inputSchema: {
+      wallet: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("wallet address or .cook name; omit to use the configured wallet"),
+    },
+  },
+  tool(async (a: { wallet?: string }) => getOwnedDomains(a.wallet)),
+);
+
+registerTool(
+  "register_domain",
+  {
+    title: "Register a .cook name",
+    description:
+      "Claim an unregistered .cook name on the CookOven name service. ⚠️ EXPENSIVE and PERMANENT: " +
+      "the price is set in USD by the registry and paid in COOK — thousands of COOK at the current " +
+      "config — and registration is non-refundable with no expiry. `maxPriceCook` is REQUIRED as an " +
+      "explicit spend confirmation: call resolve_domain (or this tool without it) to learn the live " +
+      "price first, then pass that number. Refuses before signing if the name is taken or the price " +
+      "exceeds `maxPriceCook`. Simulates before sending. Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      name: z.string().min(1).describe(DOMAIN_NAME_ARG),
+      maxPriceCook: z
+        .union([z.number().positive(), z.string()])
+        .optional()
+        .describe(
+          "the most COOK you accept paying; omit to be told the live price without spending anything",
+        ),
+      setPrimary: z
+        .boolean()
+        .optional()
+        .describe(
+          "also make it this wallet's primary name, in the same transaction (default false)",
+        ),
+    },
+  },
+  tool(async (a: { name: string; maxPriceCook?: string | number; setPrimary?: boolean }) =>
+    registerDomain(a),
+  ),
+);
+
+registerTool(
+  "set_primary_domain",
+  {
+    title: "Set or clear the primary .cook name",
+    description:
+      "Point this wallet's primary record at one of the .cook names it owns, so apps label it by " +
+      "that name instead of its address. Pass `clear: true` instead of `name` to unset it (the " +
+      "wallet keeps the name either way). Simulates before sending. Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      name: z.string().min(1).optional().describe(DOMAIN_NAME_ARG),
+      clear: z
+        .boolean()
+        .optional()
+        .describe("unset the current primary name instead of setting one"),
+    },
+  },
+  tool(async (a: { name?: string; clear?: boolean }) => setPrimaryDomain(a)),
+);
+
+registerTool(
+  "transfer_domain",
+  {
+    title: "Transfer a .cook name",
+    description:
+      "Hand a .cook name you own to another wallet. FINAL — only the new owner can move it again. " +
+      "If the name is this wallet's primary, the primary record is cleared in the same instruction " +
+      "so it cannot point at a name the wallet no longer owns. The recipient can be given as an " +
+      "address or as a .cook name. Simulates before sending. Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      name: z.string().min(1).describe(DOMAIN_NAME_ARG),
+      to: z.string().min(1).describe("recipient wallet address or .cook name"),
+    },
+  },
+  tool(async (a: { name: string; to: string }) => transferDomain(a)),
+);
+
+registerTool(
+  "update_domain",
+  {
+    title: "Update a .cook name's pointers",
+    description:
+      "Set or clear the `resolver` and `metadata` pubkey pointers on a .cook name you own. The " +
+      'program stores them without interpreting them — they are hooks for apps. Pass "none" to clear ' +
+      "one. At least one of `resolver`/`metadata` is required. Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      name: z.string().min(1).describe(DOMAIN_NAME_ARG),
+      resolver: z
+        .string()
+        .min(1)
+        .optional()
+        .describe('resolver account (base58), or "none" to clear it'),
+      metadata: z
+        .string()
+        .min(1)
+        .optional()
+        .describe('metadata account (base58), or "none" to clear it'),
+    },
+  },
+  tool(async (a: { name: string; resolver?: string; metadata?: string }) => updateDomain(a)),
 );
 
 async function main() {

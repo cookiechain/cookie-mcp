@@ -9,6 +9,7 @@ import {
 
 import { COOK_MINT, COOK_SYMBOL, COOK_DECIMALS, explorerTxUrl } from "./config";
 import { confirmSent } from "./confirm";
+import { resolveWallet } from "./domains";
 import { CookieMcpError } from "./errors";
 import { fetchToken } from "./cookiescan";
 import { getConnection } from "./rpc";
@@ -32,6 +33,8 @@ export interface TransferResult {
   signature: string;
   explorerUrl: string;
   to: string;
+  /** The `.cook` name the recipient was given as, when one was used. */
+  toName?: string;
   mint: string;
   symbol: string | null;
   amount: string;
@@ -45,7 +48,9 @@ export async function transfer(args: {
   const { keypair } = requireWallet();
   const conn = getConnection();
   const from = keypair.publicKey;
-  const to = parsePubkey(args.to, "recipient");
+  // `to` may be a base58 address or a `.cook` name; an address costs no extra round trip.
+  const recipient = await resolveWallet(args.to, "recipient");
+  const to = recipient.pubkey;
   const isNative = isNativeTransfer(args.mint);
 
   const tx = new Transaction();
@@ -136,6 +141,7 @@ export async function transfer(args: {
     signature,
     explorerUrl: explorerTxUrl(signature),
     to: to.toBase58(),
+    ...(recipient.name ? { toName: recipient.name } : {}),
     mint,
     symbol,
     amount: isNative

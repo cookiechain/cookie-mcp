@@ -2,6 +2,7 @@
 import { PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
 
 import { COOK_MINT, COOK_SYMBOL, COOK_DECIMALS } from "./config";
+import { looksLikeName, resolveWallet } from "./domains";
 import { CookieMcpError } from "./errors";
 import { fetchTokens, type CookiescanToken } from "./cookiescan";
 import { getConnection } from "./rpc";
@@ -21,6 +22,8 @@ export interface TokenBalance {
 
 export interface WalletBalances {
   wallet: string;
+  /** The `.cook` name the wallet was looked up by, when one was used. */
+  walletName?: string;
   cook: { amount: string; usdValue: number | null };
   tokens: TokenBalance[];
   totalUsd: number | null;
@@ -41,7 +44,10 @@ export interface ParsedTokenAmount {
 }
 
 export async function getBalances(wallet: string): Promise<WalletBalances> {
-  const owner = parsePubkey(wallet);
+  // A base58 address resolves locally; a `.cook` name costs one PDA read.
+  const { pubkey: owner, name } = looksLikeName(wallet)
+    ? await resolveWallet(wallet, "wallet address")
+    : { pubkey: parsePubkey(wallet), name: null };
   const conn = getConnection();
 
   const [lamports, tokenAccts, token2022Accts, registry] = await Promise.all([
@@ -60,7 +66,8 @@ export async function getBalances(wallet: string): Promise<WalletBalances> {
       };
     },
   );
-  return mapBalances(owner.toBase58(), lamports, parsed, registry);
+  const balances = mapBalances(owner.toBase58(), lamports, parsed, registry);
+  return name ? { ...balances, walletName: name } : balances;
 }
 
 // Pure assembly of the balances view: join SPL/Token-2022 accounts against the registry for

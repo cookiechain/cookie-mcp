@@ -45,6 +45,9 @@ design. It is a community project for the whole Cookie Chain ecosystem.
 - **Trade NFTs** on [Baked Bazaar](https://bakedbazaar.art) — search, browse, buy, list, and make /
   accept offers (Cookie Chain's Metaplex Auction House marketplace).
 - **Bridge** COOK 1:1 between Cookie Chain and Solana mainnet over [Hyperlane](https://hyperlane.cookiescan.io).
+- **Own a name** — register, transfer, and resolve `.cook` names on the
+  [CookOven](https://book.cookoven.xyz) name service, and use them anywhere an address is expected
+  (`transfer to: "bot.cook"`).
 
 Safe by default: read-only until you add a key, and every money-moving action is simulated before it
 is sent.
@@ -173,7 +176,8 @@ name/ticker to its mint), `get_quote`, `get_balance`, `stake_info` (bCOOK liquid
 APY / fees), launchpad reads `get_launchpad_pools` / `get_launchpad_token` /
 `get_launchpad_positions`, and NFT reads
 `get_nft_listings`, `search_nfts` (resolve an NFT/collection name to a listed mint), `get_nft`,
-`get_wallet_nfts`, `get_nft_offers`, `get_nft_market_stats`.
+`get_wallet_nfts`, `get_nft_offers`, `get_nft_market_stats`, and `.cook` name reads
+`resolve_domain` / `get_owned_domains`.
 
 **Money** (need `COOKIE_PRIVATE_KEY`): `trade` (swap via Candy Shop), `transfer` (COOK or any token),
 `stake` / `unstake` (COOK ⇄ bCOOK liquid staking).
@@ -219,6 +223,17 @@ is 9-decimal; Solana COOK is a 6-decimal Token-2022 mint — amounts are in COOK
 first. The mainnet warp-route program ids ship as defaults, so `bridge` works
 out of the box — override `COOKIE_WARP_PROGRAM_ID` / `SOLANA_WARP_PROGRAM_ID` only for a different
 deployment.
+
+**`.cook` names** ([CookOven](https://book.cookoven.xyz)): `resolve_domain` looks a name up — owner,
+registration date, resolver/metadata pointers — or reports it as available with the live price;
+`get_owned_domains` lists every name a wallet holds and which is its primary. Writes need
+`COOKIE_PRIVATE_KEY`: `register_domain`, `set_primary_domain` (or `clear: true` to unset),
+`transfer_domain`, `update_domain`. Everything is read and built straight from the on-chain registry —
+no API, no indexer. The suffix is optional everywhere: `chef` and `chef.cook` are the same name.
+
+Once you own a name you can use it instead of an address: `transfer`, `get_balance`,
+`get_wallet_nfts`, `get_nft_offers`, `get_launchpad_positions` and `transfer_domain` all accept a
+`.cook` name wherever they take a Cookie Chain wallet. A plain base58 address costs no extra lookup.
 
 Use the COOK / native mint `So11111111111111111111111111111111111111112` for COOK. Every tool returns
 JSON; failures return `{ error, hint }` — never a stack trace, never your key.

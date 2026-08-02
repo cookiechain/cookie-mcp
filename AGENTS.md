@@ -19,9 +19,10 @@ src/
     http.ts            #   fetchJson with retry policy
     launchpad/         #   MomoSwap launchpad: api (HTTP client) + curve (quote math) + positions (PDAs)
                        #   + program (which deployment: PDA scope + error-code build)
+    domains/           #   CookOven `.cook` names: names (rules + pricing) + program (ixs/PDAs/decode)
     liquidity/         #   create/add/remove/lock/claim across damm, cpAmm, clmm, cookieswap
     nft/               #   Baked Bazaar: auctionHouse (writes) + bazaar (reads)
-  idl/                 # committed IDLs (cp_amm, whirlpool)
+  idl/                 # committed IDLs (cp_amm, whirlpool, cookie_domains)
 scripts/               # smoke.ts (boots server, asserts tool count) + verify-*.ts (live checks)
 ```
 
