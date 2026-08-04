@@ -13,6 +13,7 @@ import {
   mapPoolView,
   positionAction,
   resolveClaimKind,
+  resolveReferrer,
   sendFailure,
 } from "./index";
 import { CookieMcpError } from "../errors";
@@ -568,5 +569,40 @@ describe("launchpadSimError", () => {
       launchpadSimError("claim", { InstructionError: [1, { Custom: 6012 }] }, null, null, hints)
         .message,
     ).toContain("trading has not opened yet");
+  });
+});
+
+describe("resolveReferrer", () => {
+  const BUYER = "9rj5GEEyGGV9dTgAf9zJbFHqSjmMwYhtLdBQr6TWCmL8";
+  const DEFAULT = "B8AB9R9J98yggrwdnZhoHuGJBc8RzTpHsqDnRkTnMuV";
+  const OTHER = "J1mjnWwuM1XbPNsz49jRy8oYEXXvoD7vuToXXq53S5Lp";
+
+  it("credits the configured default when the caller names nobody", () => {
+    expect(resolveReferrer(undefined, BUYER, DEFAULT)).toBe(DEFAULT);
+  });
+
+  it("lets an explicit referrer win over the default", () => {
+    expect(resolveReferrer(OTHER, BUYER, DEFAULT)).toBe(OTHER);
+  });
+
+  it("rejects an explicitly self-referring buy", () => {
+    expect(() => resolveReferrer(BUYER, BUYER, DEFAULT)).toThrow(CookieMcpError);
+  });
+
+  // The wallet running the server may BE the configured referrer. The program rejects self-referral,
+  // so the fallback has to drop out rather than turn every one of that wallet's buys into an error.
+  it("drops the default when it is the buyer, instead of throwing", () => {
+    expect(resolveReferrer(undefined, BUYER, BUYER)).toBeNull();
+  });
+
+  it("treats an empty COOKIE_REFERRER as opting out", () => {
+    expect(resolveReferrer(undefined, BUYER, "")).toBeNull();
+  });
+
+  // Ambient config the trader may not have set must never break their buy: a malformed default is
+  // worth losing the referral over, not the trade. (An explicit argument is the caller's own input,
+  // so it is passed through and the API validates it.)
+  it("ignores a malformed default rather than failing the buy", () => {
+    expect(resolveReferrer(undefined, BUYER, "not-a-pubkey")).toBeNull();
   });
 });

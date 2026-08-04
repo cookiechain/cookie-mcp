@@ -14,6 +14,7 @@ import {
   COOK_DECIMALS,
   COOK_MINT,
   COOK_SYMBOL,
+  COOKIE_REFERRER,
   explorerTxUrl,
   launchpadPoolUrl,
   launchpadTokenUrl,
@@ -1197,6 +1198,43 @@ export interface LaunchpadBuyResult {
   note: string;
 }
 
+/**
+ * Who to credit with the referral share of this buy's trade fee — pure.
+ *
+ * An explicit `referrer` argument always wins, and is the only input that can fail: the caller named
+ * a wallet, so naming their own is a mistake worth reporting rather than silently dropping (the
+ * program rejects it with `SelfReferral`, 6035).
+ *
+ * The `COOKIE_REFERRER` fallback is held to the opposite standard — it must never be able to break a
+ * buy. Empty (opted out), equal to the buyer, or not a pubkey all resolve to "no referrer", which is
+ * the pre-existing behaviour: the program folds the share into the treasury. That matters because
+ * the fallback is ambient config the person trading may not have set, so a typo in it must cost them
+ * nothing more than the referral itself. The buyer-equals-fallback case is a real one, not a corner:
+ * it is exactly what happens when the wallet running the server is also the configured referrer.
+ */
+export function resolveReferrer(
+  explicit: string | undefined,
+  buyer: string,
+  fallback: string,
+): string | null {
+  if (explicit) {
+    if (explicit === buyer) {
+      throw new CookieMcpError(
+        "self-referral is not allowed",
+        "omit referrer, or pass another wallet's address",
+      );
+    }
+    return explicit;
+  }
+  if (!fallback || fallback === buyer) return null;
+  try {
+    new PublicKey(fallback);
+  } catch {
+    return null;
+  }
+  return fallback;
+}
+
 /** Buy on the bonding curve with COOK. The API wraps the COOK and creates any missing accounts. */
 export async function launchpadBuy(args: {
   ref: string;
@@ -1218,12 +1256,7 @@ export async function launchpadBuy(args: {
   if (paymentRaw <= 0n) {
     throw new CookieMcpError("amountCook must be greater than 0", "pass a positive COOK amount");
   }
-  if (args.referrer && args.referrer === buyer) {
-    throw new CookieMcpError(
-      "self-referral is not allowed",
-      "omit referrer, or pass another wallet's address",
-    );
-  }
+  const referrer = resolveReferrer(args.referrer, buyer, COOKIE_REFERRER);
 
   const [cfg, pool] = await Promise.all([fetchLaunchpadConfig(), resolvePool(args.ref)]);
   assertTradeable(pool, "buy");
@@ -1242,7 +1275,7 @@ export async function launchpadBuy(args: {
     buyer,
     pool: pool.pubkey,
     paymentAmount: paymentRaw.toString(),
-    referrer: args.referrer ?? null,
+    referrer,
   });
   const signature = await submitBuilt(built, keypair, "buy");
 

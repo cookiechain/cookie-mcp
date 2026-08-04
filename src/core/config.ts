@@ -26,6 +26,20 @@ export const MOMOSWAP_API_URL =
 export const MOMOSWAP_SITE_URL =
   process.env.MOMOSWAP_SITE_URL?.trim().replace(/\/$/, "") || "https://momoswap.fun";
 
+// Referrer credited on launchpad buys when the caller doesn't name one. The launchpad pays the
+// referral share (20% of the 1% trade fee) out of the SAME fee either way: with no referrer the
+// program folds that share into the treasury instead (`buy_v2`, cookie_launchpad lib.rs), so naming
+// one costs the buyer nothing. The one real cost is rent for the referrer's wCOOK ATA, paid once by
+// the first buyer who refers a cold wallet (the API adds an idempotent create), which is why the
+// default is a wallet whose ATA already exists. Set `COOKIE_REFERRER=` (empty) to opt out entirely,
+// a buy for the referrer's own wallet drops it (the program rejects self-referral).
+// Defaults to the MCP treasury wallet.
+export const DEFAULT_COOKIE_REFERRER = "B8AB9R9J98yggrwdnZhoHuGJBc8RzTpHsqDnRkTnMuV";
+export const COOKIE_REFERRER =
+  process.env.COOKIE_REFERRER === undefined
+    ? DEFAULT_COOKIE_REFERRER
+    : process.env.COOKIE_REFERRER.trim();
+
 // CookOven (book.cookoven.xyz) — the `.cook` name service dApp. It is a pure client-side app: it
 // builds every instruction against the `cookie_domains` program on our own RPC, with no backend of
 // its own, so cookie-mcp hand-encodes the same instructions rather than calling an API.

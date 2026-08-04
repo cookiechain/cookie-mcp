@@ -164,10 +164,7 @@ it never turns a name straight into a trade.
 | `COOKIE_PRIVATE_KEY`  | —                                     | Wallet key for money-moving tools. Read-only if unset. |
 | `COOKIE_SLIPPAGE_BPS` | `500`                                 | Default slippage (bps).                                |
 | `SOLANA_RPC_URL`      | `https://api.mainnet-beta.solana.com` | Solana mainnet RPC (bridge only).                      |
-
-The Candy Shop API, Baked Bazaar API, MomoSwap launchpad API, and the Hyperlane warp-route program ids
-all ship with working mainnet defaults, so you never need to set them — override via env only to target
-a different deployment (see `src/core/config.ts`).
+| `COOKIE_REFERRER`     | `mcp treasury`                        | Referral wallet (MomoSwap only).                       |
 
 ## Tools
 
