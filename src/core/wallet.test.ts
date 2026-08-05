@@ -8,8 +8,10 @@ import {
   getWallet,
   ownPublicKey,
   requireWallet,
+  walletInfo,
   _resetWalletCache,
 } from "./wallet";
+import { COOKIE_RPC_URL } from "./config";
 import { CookieMcpError } from "./errors";
 
 const kp = Keypair.generate();
@@ -57,5 +59,31 @@ describe("getWallet read-only mode", () => {
   it("errors clearly (no secret leak) on an unparseable key", () => {
     process.env.COOKIE_PRIVATE_KEY = "not-a-valid-key!!!";
     expect(() => getWallet()).toThrow(/could not be parsed/);
+  });
+});
+
+describe("walletInfo", () => {
+  beforeEach(() => _resetWalletCache());
+  afterEach(() => {
+    delete process.env.COOKIE_PRIVATE_KEY;
+    _resetWalletCache();
+  });
+
+  it("reports the configured wallet and the RPC, and never the secret", () => {
+    const secret = bs58.encode(kp.secretKey);
+    process.env.COOKIE_PRIVATE_KEY = secret;
+    const info = walletInfo();
+    expect(info).toEqual({ wallet: pk, readOnly: false, rpcUrl: COOKIE_RPC_URL });
+    expect(JSON.stringify(info)).not.toContain(secret);
+  });
+
+  it("reports read-only mode with no key", () => {
+    delete process.env.COOKIE_PRIVATE_KEY;
+    expect(walletInfo()).toEqual({ wallet: null, readOnly: true, rpcUrl: COOKIE_RPC_URL });
+  });
+
+  it("surfaces an unparseable key as an error rather than a silent read-only", () => {
+    process.env.COOKIE_PRIVATE_KEY = "not-a-valid-key!!!";
+    expect(() => walletInfo()).toThrow(CookieMcpError);
   });
 });

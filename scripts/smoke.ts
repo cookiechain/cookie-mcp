@@ -20,6 +20,7 @@ const EXPECTED_TOOLS = [
   "get_token_info",
   "search_tokens",
   "get_quote",
+  "get_wallet",
   "get_balance",
   "trade",
   "transfer",

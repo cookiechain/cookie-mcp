@@ -13,7 +13,7 @@ import { getPools } from "../core/pools";
 import { getTokenInfo, searchTokens } from "../core/token";
 import { getQuote } from "../core/quote";
 import { getBalances } from "../core/balances";
-import { ownPublicKey } from "../core/wallet";
+import { ownPublicKey, walletInfo } from "../core/wallet";
 import { trade } from "../core/trade";
 import { transfer } from "../core/transfer";
 import { getStakeInfo, stake, unstake } from "../core/stake";
@@ -197,6 +197,21 @@ registerTool(
       slippageBps?: number;
     }) => getQuote(a),
   ),
+);
+
+registerTool(
+  "get_wallet",
+  {
+    title: "Configured wallet",
+    description:
+      "Which wallet this server signs with: the public key derived from COOKIE_PRIVATE_KEY, whether " +
+      "it is in read-only mode, and the Cookie Chain RPC it is pointed at. No arguments, no RPC " +
+      "call — so it answers even when the chain is unreachable. Use it before any money-moving tool " +
+      "to confirm the identity, and to tell apart the key a running server booted with from a key " +
+      "that has since changed on disk. Never returns the secret.",
+    inputSchema: {},
+  },
+  tool(async () => walletInfo()),
 );
 
 registerTool(

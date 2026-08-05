@@ -6,6 +6,7 @@ import path from "node:path";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 
+import { COOKIE_RPC_URL } from "./config";
 import { CookieMcpError } from "./errors";
 
 // Accepts a keygen JSON byte array, a { secretKey: [...] } object, or a base58 secret.
@@ -81,6 +82,16 @@ export function requireWallet(): { keypair: Keypair } {
 
 export function ownPublicKey(): string | null {
   return getWallet()?.keypair.publicKey.toBase58() ?? null;
+}
+
+/**
+ * Who is this server, right now. Deliberately makes NO RPC call, so it still answers when the chain
+ * or the RPC host is down — and it reports the key the *running process* booted with, which is the
+ * only thing that matters and is not always what `.env` or a config file on disk now says.
+ */
+export function walletInfo(): { wallet: string | null; readOnly: boolean; rpcUrl: string } {
+  const wallet = ownPublicKey();
+  return { wallet, readOnly: wallet === null, rpcUrl: COOKIE_RPC_URL };
 }
 
 export function _resetWalletCache(): void {

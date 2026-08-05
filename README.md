@@ -152,6 +152,7 @@ Once it's registered, just talk to your agent naturally:
 - _"Quote swapping 10 COOK for bCOOK."_ → `get_quote`
 - _"Swap 10 COOK for bCOOK."_ → `get_quote` → `trade` (needs a key; simulated first)
 - _"What COOKHOUSE NFTs are listed, and buy the cheapest under 50 COOK."_ → `search_nfts` → `buy_nft`
+- _"Which wallet are you about to trade from?"_ → `get_wallet`
 
 The agent resolves names to mint addresses with `search_tokens` / `search_nfts`, then acts on the mint —
 it never turns a name straight into a trade.
@@ -169,7 +170,8 @@ it never turns a name straight into a trade.
 ## Tools
 
 **Reads** (no key): `chain_health`, `get_pools`, `get_token_info`, `search_tokens` (resolve a token
-name/ticker to its mint), `get_quote`, `get_balance`, `stake_info` (bCOOK liquid-staking rate / TVL /
+name/ticker to its mint), `get_quote`, `get_wallet` (which key this server signs with, and the RPC it
+uses — no RPC call, so it works when the chain is down), `get_balance`, `stake_info` (bCOOK liquid-staking rate / TVL /
 APY / fees), launchpad reads `get_launchpad_pools` / `get_launchpad_token` /
 `get_launchpad_positions`, and NFT reads
 `get_nft_listings`, `search_nfts` (resolve an NFT/collection name to a listed mint), `get_nft`,

@@ -42,6 +42,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   it always takes the **whole** position, so unlike DAMM there is no partial amount and no vesting.
   Locked liquidity can never be withdrawn and the position can never be closed; fees stay claimable via
   `claim_fees`.
+- **`get_wallet`** — the public key this server signs with, whether it is read-only, and the RPC it is
+  pointed at. Takes no arguments and makes no RPC call, so it answers when the chain is unreachable and
+  it reports what the _running process_ booted with — not what a config file on disk now says, which can
+  differ until the server is restarted. Previously the only way to see the key was `get_balance` with no
+  arguments, which needs a live RPC. The secret is never returned.
 
 ### Changed
 
