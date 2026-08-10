@@ -41,7 +41,11 @@ import {
 } from "../core/nft";
 import { bridge, bridgeStatus, type BridgeDirection } from "../core/bridge";
 import {
+  buyDomain,
+  cancelDomainListing,
+  getDomainListings,
   getOwnedDomains,
+  listDomain,
   registerDomain,
   resolveDomain,
   setPrimaryDomain,
@@ -1189,6 +1193,134 @@ registerTool(
     },
   },
   tool(async (a: { name: string; resolver?: string; metadata?: string }) => updateDomain(a)),
+);
+
+// The `.cook` domain marketplace (market.cookoven.xyz) — the secondary market for names that are
+// already registered. Listing ESCROWS the name: while it is for sale the registry reports the
+// marketplace escrow as its owner, so the seller cannot transfer it, re-point it or set it as
+// primary, and `resolve_domain` reports the listing instead of a wallet.
+registerTool(
+  "get_domain_listings",
+  {
+    title: "Browse .cook names for sale",
+    description:
+      "Every .cook name listed for sale on the CookOven domain marketplace, read straight from the " +
+      "program — no indexer, no key needed. Filter by `name` (substring match), `seller`, " +
+      "`maxPriceCook` or `maxLength` (short names are the scarce ones), and sort by 'price' " +
+      "(cheapest first), 'length' or 'recent' (default). Also returns the live marketplace fee, " +
+      "which the SELLER pays out of the sale price, and the floor price of the matched set. Use " +
+      "resolve_domain for one specific name, or register_domain for a name nobody owns yet — the " +
+      "market only holds names that are already registered.",
+    inputSchema: {
+      name: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("only listings whose name contains this text (the .cook suffix is ignored)"),
+      seller: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("only listings from this wallet address or .cook name"),
+      maxPriceCook: z
+        .union([z.number().positive(), z.string()])
+        .optional()
+        .describe("only listings at or below this price in COOK"),
+      maxLength: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("only names with at most this many characters"),
+      sort: z
+        .enum(["price", "recent", "length"])
+        .optional()
+        .describe(
+          "price = cheapest first, length = shortest first, recent = newest first (default)",
+        ),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .max(100)
+        .optional()
+        .describe("max listings to return (default 20)"),
+    },
+  },
+  tool(
+    async (a: {
+      name?: string;
+      seller?: string;
+      maxPriceCook?: string | number;
+      maxLength?: number;
+      sort?: "price" | "recent" | "length";
+      limit?: number;
+    }) => getDomainListings(a),
+  ),
+);
+
+registerTool(
+  "list_domain",
+  {
+    title: "List a .cook name for sale",
+    description:
+      "Put a .cook name this wallet owns up for sale on the CookOven domain marketplace at " +
+      "`priceCook`. ⚠️ The name moves into the marketplace ESCROW in the same instruction: until the " +
+      "listing is bought or cancelled, the registry reports the escrow as its owner, so this wallet " +
+      "cannot transfer the name, update its pointers or set it as primary, and the name no longer " +
+      "resolves to a payable address. cancel_domain_listing reverses it at any time. There is no " +
+      "re-price instruction — cancel and list again. Costs only the listing account's rent (~0.0018 " +
+      "COOK, refunded when the listing ends); the marketplace fee is taken from the sale price, not " +
+      "from you now. Simulates before sending. Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      name: z.string().min(1).describe(DOMAIN_NAME_ARG),
+      priceCook: z
+        .union([z.number().positive(), z.string()])
+        .describe("asking price in COOK, e.g. 25000"),
+    },
+  },
+  tool(async (a: { name: string; priceCook: string | number }) => listDomain(a)),
+);
+
+registerTool(
+  "buy_domain",
+  {
+    title: "Buy a listed .cook name",
+    description:
+      "Buy a .cook name that is listed for sale, paying the seller and the marketplace fee in one " +
+      "transaction; the name leaves escrow and belongs to this wallet, permanently. ⚠️ EXPENSIVE and " +
+      "FINAL: listings run into the millions of COOK. `maxPriceCook` is REQUIRED as an explicit " +
+      "spend confirmation — the instruction carries no price argument, so this cap is the only " +
+      "guard. Called without it, this quotes the live asking price and spends nothing. Use " +
+      "get_domain_listings to find names in budget. Simulates before sending. Requires " +
+      "COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      name: z.string().min(1).describe(DOMAIN_NAME_ARG),
+      maxPriceCook: z
+        .union([z.number().positive(), z.string()])
+        .optional()
+        .describe(
+          "the most COOK you accept paying; omit to be told the asking price without spending anything",
+        ),
+    },
+  },
+  tool(async (a: { name: string; maxPriceCook?: string | number }) => buyDomain(a)),
+);
+
+registerTool(
+  "cancel_domain_listing",
+  {
+    title: "Unlist a .cook name",
+    description:
+      "Take a .cook name this wallet listed back off the CookOven domain marketplace. The escrow " +
+      "returns it to this wallet and the listing rent is refunded, so transfer_domain, " +
+      "update_domain and set_primary_domain work on it again. Only the wallet that created the " +
+      "listing can cancel it. Simulates before sending. Requires COOKIE_PRIVATE_KEY.",
+    inputSchema: {
+      name: z.string().min(1).describe(DOMAIN_NAME_ARG),
+    },
+  },
+  tool(async (a: { name: string }) => cancelDomainListing(a)),
 );
 
 async function main() {

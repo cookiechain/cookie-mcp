@@ -47,6 +47,10 @@ const EXPECTED_TOOLS = [
   "set_primary_domain",
   "transfer_domain",
   "update_domain",
+  "get_domain_listings",
+  "list_domain",
+  "buy_domain",
+  "cancel_domain_listing",
 ];
 
 async function main() {

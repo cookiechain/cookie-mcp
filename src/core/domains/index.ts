@@ -10,17 +10,22 @@
 // At the live config (COOK = $0.0001) that is 35,000 COOK for a 1–3 character name and 15,000 COOK
 // for anything longer. `registerDomain` therefore refuses to spend anything until the caller states
 // a `maxPriceCook` it accepts.
+//
+// ⚠️ Names can also be LISTED FOR SALE on the domain marketplace (`market.ts`), and a listed name is
+// owned by the marketplace's escrow PDA rather than by its seller. Every read and write below that
+// touches a domain's owner therefore has to recognise that address — otherwise a listed name looks
+// like it belongs to a stranger, and `.cook` resolution hands out an account nobody can spend from.
 import { PublicKey, Transaction, type Connection } from "@solana/web3.js";
 import bs58 from "bs58";
 
 import {
+  COOKOVEN_MARKET_URL,
   COOKOVEN_SITE_URL,
   COOK_DECIMALS,
   COOK_SYMBOL,
   explorerAddressUrl,
   explorerTxUrl,
 } from "../config";
-import { confirmSent } from "../confirm";
 import { CookieMcpError } from "../errors";
 import { rawToUi, uiToRaw } from "../format";
 import { getConnection } from "../rpc";
@@ -28,14 +33,10 @@ import { getWallet, requireWallet } from "../wallet";
 import {
   ACCOUNT_DISCRIMINATORS,
   clearPrimaryDomainIx,
-  configPda,
   decodeDomainAccount,
-  decodeDomainsConfigAccount,
-  decodePrimaryAccount,
   domainPda,
   domainSimError,
   DOMAINS_PROGRAM_ID,
-  primaryPda,
   registerDomainIx,
   setPrimaryDomainIx,
   transferDomainIx,
@@ -43,11 +44,21 @@ import {
   updateDomainPointerIx,
   type DecodedDomain,
 } from "./program";
+import { listingPda, type DecodedListing } from "./marketplace";
+import {
+  escrowedNameError,
+  fetchDomain,
+  fetchDomainsConfig,
+  fetchListing,
+  fetchPrimary,
+  isEscrowed,
+  requireValidName,
+  resolveWallet,
+  sendDomainTx,
+} from "./shared";
+import { fetchListings } from "./market";
 import {
   displayName,
-  looksLikeName,
-  nameError,
-  normalizeName,
   priceTier,
   registrationPriceRaw,
   type DomainsConfig,
@@ -68,44 +79,43 @@ export {
   type PriceTier,
 } from "./names";
 
-/** Reject a name locally before it can turn into a PDA seed error or a wasted round trip. */
-function requireValidName(input: string): string {
-  const label = normalizeName(input);
-  const err = nameError(label);
-  if (err) {
-    throw new CookieMcpError(
-      `"${input}" is not a valid .cook name — ${err}`,
-      "names are 1–32 characters of a-z, 0-9 and hyphens, with no leading or trailing hyphen; " +
-        "the .cook suffix is optional and case is ignored",
-    );
-  }
-  return label;
-}
+export {
+  escrowedNameError,
+  fetchDomainsConfig,
+  fetchListing,
+  isEscrowed,
+  resolveWallet,
+  type ResolvedWallet,
+} from "./shared";
 
-export async function fetchDomainsConfig(conn: Connection): Promise<DomainsConfig> {
-  const info = await conn.getAccountInfo(configPda());
-  const cfg = info && decodeDomainsConfigAccount(info.data as Buffer);
-  if (!cfg) {
-    throw new CookieMcpError(
-      "could not read the .cook name registry config",
-      `the cookie_domains program (${DOMAINS_PROGRAM_ID.toBase58()}) may not be reachable on this ` +
-        "RPC — check COOKIE_RPC_URL",
-    );
-  }
-  return cfg;
-}
+export {
+  buyDomain,
+  buyPriceGuardError,
+  cancelDomainListing,
+  fetchListings,
+  fetchMarketConfig,
+  getDomainListings,
+  listDomain,
+  toListingView,
+  type BuyDomainResult,
+  type CancelDomainListingResult,
+  type DomainListingsResult,
+  type ListDomainResult,
+} from "./market";
 
-async function fetchDomain(conn: Connection, label: string): Promise<DecodedDomain | null> {
-  const info = await conn.getAccountInfo(domainPda(label));
-  return info ? decodeDomainAccount(info.data as Buffer) : null;
-}
-
-/** The wallet's current primary name, or null when it has never set one / has cleared it. */
-async function fetchPrimary(conn: Connection, owner: PublicKey): Promise<string | null> {
-  const info = await conn.getAccountInfo(primaryPda(owner));
-  if (!info) return null;
-  return decodePrimaryAccount(info.data as Buffer)?.name ?? null;
-}
+export {
+  DOMAIN_MARKET_PROGRAM_ID,
+  ESCROW_AUTHORITY,
+  filterSortListings,
+  floorPriceRaw,
+  MARKET_ERRORS,
+  marketSimError,
+  MAX_MARKET_FEE_BPS,
+  splitSalePrice,
+  type DecodedListing,
+  type DomainListingView,
+  type MarketConfig,
+} from "./marketplace";
 
 export interface PriceView {
   tier: PriceTier;
@@ -210,6 +220,18 @@ export interface ResolveDomainResult {
   metadata: string | null;
   createdAt: string | null;
   price: { tier: PriceTier; priceCook: string; priceUsd: number; priceRaw: string } | null;
+  /**
+   * Set when the name is on the marketplace. `owner` is then the escrow PDA, NOT a wallet — the
+   * person to deal with is `forSale.seller`.
+   */
+  forSale: {
+    priceCook: string;
+    priceLamports: string;
+    seller: string;
+    listing: string;
+    listedAt: string;
+    marketUrl: string;
+  } | null;
   note?: string;
 }
 
@@ -217,6 +239,11 @@ export interface ResolveDomainResult {
  * Forward lookup: `bot.cook` → who owns it. When the name is free it returns the live registration
  * price instead of an owner, so an agent can answer "is X available and what does it cost?" in one
  * call.
+ *
+ * A name that is listed for sale reports the marketplace escrow as its `owner`, because that is the
+ * on-chain truth — reporting the seller there would be a lie an agent could act on. The listing is
+ * surfaced in `forSale` instead, and the extra read only happens when the owner IS the escrow, so a
+ * normal lookup costs exactly what it did before.
  */
 export async function resolveDomain(input: string): Promise<ResolveDomainResult> {
   const label = requireValidName(input);
@@ -242,29 +269,61 @@ export async function resolveDomain(input: string): Promise<ResolveDomainResult>
       metadata: null,
       createdAt: null,
       price: priceView(cfg, label),
+      forSale: null,
       note: `${base.name} is available — register_domain claims it, or register it at ${COOKOVEN_SITE_URL}`,
     };
   }
 
-  const owner = new PublicKey(domain.owner);
-  const primary = await fetchPrimary(conn, owner);
+  const escrowed = isEscrowed(domain);
+  const [primary, listing] = await Promise.all([
+    escrowed ? Promise.resolve(null) : fetchPrimary(conn, new PublicKey(domain.owner)),
+    escrowed ? fetchListing(conn, label) : Promise.resolve(null),
+  ]);
+
   return {
     ...base,
     registered: true,
     owner: domain.owner,
     ownerUrl: explorerAddressUrl(domain.owner),
-    isOwnersPrimary: primary === label,
+    // Meaningless for an escrowed name: the escrow PDA has no primary of its own.
+    isOwnersPrimary: escrowed ? null : primary === label,
     resolver: domain.resolver,
     metadata: domain.metadata,
     createdAt: domain.createdAt ? new Date(domain.createdAt * 1000).toISOString() : null,
     price: null,
+    forSale: listing ? forSaleView(listing) : null,
     ...(domain.legacy
       ? {
           note:
             "this domain uses a pre-resolver account layout the current program can no longer " +
             "deserialize — it can be read but not transferred or updated",
         }
-      : {}),
+      : listing
+        ? {
+            note:
+              `${base.name} is FOR SALE at ${rawToUi(listing.priceRaw, COOK_DECIMALS)} ` +
+              `${COOK_SYMBOL} — buy_domain claims it. \`owner\` above is the marketplace escrow ` +
+              `account, not a wallet: do not send funds to it, the seller is ${listing.seller}.`,
+          }
+        : escrowed
+          ? {
+              note:
+                "this name is held by the marketplace escrow but has no listing — treat `owner` as " +
+                "a program account, not a wallet",
+            }
+          : {}),
+  };
+}
+
+/** Shared shape for "this name is on the market", used by resolve_domain and get_owned_domains. */
+function forSaleView(l: DecodedListing): NonNullable<ResolveDomainResult["forSale"]> {
+  return {
+    priceCook: rawToUi(l.priceRaw, COOK_DECIMALS),
+    priceLamports: l.priceRaw.toString(),
+    seller: l.seller,
+    listing: listingPda(new PublicKey(l.domain)).toBase58(),
+    listedAt: new Date(l.createdAt * 1000).toISOString(),
+    marketUrl: COOKOVEN_MARKET_URL,
   };
 }
 
@@ -278,11 +337,27 @@ export interface OwnedDomain {
   createdAt: string | null;
 }
 
+export interface ListedDomain {
+  name: string;
+  label: string;
+  priceCook: string;
+  priceLamports: string;
+  listing: string;
+  listedAt: string;
+}
+
 export interface OwnedDomainsResult {
   wallet: string;
   primary: string | null;
   count: number;
   domains: OwnedDomain[];
+  /**
+   * Names this wallet has put up for sale. They are NOT in `domains`, because the registry no longer
+   * records this wallet as their owner — the marketplace escrow does — but the wallet still controls
+   * them: it is the only one that can cancel the listing.
+   */
+  listedForSale: ListedDomain[];
+  listedCount: number;
   note?: string;
 }
 
@@ -294,6 +369,10 @@ export interface OwnedDomainsResult {
  * length. The registry is small (~100 accounts, one round trip) and this is on-chain truth with no
  * indexer in the path. `primary` comes from the `["primary", owner]` PDA, which is authoritative and
  * independent of the scan.
+ *
+ * The marketplace scan runs in the SAME round trip (it is one more `getProgramAccounts` on ~10
+ * accounts, issued in parallel), because without it a wallet that has listed everything it owns would
+ * be told it owns nothing at all.
  */
 export async function getOwnedDomains(walletInput?: string): Promise<OwnedDomainsResult> {
   const wallet = walletInput
@@ -301,7 +380,7 @@ export async function getOwnedDomains(walletInput?: string): Promise<OwnedDomain
     : { pubkey: parseOwnPubkey(), name: null };
   const conn = getConnection();
 
-  const [accounts, primary] = await Promise.all([
+  const [accounts, primary, listings] = await Promise.all([
     conn.getProgramAccounts(DOMAINS_PROGRAM_ID, {
       filters: [
         {
@@ -313,6 +392,7 @@ export async function getOwnedDomains(walletInput?: string): Promise<OwnedDomain
       ],
     }),
     fetchPrimary(conn, wallet.pubkey),
+    fetchListings(conn),
   ]);
 
   const owner = wallet.pubkey.toBase58();
@@ -324,20 +404,53 @@ export async function getOwnedDomains(walletInput?: string): Promise<OwnedDomain
     owner,
     primary,
   );
+  const listedForSale = mapListedDomains(listings, owner);
 
   return {
     wallet: owner,
     primary: primary ? displayName(primary) : null,
     count: domains.length,
     domains,
-    ...(domains.length === 0
+    listedForSale,
+    listedCount: listedForSale.length,
+    ...(domains.length === 0 && listedForSale.length === 0
       ? { note: `this wallet owns no .cook names — register one at ${COOKOVEN_SITE_URL}` }
-      : primary === null
+      : domains.length === 0
         ? {
-            note: "no primary name is set — set_primary_domain makes one the wallet's default label",
+            note:
+              `every .cook name this wallet controls is listed for sale, so the registry reports the ` +
+              `marketplace escrow as their owner — cancel_domain_listing takes one back`,
           }
-        : {}),
+        : primary === null
+          ? {
+              note: "no primary name is set — set_primary_domain makes one the wallet's default label",
+            }
+          : primary !== null && listedForSale.some((l) => l.label === primary)
+            ? {
+                note:
+                  `⚠️ this wallet's primary name (${displayName(primary)}) is listed for sale, so the ` +
+                  "primary record points at a name the registry no longer says it owns — clear it with " +
+                  "set_primary_domain { clear: true }, or cancel the listing",
+              }
+            : {}),
   };
+}
+
+/** The wallet's own listings, cheapest-first. Pure, so the seller filter is unit-tested. */
+export function mapListedDomains(listings: DecodedListing[], seller: string): ListedDomain[] {
+  return listings
+    .filter((l) => l.seller === seller)
+    .sort((a, b) =>
+      a.priceRaw === b.priceRaw ? a.name.localeCompare(b.name) : a.priceRaw < b.priceRaw ? -1 : 1,
+    )
+    .map((l) => ({
+      name: displayName(l.name),
+      label: l.name,
+      priceCook: rawToUi(l.priceRaw, COOK_DECIMALS),
+      priceLamports: l.priceRaw.toString(),
+      listing: listingPda(new PublicKey(l.domain)).toBase58(),
+      listedAt: new Date(l.createdAt * 1000).toISOString(),
+    }));
 }
 
 /** base58 of an 8-byte account discriminator, for a getProgramAccounts memcmp filter. */
@@ -356,81 +469,16 @@ function parseOwnPubkey(): PublicKey {
   return w.keypair.publicKey;
 }
 
-// --- Name-aware address resolution ----------------------------------------------------------------
-
-export interface ResolvedWallet {
-  pubkey: PublicKey;
-  /** The `.cook` name the address came from, when the caller passed one. */
-  name: string | null;
-}
-
-/**
- * Accept either a base58 address or a `.cook` name anywhere a Cookie Chain wallet is expected.
- *
- * Costs nothing on the happy path: a well-formed pubkey never touches the network. Only an input
- * that cannot be a pubkey (or that explicitly ends in `.cook`) triggers the PDA read.
- */
-export async function resolveWallet(input: string, label: string): Promise<ResolvedWallet> {
-  const s = input.trim();
-  if (!looksLikeName(s)) {
-    try {
-      return { pubkey: new PublicKey(s), name: null };
-    } catch {
-      throw new CookieMcpError(
-        `invalid ${label}: ${input}`,
-        "pass a base58 address or a .cook name",
-      );
-    }
-  }
-
-  const name = requireValidName(s);
-  const domain = await fetchDomain(getConnection(), name);
-  if (!domain) {
-    throw new CookieMcpError(
-      `${displayName(name)} is not registered, so it does not resolve to an address`,
-      `check the spelling with resolve_domain, or claim it with register_domain`,
-    );
-  }
-  return { pubkey: new PublicKey(domain.owner), name: displayName(name) };
-}
-
 // --- Writes ----------------------------------------------------------------------------------------
 
-/**
- * Simulate → sign → send → confirm, with `.cook`-specific error translation. Same safety contract as
- * every other write in this repo: nothing is signed until the simulation passes.
- */
-async function sendDomainTx(
+/** Registry-flavoured `sendDomainTx`: every write below translates errors through `domainSimError`. */
+function sendRegistryTx(
   conn: Connection,
   tx: Transaction,
   what: string,
   label?: string,
 ): Promise<string> {
-  const { keypair } = requireWallet();
-  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
-  tx.recentBlockhash = blockhash;
-  tx.feePayer = keypair.publicKey;
-
-  const sim = await conn.simulateTransaction(tx);
-  if (sim.value.err) {
-    const logs = sim.value.logs ?? [];
-    const blob = `${JSON.stringify(sim.value.err)} ${logs.join(" ")}`;
-    if (/BlockhashNotFound|blockhash/i.test(blob)) {
-      throw new CookieMcpError(
-        `${what} simulation failed: blockhash not found`,
-        "Cookie Chain finalization may be stalled — check chain_health; retry shortly",
-      );
-    }
-    const translated = domainSimError(logs, label);
-    throw new CookieMcpError(
-      `${what} failed: ${translated ?? (logs.slice(-2).join(" | ") || JSON.stringify(sim.value.err))}`,
-      "nothing was signed or sent",
-    );
-  }
-
-  tx.sign(keypair);
-  const signature = await conn.sendRawTransaction(tx.serialize());
-  return confirmSent(conn, { signature, blockhash, lastValidBlockHeight }, what);
+  return sendDomainTx(conn, tx, what, (logs) => domainSimError(logs, label));
 }
 
 export interface RegisterDomainResult {
@@ -483,7 +531,7 @@ export async function registerDomain(args: {
     tx.add(setPrimaryDomainIx({ label, owner: keypair.publicKey }));
   }
 
-  const signature = await sendDomainTx(conn, tx, "domain registration", label);
+  const signature = await sendRegistryTx(conn, tx, "domain registration", label);
   return {
     signature,
     explorerUrl: explorerTxUrl(signature),
@@ -531,7 +579,7 @@ export async function setPrimaryDomain(args: {
       );
     }
     const tx = new Transaction().add(clearPrimaryDomainIx({ owner }));
-    const signature = await sendDomainTx(conn, tx, "clearing the primary domain");
+    const signature = await sendRegistryTx(conn, tx, "clearing the primary domain");
     return {
       signature,
       explorerUrl: explorerTxUrl(signature),
@@ -555,6 +603,9 @@ export async function setPrimaryDomain(args: {
       "you can only make a name your primary if you own it — register_domain claims a free one",
     );
   }
+  if (isEscrowed(domain)) {
+    throw await escrowedNameError(conn, label, "set it as this wallet's primary", owner);
+  }
   if (domain.owner !== owner.toBase58()) {
     throw new CookieMcpError(
       `${displayName(label)} is owned by ${domain.owner}, not this wallet`,
@@ -563,7 +614,7 @@ export async function setPrimaryDomain(args: {
   }
 
   const tx = new Transaction().add(setPrimaryDomainIx({ label, owner }));
-  const signature = await sendDomainTx(conn, tx, "setting the primary domain", label);
+  const signature = await sendRegistryTx(conn, tx, "setting the primary domain", label);
   return {
     signature,
     explorerUrl: explorerTxUrl(signature),
@@ -608,6 +659,9 @@ export async function transferDomain(args: {
       "check the name with resolve_domain",
     );
   }
+  if (isEscrowed(domain)) {
+    throw await escrowedNameError(conn, label, "transfer it", owner);
+  }
   if (domain.owner !== owner.toBase58()) {
     throw new CookieMcpError(
       `${displayName(label)} is owned by ${domain.owner}, not this wallet`,
@@ -627,7 +681,7 @@ export async function transferDomain(args: {
   const tx = new Transaction().add(
     transferDomainIx({ label, currentOwner: owner, newOwner: recipient.pubkey, withCleanup }),
   );
-  const signature = await sendDomainTx(conn, tx, "domain transfer", label);
+  const signature = await sendRegistryTx(conn, tx, "domain transfer", label);
   return {
     signature,
     explorerUrl: explorerTxUrl(signature),
@@ -676,6 +730,9 @@ export async function updateDomain(args: {
   if (!domain) {
     throw new CookieMcpError(`${displayName(label)} is not registered`, "check the name first");
   }
+  if (isEscrowed(domain)) {
+    throw await escrowedNameError(conn, label, "update its pointers", owner);
+  }
   if (domain.owner !== owner.toBase58()) {
     throw new CookieMcpError(
       `${displayName(label)} is owned by ${domain.owner}, not this wallet`,
@@ -715,7 +772,7 @@ export async function updateDomain(args: {
     metadata = value.equals(PublicKey.default) ? null : value.toBase58();
   }
 
-  const signature = await sendDomainTx(conn, tx, "domain update", label);
+  const signature = await sendRegistryTx(conn, tx, "domain update", label);
   return {
     signature,
     explorerUrl: explorerTxUrl(signature),

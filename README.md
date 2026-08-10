@@ -176,7 +176,7 @@ APY / fees), launchpad reads `get_launchpad_pools` / `get_launchpad_token` /
 `get_launchpad_positions`, and NFT reads
 `get_nft_listings`, `search_nfts` (resolve an NFT/collection name to a listed mint), `get_nft`,
 `get_wallet_nfts`, `get_nft_offers`, `get_nft_market_stats`, and `.cook` name reads
-`resolve_domain` / `get_owned_domains`.
+`resolve_domain` / `get_owned_domains` / `get_domain_listings`.
 
 **Money** (need `COOKIE_PRIVATE_KEY`): `trade` (swap via Candy Shop), `transfer` (COOK or any token),
 `stake` / `unstake` (COOK ⇄ bCOOK liquid staking).
@@ -233,6 +233,26 @@ no API, no indexer. The suffix is optional everywhere: `chef` and `chef.cook` ar
 Once you own a name you can use it instead of an address: `transfer`, `get_balance`,
 `get_wallet_nfts`, `get_nft_offers`, `get_launchpad_positions` and `transfer_domain` all accept a
 `.cook` name wherever they take a Cookie Chain wallet. A plain base58 address costs no extra lookup.
+
+**`.cook` domain marketplace** ([CookOven Marketplace](https://market.cookoven.xyz)): the secondary
+market for names that are already registered — often cheaper than the 15,000–35,000 COOK registration,
+and the only way to get a name somebody else already owns. `get_domain_listings` browses it with no key
+(filter by `name`, `seller`, `maxPriceCook` or `maxLength`; sort by price, length or recency) and
+reports the live marketplace fee, which the seller pays out of the sale price. Writes need
+`COOKIE_PRIVATE_KEY`: `list_domain` (asking price in COOK), `buy_domain`, `cancel_domain_listing`.
+Read and built straight from the program — no API, no indexer.
+
+> ⚠️ **Listing escrows the name.** `list_domain` hands the domain to the marketplace's escrow account
+> in the same instruction, so while it is listed the registry reports the escrow as its owner: the
+> seller cannot `transfer_domain`, `update_domain` or `set_primary_domain` on it, and it stops
+> resolving to a payable address. Those tools say so explicitly rather than reporting a stranger as the
+> owner, and passing a listed name where an address is expected is **refused** — the escrow is a
+> program account, so paying it would strand the funds. `cancel_domain_listing` reverses a listing at
+> any time and refunds its rent. There is no re-price instruction: cancel, then list again.
+>
+> `buy_domain` requires `maxPriceCook` for the same reason `register_domain` does — the instruction
+> carries no price argument, so that cap is the only guard. Without it you get the asking price
+> quoted back and nothing is spent.
 
 Use the COOK / native mint `So11111111111111111111111111111111111111112` for COOK. Every tool returns
 JSON; failures return `{ error, hint }` — never a stack trace, never your key.

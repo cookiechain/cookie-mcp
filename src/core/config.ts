@@ -46,6 +46,13 @@ export const COOKIE_REFERRER =
 export const COOKOVEN_SITE_URL =
   process.env.COOKOVEN_SITE_URL?.trim().replace(/\/$/, "") || "https://book.cookoven.xyz";
 
+// The `.cook` domain marketplace (market.cookoven.xyz) — the secondary market for names already
+// registered. Same story as the registration dApp: client-side only, no backend, so cookie-mcp
+// hand-encodes the `cookie_domains_market` instructions and enumerates listings straight from the
+// program.
+export const COOKOVEN_MARKET_URL =
+  process.env.COOKOVEN_MARKET_URL?.trim().replace(/\/$/, "") || "https://market.cookoven.xyz";
+
 export const EXPLORER_URL =
   process.env.COOKIE_EXPLORER_URL?.trim().replace(/\/$/, "") || "https://cookiescan.io";
 
@@ -73,6 +80,9 @@ export const PROGRAM_IDS = {
     "momoL7wu4TrXjnXMLCLzGsbx8Pm7XGgoYo7FVqDoqcw",
   // CookOven `.cook` name service (src/idl/cookie_domains.json) — a single deployment, not overridable.
   cookieDomains: "H43Qtq4AMQ86y7yc3YtCKZJ2QMhhnCcHyZKeFeoQn7PA",
+  // The `.cook` domain marketplace behind market.cookoven.xyz. Same treatment as the registry: one
+  // deployment, hardcoded. It shares the registry's upgrade authority (`2ABpDq4q…`).
+  cookieDomainsMarket: "Ey35mr69UfiQqZSwD2qYAZoMNfnuVJGCjwNSB64ppHm7",
 } as const;
 
 // The `.cook` suffix is presentation only: the on-chain PDA seed and the `DomainAccount.name` field

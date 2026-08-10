@@ -37,6 +37,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - **A `.cook` name now works anywhere an address does**: `transfer`, `get_balance`, `get_wallet_nfts`,
     `get_nft_offers`, `get_launchpad_positions` and `transfer_domain`. A base58 address still costs no
     extra lookup — only a name triggers one. The `.cook` suffix is optional everywhere.
+- **CookOven `.cook` domain marketplace support**. The secondary market for names that are already
+  registered — often cheaper than registration, and the only way to get a name somebody else owns.
+  only way to get a name somebody else owns.
+  - `get_domain_listings` — browse every listing, read straight from the program (no key). Filter by
+    `name` substring, `seller`, `maxPriceCook` or `maxLength`; sort by price, name length or recency.
+    Reports the live marketplace fee and the floor price of the matched set.
+  - `list_domain` / `buy_domain` / `cancel_domain_listing`.
+  - **`buy_domain` requires `maxPriceCook`.** `buy_listing` carries no price argument — it reads the
+    listing — so the client-side cap is the only guard, exactly as with `register_domain`. Called
+    without it you get the asking price quoted back and nothing is spent.
+  - **Listing escrows the name, and that changes the whole registry surface.** `list_domain` CPIs into
+    the registry and hands the domain to the marketplace's escrow PDA, so a listed name is not owned by
+    its seller:
+    - `resolve_domain` now returns a **`forSale`** block (price, seller, listing account) and says
+      plainly that `owner` is the marketplace escrow, not a wallet.
+    - `get_owned_domains` gained **`listedForSale`** / `listedCount`. Without it, a wallet that had
+      listed everything it owns was told it owned nothing at all.
+    - `transfer_domain`, `update_domain` and `set_primary_domain` explain the listing instead of
+      reporting an unfamiliar address as the owner, and point at `cancel_domain_listing`.
+    - **A listed name is now REFUSED where an address is expected** (`transfer`, `get_balance`,
+      `transfer_domain.to`, …). It resolved to the escrow PDA — a program account with no signer — so
+      `transfer to: "<listed>.cook"` would have sent COOK somewhere nobody can spend it.
+  - Listing a name that is your primary leaves the primary record pointing at a name the registry no
+    longer says you own (the registry does not clear it on transfer, and the marketplace does not use
+    the cleanup variant). `list_domain` and `get_owned_domains` both call this out.
+  - `COOKOVEN_MARKET_URL` (default `https://market.cookoven.xyz`).
 - **`lock_liquidity` now supports Cookiebox CLMM**, not just DAMM v2 — the venue is auto-detected from
   the pool like every other liquidity tool. The whirlpool program only offers `LockType::Permanent` and
   it always takes the **whole** position, so unlike DAMM there is no partial amount and no vesting.

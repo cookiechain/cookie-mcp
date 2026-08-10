@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 
-import { mapOwnedDomains, priceGuardError, priceView } from "./index";
+import {
+  buyPriceGuardError,
+  mapListedDomains,
+  mapOwnedDomains,
+  priceGuardError,
+  priceView,
+  type DecodedListing,
+} from "./index";
 import { ACCOUNT_DISCRIMINATORS } from "./program";
 import type { DomainsConfig } from "./names";
 
@@ -127,5 +134,76 @@ describe("mapOwnedDomains", () => {
 
   it("renders createdAt as ISO", () => {
     expect(mapOwnedDomains(accounts, OWNER, null)[0].createdAt).toBe("2026-05-28T16:21:27.000Z");
+  });
+});
+
+describe("buyPriceGuardError", () => {
+  // 500,000 COOK — the live asking price for bot.cook on the marketplace.
+  const priceRaw = 500_000_000_000_000n;
+
+  it("refuses with a quote when no cap is given, and spends nothing", () => {
+    const e = buyPriceGuardError({ label: "bot", priceRaw });
+    expect(e?.message).toContain("bot.cook is listed for 500000 COOK");
+    expect(e?.message).toContain("nothing was spent");
+    expect(e?.hint).toContain("maxPriceCook: 500000");
+  });
+
+  it("refuses a cap below the asking price", () => {
+    const e = buyPriceGuardError({ label: "bot", priceRaw, maxPriceCook: 499_999 });
+    expect(e?.message).toContain("above the maxPriceCook of 499999");
+  });
+
+  it("authorizes an exact-price cap and anything above it", () => {
+    expect(buyPriceGuardError({ label: "bot", priceRaw, maxPriceCook: "500000" })).toBeNull();
+    expect(buyPriceGuardError({ label: "bot", priceRaw, maxPriceCook: 1_000_000 })).toBeNull();
+  });
+
+  it("refuses one lamport under the price", () => {
+    expect(
+      buyPriceGuardError({ label: "bot", priceRaw, maxPriceCook: "499999.999999999" }),
+    ).not.toBeNull();
+  });
+
+  // An unparseable cap must never be read as "no limit" — that is the whole point of the guard.
+  it("refuses an unparseable cap rather than treating it as unlimited", () => {
+    const e = buyPriceGuardError({ label: "bot", priceRaw, maxPriceCook: "lots" });
+    expect(e?.message).toContain('invalid maxPriceCook "lots"');
+    expect(
+      buyPriceGuardError({ label: "bot", priceRaw, maxPriceCook: "500000.0000000001" }),
+    ).not.toBeNull();
+  });
+});
+
+describe("mapListedDomains", () => {
+  const listing = (name: string, priceRaw: bigint, seller: string): DecodedListing => ({
+    seller,
+    domain: "8o8kfjiof69r5rnN3HtnmKm89eAVXVznHNKMzxhkeLhk",
+    name,
+    priceRaw,
+    createdAt: 1786391354,
+  });
+
+  it("keeps only this wallet's listings, cheapest-first", () => {
+    const out = mapListedDomains(
+      [listing("expensive", 9n, OWNER), listing("theirs", 1n, OTHER), listing("cheap", 2n, OWNER)],
+      OWNER,
+    );
+    expect(out.map((l) => l.name)).toEqual(["cheap.cook", "expensive.cook"]);
+  });
+
+  it("carries the listing PDA and an ISO timestamp", () => {
+    const [only] = mapListedDomains([listing("bot", 500_000_000_000_000n, OWNER)], OWNER);
+    expect(only).toEqual({
+      name: "bot.cook",
+      label: "bot",
+      priceCook: "500000",
+      priceLamports: "500000000000000",
+      listing: "ECJiWoTihW2PJ8hqpTK5JCM24pHcbrxT1TWMHD8kLWkn",
+      listedAt: "2026-08-10T19:49:14.000Z",
+    });
+  });
+
+  it("is empty for a wallet with no listings", () => {
+    expect(mapListedDomains([listing("theirs", 1n, OTHER)], OWNER)).toEqual([]);
   });
 });

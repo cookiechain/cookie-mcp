@@ -20,6 +20,8 @@ src/
     launchpad/         #   MomoSwap launchpad: api (HTTP client) + curve (quote math) + positions (PDAs)
                        #   + program (which deployment: PDA scope + error-code build)
     domains/           #   CookOven `.cook` names: names (rules + pricing) + program (ixs/PDAs/decode)
+                       #   + marketplace (market.cookoven.xyz ixs/PDAs/decode) + market (listings, buy/
+                       #   sell ops) + shared (reads both halves need — escrow awareness lives here)
     liquidity/         #   create/add/remove/lock/claim across damm, cpAmm, clmm, cookieswap
     nft/               #   Baked Bazaar: auctionHouse (writes) + bazaar (reads)
   idl/                 # committed IDLs (cp_amm, whirlpool, cookie_domains)
