@@ -169,11 +169,13 @@ registerTool(
 registerTool(
   "get_quote",
   {
-    title: "Swap quote (Candy Shop)",
+    title: "Swap quote",
     description:
-      "Quote a swap via the Candy Shop aggregator (routes across all Cookie Chain DEX liquidity). " +
-      "Returns expected output, output after the ~20 bps aggregator fee, minimum out after slippage, " +
-      "price impact, and the route. Quote-only — no wallet needed. `amount` is a UI amount of the input token.",
+      "Quote a swap across all Cookie Chain DEX liquidity via one of two aggregators: `cookiebox` " +
+      "(Cookiebox Swap API) or `cookiescan` (Candy Shop / Cookiescan Swap API). Quote both to " +
+      "compare and pick the better output. Returns expected output, output after any aggregator " +
+      "fee, minimum out after slippage, price impact, and the route. Quote-only — no wallet needed. " +
+      "`amount` is a UI amount of the input token.",
     inputSchema: {
       inputMint: z
         .string()
@@ -191,6 +193,12 @@ registerTool(
         .max(10_000)
         .optional()
         .describe(`slippage tolerance in bps (default ${DEFAULT_SLIPPAGE_BPS})`),
+      aggregator: z
+        .enum(["cookiebox", "cookiescan"])
+        .optional()
+        .describe(
+          "which swap aggregator to quote: cookiebox (default, no fee) or cookiescan (Candy Shop, ~20 bps fee)",
+        ),
     },
   },
   tool(
@@ -199,6 +207,7 @@ registerTool(
       outputMint: string;
       amount: string | number;
       slippageBps?: number;
+      aggregator?: "cookiebox" | "cookiescan";
     }) => getQuote(a),
   ),
 );
@@ -261,11 +270,13 @@ registerTool(
 registerTool(
   "trade",
   {
-    title: "Swap (Candy Shop)",
+    title: "Swap",
     description:
-      "Execute a swap via the Candy Shop aggregator: quotes, simulates, signs locally with the " +
-      "configured wallet, submits, and confirms. Non-custodial. Requires COOKIE_PRIVATE_KEY. " +
-      "`amount` is a UI amount of the input token. Returns the tx signature + explorer link.",
+      "Execute a swap via the chosen aggregator (`cookiebox` by default, or `cookiescan` = Candy " +
+      "Shop): the aggregator quotes and builds the tx; we simulate, sign locally with the configured " +
+      "wallet, submit, and confirm. Non-custodial. Requires COOKIE_PRIVATE_KEY. Use get_quote first " +
+      "to compare aggregators. `amount` is a UI amount of the input token. Returns the tx signature " +
+      "+ explorer link.",
     inputSchema: {
       inputMint: z
         .string()
@@ -283,6 +294,12 @@ registerTool(
         .max(10_000)
         .optional()
         .describe(`slippage tolerance in bps (default ${DEFAULT_SLIPPAGE_BPS})`),
+      aggregator: z
+        .enum(["cookiebox", "cookiescan"])
+        .optional()
+        .describe(
+          "which swap aggregator to execute through: cookiebox (default, no fee) or cookiescan (Candy Shop, ~20 bps fee)",
+        ),
     },
   },
   tool(
@@ -291,6 +308,7 @@ registerTool(
       outputMint: string;
       amount: string | number;
       slippageBps?: number;
+      aggregator?: "cookiebox" | "cookiescan";
     }) => trade(a),
   ),
 );

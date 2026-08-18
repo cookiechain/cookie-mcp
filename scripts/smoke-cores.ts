@@ -48,7 +48,7 @@ async function main() {
     expectedOut: `${q.output.expectedOut} ${q.output.symbol}`,
     minOut: q.output.minOut,
     impact: q.priceImpactPct,
-    feeBps: q.candyShopFee.bps,
+    feeBps: q.aggregatorFee.bps,
     hops: q.route.hops.length,
   });
 

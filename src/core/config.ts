@@ -6,6 +6,13 @@ export const COOKIE_RPC_URL = process.env.COOKIE_RPC_URL?.trim() || "https://rpc
 export const COOKIE_SWAP_API_URL =
   process.env.COOKIE_SWAP_API_URL?.trim().replace(/\/$/, "") || "https://swap.cookiescan.io/api";
 
+export const COOKIEBOX_AGG_API_URL =
+  process.env.COOKIEBOX_AGG_API_URL?.trim().replace(/\/$/, "") || "https://agg.cookiebox.app";
+
+export type SwapAggregator = "cookiebox" | "cookiescan";
+export const DEFAULT_SWAP_AGGREGATOR: SwapAggregator =
+  process.env.COOKIE_SWAP_AGGREGATOR?.trim() === "cookiescan" ? "cookiescan" : "cookiebox";
+
 export const COOKIESCAN_API_URL =
   process.env.COOKIESCAN_API_URL?.trim().replace(/\/$/, "") || "https://api.cookiescan.io";
 

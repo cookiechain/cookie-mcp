@@ -1,5 +1,6 @@
-// trade — swap via Candy Shop, non-custodial: quote → Candy Shop builds the tx → simulate on our RPC
-// → sign locally → submit → confirm.
+// trade — non-custodial swap through either aggregator: the aggregator quotes and builds the tx →
+// simulate on our RPC → sign locally → submit → confirm. Cookiebox submits via our own RPC;
+// Candy Shop submits/confirms via its own endpoints.
 import { VersionedTransaction, Transaction, type Keypair } from "@solana/web3.js";
 
 import {
@@ -7,7 +8,9 @@ import {
   COOK_DECIMALS,
   COOK_SYMBOL,
   DEFAULT_SLIPPAGE_BPS,
+  DEFAULT_SWAP_AGGREGATOR,
   explorerTxUrl,
+  type SwapAggregator,
 } from "./config";
 import { CookieMcpError } from "./errors";
 import { fetchTokens } from "./cookiescan";
@@ -17,7 +20,9 @@ import {
   submitSignedTx,
   confirmTx,
   routePoolAddresses,
+  type CandyShopMultiRoute,
 } from "./candyshop";
+import { buildAggSwapTx, routeFromAggQuote } from "./cookiebox";
 import { getConnection } from "./rpc";
 import { requireWallet } from "./wallet";
 import { rawToUi, uiToRaw } from "./format";
@@ -93,11 +98,12 @@ export interface TradeResult {
   signature: string;
   confirmed: boolean;
   explorerUrl: string;
+  aggregator: SwapAggregator;
   /** Present only when the swap was submitted but not observed as confirmed — retrying is unsafe. */
   warning?: string;
   input: { mint: string; symbol: string | null; amount: string };
   output: { mint: string; symbol: string | null; expectedOut: string; minOut: string };
-  candyShopFeeBps: number | null;
+  aggregatorFeeBps: number | null;
   route: { venues: string[]; split: boolean; multiHop: boolean };
 }
 
@@ -106,9 +112,11 @@ export async function trade(args: {
   outputMint: string;
   amount: string | number;
   slippageBps?: number;
+  aggregator?: SwapAggregator;
 }): Promise<TradeResult> {
   const { keypair } = requireWallet();
   const slippageBps = args.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
+  const aggregator = args.aggregator ?? DEFAULT_SWAP_AGGREGATOR;
   if (args.inputMint === args.outputMint) {
     throw new CookieMcpError("inputMint and outputMint are the same", "pick two different tokens");
   }
@@ -130,29 +138,63 @@ export async function trade(args: {
 
   // "No route" for a launchpad token that hasn't graduated is expected — it trades on its bonding
   // curve, not a pool — so point the caller at the launchpad tools rather than at liquidity.
-  let multiRoute;
-  try {
-    ({ multiRoute } = await quoteMultiRoute(
-      args.inputMint,
-      args.outputMint,
-      amountRaw.toString(),
-      slippageBps,
-    ));
-  } catch (e) {
-    throw await noRouteError([args.inputMint, args.outputMint], e);
-  }
-  if (!multiRoute?.segments?.length) {
-    throw await noRouteError([args.inputMint, args.outputMint]);
-  }
-  if (multiRoute.lowLiquidity) {
-    throw new CookieMcpError(
-      "route has low liquidity — swap would move the price a lot",
-      "reduce the amount or choose a more liquid token",
-    );
+  let multiRoute: CandyShopMultiRoute;
+  let transactionBase64: string;
+  // Cookiebox returns the blockhash/height its tx was built against, so we confirm on our RPC.
+  let aggBlockhash: { blockhash: string; lastValidBlockHeight: number } | null = null;
+  if (aggregator === "cookiebox") {
+    let built;
+    try {
+      // One call quotes AND builds (the server re-quotes at build time anyway).
+      built = await buildAggSwapTx({
+        inputMint: args.inputMint,
+        outputMint: args.outputMint,
+        amount: amountRaw.toString(),
+        slippageBps,
+        owner: keypair.publicKey.toBase58(),
+      });
+    } catch (e) {
+      // A 422 "route too large" is a build-size failure, not a missing route — don't let it be
+      // rewritten into the (misleading) no-route/launchpad message. Rare now that the agg keeps a
+      // server-owned lookup table, but still possible (e.g. agg deployed without its ALT keypair).
+      if (e instanceof Error && /too large/i.test(e.message)) {
+        throw new CookieMcpError(
+          "swap route is too large to build into a single transaction",
+          "a route did exist — try a smaller amount, or retry later (the aggregator may be running without its lookup-table authority)",
+        );
+      }
+      throw await noRouteError([args.inputMint, args.outputMint], e);
+    }
+    multiRoute = routeFromAggQuote(built.route);
+    transactionBase64 = built.transactionBase64;
+    aggBlockhash = {
+      blockhash: built.blockhash,
+      lastValidBlockHeight: built.lastValidBlockHeight,
+    };
+  } else {
+    try {
+      ({ multiRoute } = await quoteMultiRoute(
+        args.inputMint,
+        args.outputMint,
+        amountRaw.toString(),
+        slippageBps,
+      ));
+    } catch (e) {
+      throw await noRouteError([args.inputMint, args.outputMint], e);
+    }
+    if (!multiRoute?.segments?.length) {
+      throw await noRouteError([args.inputMint, args.outputMint]);
+    }
+    if (multiRoute.lowLiquidity) {
+      throw new CookieMcpError(
+        "route has low liquidity — swap would move the price a lot",
+        "reduce the amount or choose a more liquid token",
+      );
+    }
+    ({ transactionBase64 } = await buildSwapTx(multiRoute, keypair.publicKey.toBase58()));
   }
 
   const conn = getConnection();
-  const { transactionBase64 } = await buildSwapTx(multiRoute, keypair.publicKey.toBase58());
   const tx = deserializeTx(transactionBase64);
 
   // replaceRecentBlockhash so a confirmed-RPC sim isn't rejected for a blockhash it doesn't yet know;
@@ -170,14 +212,35 @@ export async function trade(args: {
   }
 
   const signedBase64 = await signAndSerialize(tx, keypair);
-  const { signature, confirmed } = await submitSignedTx(signedBase64);
 
-  let finalConfirmed = confirmed;
-  if (!finalConfirmed) {
+  let signature: string;
+  let finalConfirmed: boolean;
+  if (aggBlockhash) {
+    // Cookiebox agg: submit + confirm on our own RPC against the blockhash the tx was built with.
+    signature = await conn.sendRawTransaction(Buffer.from(signedBase64, "base64"));
     try {
-      finalConfirmed = (await confirmTx(signature, routePoolAddresses(multiRoute))).confirmed;
-    } catch {
-      /* leave as reported by submit */
+      const conf = await conn.confirmTransaction({ signature, ...aggBlockhash }, "confirmed");
+      if (conf.value.err) {
+        throw new CookieMcpError(
+          `swap landed but failed on-chain: ${JSON.stringify(conf.value.err)}`,
+          `no tokens were swapped (only the tx fee was spent) — see ${explorerTxUrl(signature)}`,
+        );
+      }
+      finalConfirmed = true;
+    } catch (e) {
+      if (e instanceof CookieMcpError) throw e;
+      finalConfirmed = false; // confirmation timed out — the tx may still land
+    }
+  } else {
+    const submitted = await submitSignedTx(signedBase64);
+    signature = submitted.signature;
+    finalConfirmed = submitted.confirmed;
+    if (!finalConfirmed) {
+      try {
+        finalConfirmed = (await confirmTx(signature, routePoolAddresses(multiRoute))).confirmed;
+      } catch {
+        /* leave as reported by submit */
+      }
     }
   }
 
@@ -186,6 +249,7 @@ export async function trade(args: {
     signature,
     confirmed: finalConfirmed,
     explorerUrl: explorerTxUrl(signature),
+    aggregator,
     // The swap was submitted either way. Unconfirmed ≠ failed, and a retried swap is a second real
     // swap, so say so instead of letting `confirmed: false` read as "nothing happened".
     ...(finalConfirmed
@@ -207,7 +271,7 @@ export async function trade(args: {
       expectedOut: rawToUi(gross, output.dec),
       minOut: rawToUi(multiRoute.minOutAmount, output.dec),
     },
-    candyShopFeeBps: multiRoute.protocolFeeBps ?? null,
+    aggregatorFeeBps: multiRoute.protocolFeeBps ?? null,
     route: {
       venues: [...new Set(multiRoute.segments.map((s) => s.programName ?? s.dex))],
       split: Boolean(multiRoute.isSplit),

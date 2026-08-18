@@ -34,8 +34,10 @@ design. It is a community project for the whole Cookie Chain ecosystem.
 
 - **Read the market** — chain health, pools, token info, token search, swap quotes, and wallet
   balances. No key needed.
-- **Swap** any Cookie Chain token pair through the [Candy Shop](https://swap.cookiescan.io) aggregator,
-  which routes across all Cookie Chain DEX liquidity for the best fill.
+- **Swap** any Cookie Chain token pair through either aggregator — the
+  [Cookiebox Swap API](https://agg.cookiebox.app) or [Candy Shop](https://swap.cookiescan.io) —
+  both routing across all Cookie Chain DEX liquidity. Agents pick per call with the `aggregator`
+  parameter and can quote both to compare.
 - **Transfer** COOK or any SPL / Token-2022 token.
 - **Launch tokens** on the [MomoSwap launchpad](https://momoswap.fun) — create a token on a COOK
   bonding curve, buy / sell the curve, claim after graduation, and sweep your creator fees.
@@ -178,7 +180,7 @@ APY / fees), launchpad reads `get_launchpad_pools` / `get_launchpad_token` /
 `get_wallet_nfts`, `get_nft_offers`, `get_nft_market_stats`, and `.cook` name reads
 `resolve_domain` / `get_owned_domains` / `get_domain_listings`.
 
-**Money** (need `COOKIE_PRIVATE_KEY`): `trade` (swap via Candy Shop), `transfer` (COOK or any token),
+**Money** (need `COOKIE_PRIVATE_KEY`): `trade` (swap via Cookiebox or Cookiescan), `transfer` (COOK or any token),
 `stake` / `unstake` (COOK ⇄ bCOOK liquid staking).
 
 **Launchpad** (need `COOKIE_PRIVATE_KEY`, [MomoSwap](https://momoswap.fun)): `deploy_token` launches a

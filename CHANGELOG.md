@@ -27,6 +27,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     each transaction — it holds the pre-ground `momo` mint the program requires and pins metadata — then
     this server simulates it on your RPC, signs with `COOKIE_PRIVATE_KEY` and sends. Custody is unchanged:
     the key never leaves your machine.
+- **Cookiebox Swap API support, alongside Candy Shop — the agent picks the aggregator.** `get_quote`
+  and `trade` take an optional `aggregator` parameter: **`cookiebox`** ) or **`cookiescan`**. Quote
+  both to compare fills. Custody is unchanged on both paths: the aggregator builds an unsigned
+  transaction, this server simulates it on your RPC, signs locally, and confirms.
+  - Both results now report which `aggregator` ran, and a price impact the aggregator could not
+    measure renders as `—` instead of `0%`.
 - **CookOven `.cook` name support**. Cookie Chain's name service. The dApp is client-side only,
   so every read and every instruction here is built straight against the program — no API, no indexer.
   - `resolve_domain` — who owns a name, when it was registered, its resolver/metadata pointers, and

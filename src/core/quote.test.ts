@@ -32,6 +32,7 @@ const route: CandyShopMultiRoute = {
 };
 
 const ctx = {
+  aggregator: "cookiescan" as const,
   inputMint: COOK,
   outputMint: MON,
   inSym: "COOK",
@@ -46,15 +47,21 @@ describe("formatQuote", () => {
     const q = formatQuote(route, ctx);
     expect(q.input.amount).toBe("10");
     expect(q.output.expectedOut).toBe("8891.41047"); // gross
-    expect(q.output.outAfterCandyShopFee).toBe("8873.627649"); // net of 20 bps
+    expect(q.output.outAfterFee).toBe("8873.627649"); // net of 20 bps
     expect(q.output.minOut).toBe("8429.946266");
   });
 
-  it("surfaces the Candy Shop fee and price impact", () => {
+  it("surfaces the aggregator fee and price impact", () => {
     const q = formatQuote(route, ctx);
-    expect(q.candyShopFee).toEqual({ bps: 20, amount: "17.782821" });
+    expect(q.aggregator).toBe("cookiescan");
+    expect(q.aggregatorFee).toEqual({ bps: 20, amount: "17.782821" });
     expect(q.priceImpactPct).toBe("0.252%");
     expect(q.slippageBps).toBe(500);
+  });
+
+  it("renders unmeasurable price impact as a dash, never 0", () => {
+    const q = formatQuote({ ...route, combinedPriceImpactPct: NaN }, ctx);
+    expect(q.priceImpactPct).toBe("—");
   });
 
   it("exposes route hops as raw amounts with venue labels", () => {
