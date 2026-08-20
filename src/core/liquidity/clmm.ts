@@ -307,7 +307,7 @@ function result(signature: string, pool: string): ClmmLpResult {
 // --- operations -----------------------------------------------------------------------------------
 
 /**
- * Add liquidity to a CLMM pool. Opens a new full-range position by default (matching SAMM's default);
+ * Add liquidity to a CLMM pool. Opens a new full-range position by default (matching BAMM's default);
  * if the wallet already holds a position in the pool, deposits into it instead. Tick arrays are
  * initialized in a preceding tx when needed.
  */

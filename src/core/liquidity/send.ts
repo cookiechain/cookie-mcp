@@ -1,5 +1,5 @@
 // Shared liquidity-tx sender: confirmed-commitment blockhash, simulate-before-send (with the
-// finalization-stall hint), sign, send, confirm. Used by every LP venue (DAMM / CLMM / SAMM) so they
+// finalization-stall hint), sign, send, confirm. Used by every LP venue (DAMM / CLMM / BAMM) so they
 // all get the same safety path. Extracted from damm.ts.
 import { Keypair, Transaction, type Connection, type Signer } from "@solana/web3.js";
 

@@ -3,13 +3,13 @@ import { describe, it, expect } from "vitest";
 import { venueForOwner } from "./index";
 import { CP_AMM_PROGRAM_ID } from "./cpAmm";
 import { CLMM_PROGRAM_ID } from "./clmm";
-import { SAMM_PROGRAM_ID } from "./cookieswap";
+import { BAMM_PROGRAM_ID } from "./cookieswap";
 
 describe("venueForOwner", () => {
   it("routes each supported program owner to its venue", () => {
     expect(venueForOwner(CP_AMM_PROGRAM_ID.toBase58())).toBe("cookiebox-damm");
     expect(venueForOwner(CLMM_PROGRAM_ID.toBase58())).toBe("cookiebox-clmm");
-    expect(venueForOwner(SAMM_PROGRAM_ID)).toBe("cookieswap-samm");
+    expect(venueForOwner(BAMM_PROGRAM_ID)).toBe("cookieswap-bamm");
   });
 
   it("returns null for an unsupported owner (e.g. the SPL token program)", () => {

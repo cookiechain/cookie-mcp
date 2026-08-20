@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 
 import {
-  SAMM_PROGRAM_ID,
-  SAMM_DEFAULT_AMM_CONFIG,
+  BAMM_PROGRAM_ID,
+  BAMM_DEFAULT_AMM_CONFIG,
   MIN_TICK,
   MAX_TICK,
   fullRangeTicks,
@@ -10,10 +10,10 @@ import {
 } from "./cookieswap";
 import { CookieMcpError } from "../errors";
 
-describe("SAMM constants", () => {
-  it("is the Cookie SAMM fork program id", () => {
-    expect(SAMM_PROGRAM_ID).toBe("WTzkPUoprVx7PDc1tfKA5sS7k1ynCgU89WtwZhksHX5");
-    expect(SAMM_DEFAULT_AMM_CONFIG).toBe("JDjWtzVe7TXHjjSqFoL1QSfv8arrCqHPPoBXaUqbe9X4");
+describe("BAMM constants", () => {
+  it("is the Cookie BAMM fork program id", () => {
+    expect(BAMM_PROGRAM_ID).toBe("WTzkPUoprVx7PDc1tfKA5sS7k1ynCgU89WtwZhksHX5");
+    expect(BAMM_DEFAULT_AMM_CONFIG).toBe("JDjWtzVe7TXHjjSqFoL1QSfv8arrCqHPPoBXaUqbe9X4");
   });
 });
 

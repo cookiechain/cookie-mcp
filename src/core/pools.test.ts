@@ -15,7 +15,7 @@ const markets: CookiescanMarket[] = [
   },
   {
     marketId: "poolB",
-    type: "COOKIESWAP SAMM",
+    type: "COOKIESWAP BAMM",
     baseToken: { mint: COOK, symbol: "wCOOK" },
     quoteToken: { mint: "MintB", symbol: "BBB" },
     liquidityUsd: 500,
@@ -53,7 +53,7 @@ describe("mapPools", () => {
 
   it("maps venue + symbols", () => {
     const [top] = mapPools(markets, volumeByMint, { limit: 1, sort: "tvl" });
-    expect(top.venue).toBe("COOKIESWAP SAMM");
+    expect(top.venue).toBe("COOKIESWAP BAMM");
     expect(top.base.symbol).toBe("wCOOK");
     expect(top.quote.symbol).toBe("BBB");
   });

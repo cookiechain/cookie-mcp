@@ -1,6 +1,6 @@
 // Liquidity dispatch across venues. add/remove/lock/claim auto-detect the venue from the pool's
 // on-chain owner; create_pool routes on the explicit `dex`. lock covers both Cookiebox venues
-// (DAMM v2 and CLMM); CookieSwap SAMM has no permanent-lock instruction.
+// (DAMM v2 and CLMM); CookieSwap BAMM has no permanent-lock instruction.
 import { PublicKey } from "@solana/web3.js";
 
 import { CookieMcpError } from "../errors";
@@ -16,12 +16,12 @@ import {
 } from "./damm";
 import { CP_AMM_PROGRAM_ID } from "./cpAmm";
 import {
-  SAMM_PROGRAM_ID,
-  addSammLiquidity,
-  removeSammLiquidity,
-  claimSammFees,
-  createSammPool,
-  type SammLpResult,
+  BAMM_PROGRAM_ID,
+  addBammLiquidity,
+  removeBammLiquidity,
+  claimBammFees,
+  createBammPool,
+  type BammLpResult,
 } from "./cookieswap";
 import {
   CLMM_PROGRAM_ID,
@@ -33,15 +33,15 @@ import {
   type ClmmLpResult,
 } from "./clmm";
 
-export type Venue = "cookiebox-damm" | "cookiebox-clmm" | "cookieswap-samm";
-type AnyLpResult = LpResult | SammLpResult | ClmmLpResult;
+export type Venue = "cookiebox-damm" | "cookiebox-clmm" | "cookieswap-bamm";
+type AnyLpResult = LpResult | BammLpResult | ClmmLpResult;
 
 // Map a pool account's on-chain owner (program id) to its venue, or null if unsupported. Pure —
 // this is the routing decision every add/remove/lock/claim depends on, so it is worth guarding.
 export function venueForOwner(owner: string): Venue | null {
   if (owner === CP_AMM_PROGRAM_ID.toBase58()) return "cookiebox-damm";
   if (owner === CLMM_PROGRAM_ID.toBase58()) return "cookiebox-clmm";
-  if (owner === SAMM_PROGRAM_ID) return "cookieswap-samm";
+  if (owner === BAMM_PROGRAM_ID) return "cookieswap-bamm";
   return null;
 }
 
@@ -60,7 +60,7 @@ async function detectVenue(poolPk: string): Promise<Venue> {
   if (!venue) {
     throw new CookieMcpError(
       `pool ${poolPk} is not a supported liquidity venue (owner ${owner})`,
-      "liquidity tools support Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM pools",
+      "liquidity tools support Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap BAMM pools",
     );
   }
   return venue;
@@ -72,9 +72,9 @@ export async function addLiquidity(args: {
   amountB?: string | number;
 }): Promise<AnyLpResult> {
   const venue = await detectVenue(args.poolPk);
-  if (venue === "cookieswap-samm") {
+  if (venue === "cookieswap-bamm") {
     const { keypair } = requireWallet();
-    return addSammLiquidity(getConnection(), keypair, args);
+    return addBammLiquidity(getConnection(), keypair, args);
   }
   if (venue === "cookiebox-clmm") {
     const { keypair } = requireWallet();
@@ -88,9 +88,9 @@ export async function removeLiquidity(args: {
   bps?: number;
 }): Promise<AnyLpResult> {
   const venue = await detectVenue(args.poolPk);
-  if (venue === "cookieswap-samm") {
+  if (venue === "cookieswap-bamm") {
     const { keypair } = requireWallet();
-    return removeSammLiquidity(getConnection(), keypair, args);
+    return removeBammLiquidity(getConnection(), keypair, args);
   }
   if (venue === "cookiebox-clmm") {
     const { keypair } = requireWallet();
@@ -101,9 +101,9 @@ export async function removeLiquidity(args: {
 
 export async function lockLiquidity(args: { poolPk: string }): Promise<AnyLpResult> {
   const venue = await detectVenue(args.poolPk);
-  if (venue === "cookieswap-samm") {
+  if (venue === "cookieswap-bamm") {
     throw new CookieMcpError(
-      "lock_liquidity is not supported on CookieSwap SAMM",
+      "lock_liquidity is not supported on CookieSwap BAMM",
       "permanent lock is available on Cookiebox DAMM v2 and Cookiebox CLMM pools",
     );
   }
@@ -116,9 +116,9 @@ export async function lockLiquidity(args: { poolPk: string }): Promise<AnyLpResu
 
 export async function claimFees(args: { poolPk: string }): Promise<AnyLpResult> {
   const venue = await detectVenue(args.poolPk);
-  if (venue === "cookieswap-samm") {
+  if (venue === "cookieswap-bamm") {
     const { keypair } = requireWallet();
-    return claimSammFees(getConnection(), keypair, args);
+    return claimBammFees(getConnection(), keypair, args);
   }
   if (venue === "cookiebox-clmm") {
     const { keypair } = requireWallet();
@@ -138,9 +138,9 @@ export async function createPool(args: {
   initialPrice?: string | number;
   ammConfig?: string;
 }): Promise<AnyLpResult> {
-  if (args.dex === "cookieswap-samm") {
+  if (args.dex === "cookieswap-bamm") {
     const { keypair } = requireWallet();
-    return createSammPool(getConnection(), keypair, args);
+    return createBammPool(getConnection(), keypair, args);
   }
   if (args.dex === "cookiebox-clmm") {
     const { keypair } = requireWallet();

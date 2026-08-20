@@ -172,7 +172,7 @@ _July 21, 2026_
 - **Swap & transfer**: `trade` (routed through the Candy Shop aggregator across all Cookie Chain DEX
   liquidity) and `transfer` (COOK or any SPL / Token-2022 token).
 - **Token launch**: `deploy_token` (Cookiebox dynamic bonding curve) and `claim_creator_fees`.
-- **Liquidity management** across Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM, with the venue
+- **Liquidity management** across Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap BAMM, with the venue
   auto-detected from the pool: `create_pool`, `add_liquidity`, `remove_liquidity`, `claim_fees`, and
   `lock_liquidity` (Cookiebox DAMM v2, permanent).
 - **Liquid staking**: `stake`, `unstake`, and `stake_info` for COOK ⇄ bCOOK.

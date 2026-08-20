@@ -42,7 +42,7 @@ design. It is a community project for the whole Cookie Chain ecosystem.
 - **Launch tokens** on the [MomoSwap launchpad](https://momoswap.fun) — create a token on a COOK
   bonding curve, buy / sell the curve, claim after graduation, and sweep your creator fees.
 - **Manage liquidity** — create pools, add / remove liquidity, claim fees, and permanently lock
-  positions across Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM (venue auto-detected).
+  positions across Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap BAMM (venue auto-detected).
 - **Liquid-stake** COOK for bCOOK and redeem it instantly.
 - **Trade NFTs** on [Baked Bazaar](https://bakedbazaar.art) — search, browse, buy, list, and make /
   accept offers (Cookie Chain's Metaplex Auction House marketplace).
@@ -206,9 +206,9 @@ route". They now recognise that case and point at the launchpad tools instead, a
 adds a `launchpad` field when a mint shows no price or liquidity because it is still on a curve.
 
 **Liquidity** (need `COOKIE_PRIVATE_KEY`): `create_pool`, `add_liquidity`, `remove_liquidity`,
-`claim_fees` (Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM, venue auto-detected),
+`claim_fees` (Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap BAMM, venue auto-detected),
 `lock_liquidity` (Cookiebox DAMM v2 and Cookiebox CLMM, permanent and irreversible — CLMM locks the
-whole position; fees stay claimable either way). Concentrated-liquidity venues (CLMM / SAMM) open a
+whole position; fees stay claimable either way). Concentrated-liquidity venues (CLMM / BAMM) open a
 full-range position by default.
 
 **NFT marketplace** (need `COOKIE_PRIVATE_KEY`, [Baked Bazaar](https://bakedbazaar.art)): `buy_nft`,

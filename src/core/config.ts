@@ -74,7 +74,7 @@ export const COOK_SYMBOL = "COOK";
 export const PROGRAM_IDS = {
   cookieboxDamm: "DAMMjDCEFTDkt7ywazZS8GoaLtjb3HaJo3pLbf64xrPY",
   cookieboxClmm: "CLMMmWqTtyNSomqXP3kETJy2SGKPdr31USsm4GfbLyKs",
-  cookieswapSamm: "WTzkPUoprVx7PDc1tfKA5sS7k1ynCgU89WtwZhksHX5",
+  cookieswapBamm: "WTzkPUoprVx7PDc1tfKA5sS7k1ynCgU89WtwZhksHX5",
   cookieswapXybn: "xYBN2zddsqSy41tg1yD9nJScCmqquZnHUyzXBfLEqC8",
   // The launchpad deployment to assume when nothing on-chain is available to read the id from. It has
   // changed once already (`7tLQV8D6…` → `momoL7wu…`) and the old pools stay on the old id, so this is

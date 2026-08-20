@@ -3,13 +3,13 @@
  * paths assemble and reach on-chain validation without a real deposit:
  *   npx tsx scripts/verify-lp.ts
  * Expected: remove/lock cleanly report "no position"; add/create reach build/simulate and fail only
- * for lack of funds; SAMM routes by pool owner; SAMM create_pool reports "not supported yet".
+ * for lack of funds; BAMM routes by pool owner; BAMM create_pool reports "not supported yet".
  */
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 
 const POOL = "5gXHQZvknu4tp6dT32G9m8aWups5aV8aCsYDAwfeV3np"; // Cookiebox DAMM wCOOK/bCOOK
-const SAMM_POOL = "DtK93bScUXhkn6edF8ATdL85DYyHqsavbWhpR9GuuAYB"; // CookieSwap SAMM wCOOK/bCOOK
+const BAMM_POOL = "DtK93bScUXhkn6edF8ATdL85DYyHqsavbWhpR9GuuAYB"; // CookieSwap BAMM wCOOK/bCOOK
 
 async function tryOp(label: string, fn: () => Promise<unknown>): Promise<void> {
   try {
@@ -41,15 +41,15 @@ async function main() {
     createPool({ tokenAMint: MON, tokenBMint: COOK, amountA: 1, amountB: 0.001 }),
   );
 
-  // CookieSwap SAMM (venue auto-detected from the pool owner).
-  await tryOp("remove_liquidity (SAMM) → no position (unfunded)", () =>
-    removeLiquidity({ poolPk: SAMM_POOL }),
+  // CookieSwap BAMM (venue auto-detected from the pool owner).
+  await tryOp("remove_liquidity (BAMM) → no position (unfunded)", () =>
+    removeLiquidity({ poolPk: BAMM_POOL }),
   );
-  await tryOp("claim_fees (SAMM) → no position (unfunded)", () => claimFees({ poolPk: SAMM_POOL }));
-  await tryOp("add_liquidity (SAMM) → getPoolInfoFromRpc + openPosition build (unfunded)", () =>
-    addLiquidity({ poolPk: SAMM_POOL, amountB: 0.001 }),
+  await tryOp("claim_fees (BAMM) → no position (unfunded)", () => claimFees({ poolPk: BAMM_POOL }));
+  await tryOp("add_liquidity (BAMM) → getPoolInfoFromRpc + openPosition build (unfunded)", () =>
+    addLiquidity({ poolPk: BAMM_POOL, amountB: 0.001 }),
   );
-  // create_pool (SAMM) is intentionally NOT exercised here: Raydium's createPool broadcasts via
+  // create_pool (BAMM) is intentionally NOT exercised here: Raydium's createPool broadcasts via
   // `.execute()` (it can't be built-only), so unfunded it would send a doomed tx and hang on confirm.
   // It's validated live with a funded wallet instead.
 

@@ -33,7 +33,7 @@ export interface CookiescanMarketSide {
 
 export interface CookiescanMarket {
   marketId: string;
-  type: string; // venue label, e.g. "COOKIEBOX DAMM", "COOKIESWAP SAMM"
+  type: string; // venue label, e.g. "COOKIEBOX DAMM", "COOKIESWAP BAMM"
   baseToken: CookiescanMarketSide;
   quoteToken: CookiescanMarketSide;
   liquidityUsd?: number;

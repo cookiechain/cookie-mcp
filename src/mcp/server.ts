@@ -117,7 +117,7 @@ registerTool(
   {
     title: "List Cookie Chain pools",
     description:
-      "Liquidity pools across every Cookie Chain DEX (Cookiebox DAMM/CLMM, CookieSwap SAMM/xYBN) " +
+      "Liquidity pools across every Cookie Chain DEX (Cookiebox DAMM/CLMM, CookieSwap BAMM/xYBN) " +
       "with TVL (USD) and 24h volume, sorted by TVL or volume. Use to find the most liquid markets.",
     inputSchema: {
       limit: z
@@ -646,7 +646,7 @@ registerTool(
   tool(async (a: { ref: string; unwrap?: boolean }) => claimCreatorFees(a)),
 );
 
-// Liquidity — Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap SAMM. Every op simulates before
+// Liquidity — Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap BAMM. Every op simulates before
 // sending; all are live-verified on Cookie Chain.
 registerTool(
   "create_pool",
@@ -655,12 +655,12 @@ registerTool(
     description:
       "Create a new pool for a token pair and seed it with an initial deposit (the deposit ratio sets " +
       "the starting price). `dex` selects the venue: cookiebox-damm (default), cookiebox-clmm " +
-      "(concentrated liquidity, full-range seed, default 0.25% fee tier), or cookieswap-samm " +
+      "(concentrated liquidity, full-range seed, default 0.25% fee tier), or cookieswap-bamm " +
       "(concentrated liquidity; fee tier/tick spacing chosen by `ammConfig`, full-range seed). " +
       "Simulates before sending; caps the COOK side. Requires COOKIE_PRIVATE_KEY.",
     inputSchema: {
       dex: z
-        .enum(["cookiebox-damm", "cookiebox-clmm", "cookieswap-samm"])
+        .enum(["cookiebox-damm", "cookiebox-clmm", "cookieswap-bamm"])
         .optional()
         .describe("venue (default cookiebox-damm)"),
       tokenAMint: z.string().min(32).max(44).describe("first token mint"),
@@ -685,7 +685,7 @@ registerTool(
         .union([z.number().positive(), z.string()])
         .optional()
         .describe(
-          "CLMM/SAMM only: starting price as tokenB per tokenA; omit to derive from the amounts",
+          "CLMM/BAMM only: starting price as tokenB per tokenA; omit to derive from the amounts",
         ),
       ammConfig: z
         .string()
@@ -693,13 +693,13 @@ registerTool(
         .max(44)
         .optional()
         .describe(
-          "SAMM only: AmmConfig address (selects fee tier/tick spacing); omit for the default",
+          "BAMM only: AmmConfig address (selects fee tier/tick spacing); omit for the default",
         ),
     },
   },
   tool(
     async (a: {
-      dex?: "cookiebox-damm" | "cookiebox-clmm" | "cookieswap-samm";
+      dex?: "cookiebox-damm" | "cookiebox-clmm" | "cookieswap-bamm";
       tokenAMint: string;
       tokenBMint: string;
       amountA: string | number;
@@ -718,7 +718,7 @@ registerTool(
     title: "Add liquidity",
     description:
       "Add liquidity to a pool by opening a new position; the venue (Cookiebox DAMM v2, Cookiebox CLMM, " +
-      "or CookieSwap SAMM) is auto-detected from the pool. Concentrated-liquidity venues (CLMM/SAMM) " +
+      "or CookieSwap BAMM) is auto-detected from the pool. Concentrated-liquidity venues (CLMM/BAMM) " +
       "open a full-range position by default. Simulates before sending. Requires " +
       "COOKIE_PRIVATE_KEY.",
     inputSchema: {
@@ -744,7 +744,7 @@ registerTool(
     title: "Remove liquidity",
     description:
       "Remove liquidity from your position in a pool (venue auto-detected). `bps` is the fraction to " +
-      "remove for DAMM v2 and CLMM (default 10000 = all, which also closes a CLMM position); SAMM " +
+      "remove for DAMM v2 and CLMM (default 10000 = all, which also closes a CLMM position); BAMM " +
       "removes the whole position. Requires COOKIE_PRIVATE_KEY.",
     inputSchema: {
       poolPk: z.string().min(32).max(44).describe("pool address"),
@@ -769,7 +769,7 @@ registerTool(
       "auto-detected from the pool. DAMM v2 locks the position's unlocked liquidity; CLMM locks the " +
       "WHOLE position (the program offers no partial or vesting lock). Locked liquidity can never be " +
       "withdrawn and the position can never be closed, but fees stay claimable via claim_fees. Not " +
-      "supported on CookieSwap SAMM. Requires COOKIE_PRIVATE_KEY.",
+      "supported on CookieSwap BAMM. Requires COOKIE_PRIVATE_KEY.",
     inputSchema: {
       poolPk: z.string().min(32).max(44).describe("Cookiebox DAMM v2 or CLMM pool address"),
     },
@@ -783,7 +783,7 @@ registerTool(
     title: "Claim accrued LP fees",
     description:
       "Claim the swap fees your liquidity position has accrued in a pool (venue auto-detected: " +
-      "Cookiebox DAMM v2, Cookiebox CLMM, or CookieSwap SAMM). Sweeps fees to your wallet without " +
+      "Cookiebox DAMM v2, Cookiebox CLMM, or CookieSwap BAMM). Sweeps fees to your wallet without " +
       "removing the position. Simulates before sending. Requires COOKIE_PRIVATE_KEY.",
     inputSchema: {
       poolPk: z.string().min(32).max(44).describe("pool address you hold a position in"),
