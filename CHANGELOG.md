@@ -74,6 +74,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   it always takes the **whole** position, so unlike DAMM there is no partial amount and no vesting.
   Locked liquidity can never be withdrawn and the position can never be closed; fees stay claimable via
   `claim_fees`.
+- **`bridge` now preflights the destination chain's collateral.** The warp route releases from a fixed
+  collateral account on the far side, so bridging more than it holds locked your funds on the source
+  chain behind a message that could not be delivered — and because the tool simulates against the
+  *source* chain, nothing caught it. `bridge` now reads the far side first and refuses without signing,
+  and reports the figure as `destinationCollateral`. The two sides need different reads: the Cookie PDA
+  is a native balance (minus its rent-exempt reserve, which cannot be released), while the Solana escrow
+  *is* the token account rather than a wallet owning one.
 - **`get_wallet`** — the public key this server signs with, whether it is read-only, and the RPC it is
   pointed at. Takes no arguments and makes no RPC call, so it answers when the chain is unreachable and
   it reports what the _running process_ booted with — not what a config file on disk now says, which can

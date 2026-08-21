@@ -35,7 +35,7 @@ import { confirmSent } from "./confirm";
 import { CookieMcpError } from "./errors";
 import { getConnection, getSolanaConnection } from "./rpc";
 import { requireWallet, ownPublicKey } from "./wallet";
-import { uiToRaw } from "./format";
+import { rawToUi, uiToRaw } from "./format";
 
 // Standard Solana SPL no-op program used by Hyperlane for log emission.
 const SPL_NOOP_PROGRAM_ID = new PublicKey("noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV");
@@ -166,6 +166,10 @@ interface Route {
   igpProgramId: PublicKey;
   overheadIgp: PublicKey;
   splMint?: PublicKey;
+  destDecimals: number;
+  /** Where the destination chain pays the release from — see assertDestinationCollateral. */
+  destCollateral: PublicKey | null;
+  destCollateralKind: "native" | "tokenAccount";
   destMailbox: PublicKey;
   sourceChain: "cookie" | "solana";
   sourceExplorerTxUrl: (sig: string) => string;
@@ -176,6 +180,21 @@ function parsePk(addr: string, label: string): PublicKey {
     return new PublicKey(addr);
   } catch {
     throw new CookieMcpError(`invalid ${label}: ${addr}`, "expected a base58 pubkey");
+  }
+}
+
+/** The far side's warp program id only matters for the collateral preflight, and both ids ship as
+ *  defaults — so a missing/garbled one downgrades the check to "unchecked" rather than failing the
+ *  bridge, preserving the behaviour from before the preflight existed. */
+function optionalPk(
+  addr: string | undefined,
+  derive: (warp: PublicKey) => PublicKey,
+): PublicKey | null {
+  if (!addr) return null;
+  try {
+    return derive(new PublicKey(addr));
+  } catch {
+    return null;
   }
 }
 
@@ -197,6 +216,9 @@ function resolveRoute(direction: BridgeDirection): Route {
       mailbox: parsePk(BRIDGE.cookie.mailbox, "cookie mailbox"),
       igpProgramId: parsePk(BRIDGE.cookie.igpProgramId, "cookie IGP program"),
       overheadIgp: parsePk(BRIDGE.cookie.overheadIgp, "cookie overhead IGP"),
+      destDecimals: BRIDGE.solana.decimals,
+      destCollateral: optionalPk(SOLANA_WARP_PROGRAM_ID, deriveEscrowPda),
+      destCollateralKind: "tokenAccount",
       destMailbox: parsePk(BRIDGE.solana.mailbox, "solana mailbox"),
       sourceChain: "cookie",
       sourceExplorerTxUrl: explorerTxUrl,
@@ -219,6 +241,9 @@ function resolveRoute(direction: BridgeDirection): Route {
     igpProgramId: parsePk(BRIDGE.solana.igpProgramId, "solana IGP program"),
     overheadIgp: parsePk(BRIDGE.solana.overheadIgp, "solana overhead IGP"),
     splMint: parsePk(BRIDGE.solana.splMint, "solana COOK mint"),
+    destDecimals: BRIDGE.cookie.decimals,
+    destCollateral: optionalPk(COOKIE_WARP_PROGRAM_ID, deriveNativeCollateralPda),
+    destCollateralKind: "native",
     destMailbox: parsePk(BRIDGE.cookie.mailbox, "cookie mailbox"),
     sourceChain: "solana",
     sourceExplorerTxUrl: solanaExplorerTxUrl,
@@ -288,6 +313,71 @@ async function buildTransferRemoteIx(
   });
 }
 
+// --- Destination collateral preflight ----------------------------------------------------------
+// Neither side of the warp route mints: a transfer is RELEASED from the destination chain's collateral
+// account (Cookie's native-collateral PDA, or the Solana escrow). If that account is short, the source
+// tx still succeeds — it locks your funds and dispatches the message — and only the relayer's delivery
+// on the far side fails. simulateTransaction runs against the SOURCE chain, so it can never catch this.
+// Hence an explicit read of the destination before signing.
+//
+// The two accounts need DIFFERENT reads: the Cookie PDA holds native COOK (a lamport balance), while
+// the Solana escrow IS the token account itself, not a wallet owning an ATA — an owner-based ATA lookup
+// finds nothing there and would report 0.
+
+/** Rescale a raw amount between the two sides' decimals (Cookie 9, Solana 6). Scaling down truncates,
+ *  which can only UNDERstate the requirement by sub-dust — never overstate it into a false failure. */
+export function scaleRaw(raw: bigint, fromDecimals: number, toDecimals: number): bigint {
+  if (toDecimals === fromDecimals) return raw;
+  const diff = BigInt(Math.abs(toDecimals - fromDecimals));
+  const factor = 10n ** diff;
+  return toDecimals > fromDecimals ? raw * factor : raw / factor;
+}
+
+/** Available collateral in the destination's raw units, or null when it can't be determined (missing
+ *  warp id, unreadable account, RPC failure) — an unknown is reported, never treated as zero. */
+async function readDestinationCollateral(route: Route): Promise<bigint | null> {
+  const acct = route.destCollateral;
+  if (!acct) return null;
+  try {
+    if (route.destCollateralKind === "tokenAccount") {
+      const bal = await route.destConn.getTokenAccountBalance(acct, "confirmed");
+      return BigInt(bal.value.amount);
+    }
+    // Native side: the PDA carries account data, so its rent-exempt reserve is NOT releasable.
+    // Subtract it rather than counting it as available collateral.
+    const info = await route.destConn.getAccountInfo(acct, "confirmed");
+    if (!info) return null;
+    const rent = await route.destConn.getMinimumBalanceForRentExemption(info.data.length);
+    const free = BigInt(info.lamports) - BigInt(rent);
+    return free > 0n ? free : 0n;
+  } catch {
+    return null;
+  }
+}
+
+/** Throws when the destination provably cannot cover the release. Returns the collateral as a UI
+ *  amount for the result, or null when the check couldn't run. */
+async function assertDestinationCollateral(
+  route: Route,
+  amountRaw: bigint,
+): Promise<string | null> {
+  const available = await readDestinationCollateral(route);
+  if (available === null) return null;
+  const needed = scaleRaw(amountRaw, route.sourceDecimals, route.destDecimals);
+  if (available < needed) {
+    const destChain = route.sourceChain === "cookie" ? "Solana" : "Cookie Chain";
+    throw new CookieMcpError(
+      `not enough bridge collateral on ${destChain}: the route can release ` +
+        `${rawToUi(available, route.destDecimals)} COOK but this transfer needs ` +
+        `${rawToUi(needed, route.destDecimals)}`,
+      "nothing was signed. The warp route releases from a fixed collateral account, so a larger " +
+        "transfer than it holds would lock your funds on this side with an undeliverable message — " +
+        "bridge a smaller amount, or wait for the route's collateral to be topped up",
+    );
+  }
+  return rawToUi(available, route.destDecimals);
+}
+
 // --- Delivery check ----------------------------------------------------------------------------
 
 async function isDelivered(
@@ -318,6 +408,9 @@ export interface BridgeResult {
   destinationDomain: number;
   delivered: boolean;
   destinationTx: string | null;
+  /** Collateral available on the destination when the transfer was signed (UI COOK); null when the
+   *  preflight could not read it. */
+  destinationCollateral: string | null;
   note: string;
 }
 
@@ -362,6 +455,9 @@ export async function bridge(args: {
   if (amountRaw <= 0n) {
     throw new CookieMcpError("amount must be greater than 0", "pass a positive amount");
   }
+
+  // Preflight the far side's collateral before anything is signed (see the section above).
+  const destinationCollateral = await assertDestinationCollateral(route, amountRaw);
 
   const uniqueMsg = Keypair.generate();
   const transferIx = await buildTransferRemoteIx(
@@ -473,6 +569,7 @@ export async function bridge(args: {
     destinationDomain: route.destinationDomain,
     delivered,
     destinationTx,
+    destinationCollateral,
     note,
   };
 }

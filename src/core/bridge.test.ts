@@ -7,6 +7,7 @@ import {
   messageIdFromLogs,
   deriveNativeCollateralPda,
   deriveEscrowPda,
+  scaleRaw,
 } from "./bridge";
 
 // Devnet warp program ids from hyperlane-cookies (the only committed values); the golden PDAs below
@@ -105,5 +106,33 @@ describe("messageIdFromLogs", () => {
   it("returns null when no id is present", () => {
     expect(messageIdFromLogs(["no id here"])).toBeNull();
     expect(messageIdFromLogs(null)).toBeNull();
+  });
+});
+
+// The preflight compares a source-decimals amount against destination-decimals collateral, so the
+// rescale is the piece that decides whether a transfer is judged coverable. Cookie is 9-dec, Solana 6.
+describe("scaleRaw", () => {
+  it("scales Cookie (9) down to Solana (6)", () => {
+    // 10 COOK = 10e9 raw on Cookie -> 10e6 raw on Solana.
+    expect(scaleRaw(10_000_000_000n, 9, 6)).toBe(10_000_000n);
+  });
+
+  it("scales Solana (6) up to Cookie (9)", () => {
+    expect(scaleRaw(10_000_000n, 6, 9)).toBe(10_000_000_000n);
+  });
+
+  it("is identity when the decimals match", () => {
+    expect(scaleRaw(12345n, 6, 6)).toBe(12345n);
+  });
+
+  it("truncates sub-dust when scaling down, never rounding up into a false shortfall", () => {
+    // 1 Cookie lamport is below one Solana unit: requires 0, not 1.
+    expect(scaleRaw(999n, 9, 6)).toBe(0n);
+    expect(scaleRaw(1_500n, 9, 6)).toBe(1n);
+  });
+
+  it("round-trips a large amount through both directions", () => {
+    const cookieRaw = 6_999_990_000_000_000n; // 6,999,990 COOK at 9 decimals
+    expect(scaleRaw(scaleRaw(cookieRaw, 9, 6), 6, 9)).toBe(cookieRaw);
   });
 });
