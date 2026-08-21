@@ -166,7 +166,7 @@ it never turns a name straight into a trade.
 | `COOKIE_RPC_URL`      | `https://rpc.cookiescan.io`           | Cookie Chain RPC.                                      |
 | `COOKIE_PRIVATE_KEY`  | —                                     | Wallet key for money-moving tools. Read-only if unset. |
 | `COOKIE_SLIPPAGE_BPS` | `500`                                 | Default slippage (bps).                                |
-| `SOLANA_RPC_URL`      | `https://api.mainnet-beta.solana.com` | Solana mainnet RPC (bridge only).                      |
+| `SOLANA_RPC_URL`      | `https://api.mainnet-beta.solana.com` | Solana mainnet RPC (bridge + `get_balance` Solana side).|
 | `COOKIE_REFERRER`     | `mcp treasury`                        | Referral wallet (MomoSwap only).                       |
 
 ## Tools
@@ -221,7 +221,10 @@ over the [Hyperlane](https://hyperlane.cookiescan.io) warp route (`direction` = 
 `solana-to-cookie`). One source-chain signature dispatches the transfer; a relayer delivers on the far
 side in a few minutes — check with `bridge_status` (a read, by Hyperlane message id). Cookie native COOK
 is 9-decimal; Solana COOK is a 6-decimal Token-2022 mint — amounts are in COOK either way. Simulates
-first. The mainnet warp-route program ids ship as defaults, so `bridge` works
+first. `get_balance` with `chain: "solana"` shows the Solana side before you bridge — the wallet's SPL
+COOK (what `solana-to-cookie` spends) and its SOL, which pays that transfer's fee and interchain gas;
+that view is COOK + SOL only and does not enumerate other Solana tokens.
+The mainnet warp-route program ids ship as defaults, so `bridge` works
 out of the box — override `COOKIE_WARP_PROGRAM_ID` / `SOLANA_WARP_PROGRAM_ID` only for a different
 deployment.
 

@@ -1,11 +1,11 @@
 // get_balance — native COOK + SPL/Token-2022 balances for a wallet, with USD values from the registry.
 import { PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
 
-import { COOK_MINT, COOK_SYMBOL, COOK_DECIMALS } from "./config";
+import { BRIDGE, COOK_MINT, COOK_SYMBOL, COOK_DECIMALS } from "./config";
 import { looksLikeName, resolveWallet } from "./domains";
 import { CookieMcpError } from "./errors";
 import { fetchTokens, type CookiescanToken } from "./cookiescan";
-import { getConnection } from "./rpc";
+import { getConnection, getSolanaConnection } from "./rpc";
 import { rawToUi } from "./format";
 
 // web3.js v1 doesn't export these from its base entrypoint.
@@ -120,3 +120,73 @@ export function mapBalances(
 }
 
 export { COOK_SYMBOL };
+
+// --- Solana mainnet side (the far end of the Hyperlane COOK bridge) -----------------------------
+// `bridge {direction: "solana-to-cookie"}` spends SPL COOK held by the SAME keypair on Solana
+// mainnet, and pays the Hyperlane interchain gas in SOL — neither of which the Cookie Chain view
+// above can see. This reads just those two numbers off the mainnet connection: no token enumeration
+// (the Cookiescan registry prices Cookie Chain mints, so a full Solana portfolio would be a list of
+// unpriced mints), and COOK is priced off the registry since the warp route makes the two sides the
+// same asset 1:1.
+export interface SolanaBridgeBalances {
+  wallet: string;
+  chain: "solana";
+  /** SPL COOK (Token-2022, 6 decimals) — the balance `solana-to-cookie` draws from. */
+  cook: { amount: string; mint: string; decimals: number; usdValue: number | null };
+  /** Native SOL — pays the tx fee, the ATA rent and the Hyperlane interchain gas payment. */
+  sol: { amount: string };
+}
+
+/** Sum every account holding the mint — a wallet can hold it outside the canonical ATA, and the
+ *  spendable balance is the total. Falls back to the configured decimals when it holds none. */
+export function sumTokenAmounts(
+  amounts: (ParsedTokenAmount["tokenAmount"] | undefined)[],
+): { raw: bigint; decimals: number } {
+  let raw = 0n;
+  let decimals: number = BRIDGE.solana.decimals;
+  for (const ta of amounts) {
+    if (!ta) continue;
+    raw += BigInt(ta.amount);
+    decimals = ta.decimals;
+  }
+  return { raw, decimals };
+}
+
+export async function getSolanaBalances(wallet: string): Promise<SolanaBridgeBalances> {
+  const { pubkey: owner, name } = looksLikeName(wallet)
+    ? await resolveWallet(wallet, "wallet address")
+    : { pubkey: parsePubkey(wallet), name: null };
+  void name; // a `.cook` name resolves to the same keypair on both chains
+  const conn = getSolanaConnection();
+  const mint = new PublicKey(BRIDGE.solana.splMint);
+
+  // Query by mint rather than deriving the ATA: a wallet can hold the mint in a non-canonical
+  // account, and summing every account is what a sender's spendable balance actually is.
+  const [lamports, accounts, registry] = await Promise.all([
+    conn.getBalance(owner),
+    conn.getParsedTokenAccountsByOwner(owner, { mint }),
+    fetchTokens(),
+  ]);
+
+  const { raw, decimals } = sumTokenAmounts(
+    accounts.value.map(({ account }) => {
+      const info = (account.data as { parsed: { info: Record<string, unknown> } }).parsed.info;
+      return info.tokenAmount as ParsedTokenAmount["tokenAmount"];
+    }),
+  );
+
+  const cookPrice = registry.find((t) => t.mint === COOK_MINT)?.price?.usd;
+  const price = cookPrice != null ? Number(cookPrice) : NaN;
+  const amount = rawToUi(raw, decimals);
+  return {
+    wallet: owner.toBase58(),
+    chain: "solana",
+    cook: {
+      amount,
+      mint: mint.toBase58(),
+      decimals,
+      usdValue: Number.isFinite(price) ? Number(amount) * price : null,
+    },
+    sol: { amount: rawToUi(BigInt(lamports), 9) },
+  };
+}

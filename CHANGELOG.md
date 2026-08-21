@@ -79,6 +79,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   it reports what the _running process_ booted with — not what a config file on disk now says, which can
   differ until the server is restarted. Previously the only way to see the key was `get_balance` with no
   arguments, which needs a live RPC. The secret is never returned.
+- **`get_balance` can read the Solana side of the bridge.** Pass `chain: "solana"` for the wallet's SPL
+  COOK on Solana mainnet — the balance a `solana-to-cookie` bridge actually spends — plus its SOL, which
+  pays that transfer's fee, ATA rent and Hyperlane interchain gas. Neither was visible before: the
+  default view only reads Cookie Chain. COOK + SOL only; other Solana tokens are not enumerated.
 
 ### Changed
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 
-import { mapBalances, type ParsedTokenAmount } from "./balances";
+import { mapBalances, sumTokenAmounts, type ParsedTokenAmount } from "./balances";
 import { COOK_MINT } from "./config";
 import type { CookiescanToken } from "./cookiescan";
 
@@ -66,5 +66,24 @@ describe("mapBalances", () => {
     const b = mapBalances(WALLET, 0, [acct(MINT_A, "1000000", 6, 1)], []);
     expect(b.tokens[0].symbol).toBeNull();
     expect(b.tokens[0].usdValue).toBeNull();
+  });
+});
+
+describe("sumTokenAmounts", () => {
+  const ta = (amount: string, decimals = 6) => ({ amount, decimals, uiAmount: null });
+
+  it("sums every account holding the mint", () => {
+    expect(sumTokenAmounts([ta("4000000000000"), ta("1500000")])).toEqual({
+      raw: 4000001500000n,
+      decimals: 6,
+    });
+  });
+
+  it("falls back to the bridge decimals when the wallet holds none", () => {
+    expect(sumTokenAmounts([])).toEqual({ raw: 0n, decimals: 6 });
+  });
+
+  it("skips accounts with no parsed amount", () => {
+    expect(sumTokenAmounts([undefined, ta("7")])).toEqual({ raw: 7n, decimals: 6 });
   });
 });

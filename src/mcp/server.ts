@@ -12,7 +12,7 @@ import { getChainHealth } from "../core/health";
 import { getPools } from "../core/pools";
 import { getTokenInfo, searchTokens } from "../core/token";
 import { getQuote } from "../core/quote";
-import { getBalances } from "../core/balances";
+import { getBalances, getSolanaBalances } from "../core/balances";
 import { ownPublicKey, walletInfo } from "../core/wallet";
 import { trade } from "../core/trade";
 import { transfer } from "../core/transfer";
@@ -234,16 +234,23 @@ registerTool(
     description:
       "Native COOK + SPL/Token-2022 token balances for a wallet, with USD values. Defaults to the " +
       "configured wallet (COOKIE_PRIVATE_KEY); pass `wallet` to inspect any address or .cook name. " +
-      "In read-only mode (no key), `wallet` is required.",
+      "In read-only mode (no key), `wallet` is required. Pass `chain: 'solana'` for the far side of " +
+      "the Hyperlane bridge instead: the wallet's SPL COOK on Solana mainnet (what a " +
+      "`solana-to-cookie` bridge spends) plus its SOL, which pays that transfer's fee and " +
+      "interchain gas. That view is COOK + SOL only — it does not enumerate other Solana tokens.",
     inputSchema: {
       wallet: z
         .string()
         .min(1)
         .optional()
         .describe("wallet address (base58) or .cook name; omit to use the configured wallet"),
+      chain: z
+        .enum(["cookie", "solana"])
+        .optional()
+        .describe("which chain to read; defaults to cookie (Cookie Chain)"),
     },
   },
-  tool(async (a: { wallet?: string }) => {
+  tool(async (a: { wallet?: string; chain?: "cookie" | "solana" }) => {
     const wallet = a.wallet ?? ownPublicKey();
     if (!wallet) {
       throw new CookieMcpError(
@@ -251,7 +258,7 @@ registerTool(
         "pass a `wallet` address, or set COOKIE_PRIVATE_KEY to default to your own wallet",
       );
     }
-    return getBalances(wallet);
+    return a.chain === "solana" ? getSolanaBalances(wallet) : getBalances(wallet);
   }),
 );
 
