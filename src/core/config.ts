@@ -9,7 +9,11 @@ export const COOKIE_SWAP_API_URL =
 export const COOKIEBOX_AGG_API_URL =
   process.env.COOKIEBOX_AGG_API_URL?.trim().replace(/\/$/, "") || "https://agg.cookiebox.app";
 
-export type SwapAggregator = "cookiebox" | "cookiescan";
+// cookiebox/cookiescan route Cookie Chain liquidity; jupiter routes SOLANA MAINNET liquidity and is
+// selected by `chain: "solana"` rather than chosen freely.
+export type SwapAggregator = "cookiebox" | "cookiescan" | "jupiter";
+/** Which chain a swap executes on. Cookie Chain unless asked otherwise. */
+export type TradeChain = "cookie" | "solana";
 export const DEFAULT_SWAP_AGGREGATOR: SwapAggregator =
   process.env.COOKIE_SWAP_AGGREGATOR?.trim() === "cookiescan" ? "cookiescan" : "cookiebox";
 
@@ -103,8 +107,32 @@ export const HTTP_TIMEOUT_MS = 12_000;
 // Solana side is a `collateral` warp (locks SPL COOK). Addresses below are the mainnet Hyperlane
 // core/IGP identifiers from the hyperlane-cookies deploy (configs/agents/agent-config.json +
 // configs/warp-routes/cookie-sol/token-config.json); all overridable via env.
-export const SOLANA_RPC_URL =
-  process.env.SOLANA_RPC_URL?.trim() || "https://api.mainnet-beta.solana.com";
+// The public endpoint is heavily throttled and rate-limits `sendTransaction` hardest of all. It is
+// good enough for the bridge (validated) but NOT for a Solana swap, where a slow send against a
+// slippage cap is a FAILED tx, not a slow one — `trade {chain:"solana"}` refuses to run on it.
+export const DEFAULT_SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com";
+export const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL?.trim() || DEFAULT_SOLANA_RPC_URL;
+
+/** True when no dedicated Solana RPC was configured, i.e. we are on the throttled public endpoint. */
+export function isPublicSolanaRpc(): boolean {
+  return SOLANA_RPC_URL === DEFAULT_SOLANA_RPC_URL;
+}
+
+// --- Jupiter (Solana mainnet swaps) --------------------------------------------------------------
+// `lite-api.jup.ag` is the keyless tier: 0.5 req/s (30/min), enough here because a swap is a couple of
+// calls and /swap returns a fully built transaction carrying its own blockhash, so this path never
+// calls getLatestBlockhash. A JUPITER_API_KEY switches to api.jup.ag; Jupiter's own key tier is free
+// and doubles that to 1 req/s, so a key is worth having even without paying.
+export const JUPITER_API_KEY = process.env.JUPITER_API_KEY?.trim() || "";
+export const JUPITER_API_URL =
+  process.env.JUPITER_API_URL?.trim().replace(/\/$/, "") ||
+  (JUPITER_API_KEY ? "https://api.jup.ag" : "https://lite-api.jup.ag");
+
+// ⚠️ On Solana this mint is wSOL; the IDENTICAL string is native COOK on Cookie Chain (COOK_MINT).
+// Anything resolving token metadata must branch on the chain, never on the mint alone.
+export const SOL_MINT = "So11111111111111111111111111111111111111112";
+export const SOL_DECIMALS = 9;
+export const SOL_SYMBOL = "SOL";
 export const SOLANA_EXPLORER_URL =
   process.env.SOLANA_EXPLORER_URL?.trim().replace(/\/$/, "") || "https://solscan.io";
 

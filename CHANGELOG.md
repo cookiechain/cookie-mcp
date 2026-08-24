@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     curve, and anything unclaimed (graduated tokens, a Fair-mode refund, a settlement payout, creator
     fees, creator vesting). Read from the chain, so it works for any `owner`.
   - `launchpad_buy` / `launchpad_sell` — trade a bonding curve with COOK; wrapping and account creation
-    are handled. ⚠️ Pre-graduation holdings are program-tracked **curve shares**, not SPL tokens: they
+    are handled. Pre-graduation holdings are program-tracked **curve shares**, not SPL tokens: they
     do not appear in `get_balance` and `trade` cannot route them.
   - `claim_launchpad` — settle a position: the SPL token after graduation, a Fair-mode pro-rata refund,
     a Jackpot/Survivor Merkle payout (proof fetched for you), or a creator's vested allocation.
@@ -77,10 +77,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **`bridge` now preflights the destination chain's collateral.** The warp route releases from a fixed
   collateral account on the far side, so bridging more than it holds locked your funds on the source
   chain behind a message that could not be delivered — and because the tool simulates against the
-  *source* chain, nothing caught it. `bridge` now reads the far side first and refuses without signing,
+  _source_ chain, nothing caught it. `bridge` now reads the far side first and refuses without signing,
   and reports the figure as `destinationCollateral`. The two sides need different reads: the Cookie PDA
   is a native balance (minus its rent-exempt reserve, which cannot be released), while the Solana escrow
-  *is* the token account rather than a wallet owning one.
+  _is_ the token account rather than a wallet owning one.
 - **`get_wallet`** — the public key this server signs with, whether it is read-only, and the RPC it is
   pointed at. Takes no arguments and makes no RPC call, so it answers when the chain is unreachable and
   it reports what the _running process_ booted with — not what a config file on disk now says, which can
@@ -90,6 +90,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   COOK on Solana mainnet — the balance a `solana-to-cookie` bridge actually spends — plus its SOL, which
   pays that transfer's fee, ATA rent and Hyperlane interchain gas. Neither was visible before: the
   default view only reads Cookie Chain. COOK + SOL only; other Solana tokens are not enumerated.
+- **Buy and sell COOK on Solana mainnet via [Jupiter](https://jup.ag).** `get_quote` and `trade` take
+  `chain: "solana"`, routing Solana liquidity instead of Cookie Chain — how you price or trade the
+  bridged SPL COOK (`36ZrtQoab5MhhySaP1YSTwUahSk6GRVUTtZ6cuVfm9e1`) once it is on the far side of the
+  Hyperlane bridge. Non-custodial and unchanged in shape: Jupiter quotes and builds, we simulate on your
+  Solana RPC, sign locally, send, confirm. Fees are paid in SOL, and the same `COOKIE_PRIVATE_KEY` signs
+  on both chains.
+  - Quotes need **no RPC and no wallet**. `trade {chain:"solana"}` **refuses the public Solana
+    endpoint**: it rate-limits `sendTransaction` hardest, and a send that lands late against a slippage
+    cap fails rather than merely arriving slowly — set `SOLANA_RPC_URL` to a dedicated RPC (a free
+    Helius/Triton/QuickNode key is enough). `bridge` is unaffected.
+  - **`So1111…112` is COOK on Cookie Chain but wSOL on Solana** — the same mint string, a different
+    asset. Metadata is resolved per chain, never from the Cookiescan registry on the Solana path, and an
+    unindexed mint is refused rather than assumed to be 9-decimal.
+  - The `aggregator` parameter stays Cookie Chain only and is **rejected**, not ignored, when
+    `chain: "solana"`. Results carry `chain` alongside `aggregator` (`"jupiter"` there), plus the
+    priority fee Jupiter budgeted.
+  - `JUPITER_API_KEY` is optional — without it the keyless `lite-api.jup.ag` is used (0.5 req/s). A
+    Jupiter API key is free and doubles that to 1 req/s, on `api.jup.ag`.
 
 ### Changed
 

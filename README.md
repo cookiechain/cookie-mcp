@@ -37,7 +37,8 @@ design. It is a community project for the whole Cookie Chain ecosystem.
 - **Swap** any Cookie Chain token pair through either aggregator — the
   [Cookiebox Swap API](https://agg.cookiebox.app) or [Candy Shop](https://swap.cookiescan.io) —
   both routing across all Cookie Chain DEX liquidity. Agents pick per call with the `aggregator`
-  parameter and can quote both to compare.
+  parameter and can quote both to compare. `chain: "solana"` buys/sells the bridged COOK on **Solana
+  mainnet** via [Jupiter](https://jup.ag) instead.
 - **Transfer** COOK or any SPL / Token-2022 token.
 - **Launch tokens** on the [MomoSwap launchpad](https://momoswap.fun) — create a token on a COOK
   bonding curve, buy / sell the curve, claim after graduation, and sweep your creator fees.
@@ -166,8 +167,9 @@ it never turns a name straight into a trade.
 | `COOKIE_RPC_URL`      | `https://rpc.cookiescan.io`           | Cookie Chain RPC.                                      |
 | `COOKIE_PRIVATE_KEY`  | —                                     | Wallet key for money-moving tools. Read-only if unset. |
 | `COOKIE_SLIPPAGE_BPS` | `500`                                 | Default slippage (bps).                                |
-| `SOLANA_RPC_URL`      | `https://api.mainnet-beta.solana.com` | Solana mainnet RPC (bridge + `get_balance` Solana side).|
 | `COOKIE_REFERRER`     | `mcp treasury`                        | Referral wallet (MomoSwap only).                       |
+| `SOLANA_RPC_URL`      | `https://api.mainnet-beta.solana.com` | Solana RPC.                                            |
+| `JUPITER_API_KEY`     | —                                     | Optional; else keyless Jupiter at 0.5 req/s.           |
 
 ## Tools
 
@@ -229,6 +231,24 @@ reports that collateral as `destinationCollateral`.
 `get_balance` with `chain: "solana"` shows the Solana side before you bridge — the wallet's SPL
 COOK (what `solana-to-cookie` spends) and its SOL, which pays that transfer's fee and interchain gas;
 that view is COOK + SOL only and does not enumerate other Solana tokens.
+**Swap on Solana** (`get_quote` / `trade` with `chain: "solana"`): routes **Solana mainnet** liquidity
+through [Jupiter](https://jup.ag) instead of Cookie Chain — how you buy or sell the bridged SPL COOK
+(`36ZrtQoab5MhhySaP1YSTwUahSk6GRVUTtZ6cuVfm9e1`) once it is on the far side. Same non-custodial shape as
+every other swap: Jupiter quotes and builds, we simulate on your Solana RPC, sign locally, send, confirm.
+Fees are paid in **SOL**, and the **same `COOKIE_PRIVATE_KEY` signs on both chains** — run `get_wallet`
+first. Two things to know:
+
+- **Scoped to COOK on purpose.** One leg must be the SPL COOK mint, so `SOL → COOK` and
+  `COOK → USDC` work while an unrelated pair like `SOL → USDC` is refused. Jupiter would route it;
+  this server is for Cookie Chain, and every extra pair is surface that can move funds.
+- **`So1111…112` is COOK on Cookie Chain but wSOL on Solana** — the identical mint string, a different
+  asset. Token metadata is resolved per chain, and the `aggregator` parameter (Cookie Chain only) is
+  rejected rather than ignored when `chain: "solana"`.
+- **`trade` refuses the public Solana endpoint.** Quotes need no RPC at all, but a swap does, and
+  `api.mainnet-beta.solana.com` rate-limits `sendTransaction` hardest — a send that lands late against
+  your slippage cap _fails_. Point `SOLANA_RPC_URL` at a dedicated RPC (a free Helius/Triton/QuickNode
+  key is enough).
+
 The mainnet warp-route program ids ship as defaults, so `bridge` works
 out of the box — override `COOKIE_WARP_PROGRAM_ID` / `SOLANA_WARP_PROGRAM_ID` only for a different
 deployment.

@@ -139,9 +139,10 @@ export interface SolanaBridgeBalances {
 
 /** Sum every account holding the mint — a wallet can hold it outside the canonical ATA, and the
  *  spendable balance is the total. Falls back to the configured decimals when it holds none. */
-export function sumTokenAmounts(
-  amounts: (ParsedTokenAmount["tokenAmount"] | undefined)[],
-): { raw: bigint; decimals: number } {
+export function sumTokenAmounts(amounts: (ParsedTokenAmount["tokenAmount"] | undefined)[]): {
+  raw: bigint;
+  decimals: number;
+} {
   let raw = 0n;
   let decimals: number = BRIDGE.solana.decimals;
   for (const ta of amounts) {

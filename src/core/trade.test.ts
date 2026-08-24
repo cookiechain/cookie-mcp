@@ -29,3 +29,16 @@ describe("simErrorMessage", () => {
     expect(e.message).toMatch(/simulation failed/i);
   });
 });
+
+describe("simErrorMessage — chain-specific hints", () => {
+  it("points a Solana blockhash failure at the RPC, not at Cookie Chain finalization", () => {
+    const e = simErrorMessage("BlockhashNotFound", null, "solana");
+    expect(e.hint).toMatch(/Solana RPC/);
+    expect(e.hint).not.toMatch(/chain_health/);
+  });
+
+  it("names SOL as the fee token on Solana and COOK on Cookie Chain", () => {
+    expect(simErrorMessage("insufficient funds", null, "solana").hint).toMatch(/SOL for fees/);
+    expect(simErrorMessage("insufficient funds", null).hint).toMatch(/COOK for fees/);
+  });
+});

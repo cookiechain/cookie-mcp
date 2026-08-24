@@ -175,7 +175,10 @@ registerTool(
       "(Cookiebox Swap API) or `cookiescan` (Candy Shop / Cookiescan Swap API). Quote both to " +
       "compare and pick the better output. Returns expected output, output after any aggregator " +
       "fee, minimum out after slippage, price impact, and the route. Quote-only — no wallet needed. " +
-      "`amount` is a UI amount of the input token.",
+      "`amount` is a UI amount of the input token. Pass `chain: 'solana'` to price the bridged SPL " +
+      "COOK (mint 36ZrtQoab5MhhySaP1YSTwUahSk6GRVUTtZ6cuVfm9e1) against SOLANA MAINNET liquidity via " +
+      "Jupiter. Scoped to COOK: one of inputMint/outputMint MUST be that mint — unrelated Solana " +
+      "pairs are refused. Needs no RPC and no wallet. On that chain So1111..112 is wSOL, NOT COOK.",
     inputSchema: {
       inputMint: z
         .string()
@@ -197,7 +200,13 @@ registerTool(
         .enum(["cookiebox", "cookiescan"])
         .optional()
         .describe(
-          "which swap aggregator to quote: cookiebox (default, no fee) or cookiescan (Candy Shop, ~20 bps fee)",
+          'which swap aggregator to quote: cookiebox (default, no fee) or cookiescan (Candy Shop, ~20 bps fee). Cookie Chain only — ignored/rejected when chain is "solana", which always uses Jupiter',
+        ),
+      chain: z
+        .enum(["cookie", "solana"])
+        .optional()
+        .describe(
+          'which chain to quote on; defaults to cookie (Cookie Chain). "solana" quotes Solana mainnet via Jupiter and requires a COOK leg — note So1111..112 means COOK on Cookie Chain but wSOL on Solana',
         ),
     },
   },
@@ -208,6 +217,7 @@ registerTool(
       amount: string | number;
       slippageBps?: number;
       aggregator?: "cookiebox" | "cookiescan";
+      chain?: "cookie" | "solana";
     }) => getQuote(a),
   ),
 );
@@ -283,7 +293,11 @@ registerTool(
       "Shop): the aggregator quotes and builds the tx; we simulate, sign locally with the configured " +
       "wallet, submit, and confirm. Non-custodial. Requires COOKIE_PRIVATE_KEY. Use get_quote first " +
       "to compare aggregators. `amount` is a UI amount of the input token. Returns the tx signature " +
-      "+ explorer link.",
+      "+ explorer link. Pass `chain: 'solana'` to buy or sell the bridged SPL COOK on SOLANA MAINNET " +
+      "via Jupiter, paying fees in SOL. Scoped to COOK: one of inputMint/outputMint MUST be " +
+      "36ZrtQoab5MhhySaP1YSTwUahSk6GRVUTtZ6cuVfm9e1 — unrelated Solana pairs are refused. The SAME " +
+      "COOKIE_PRIVATE_KEY signs on both chains, and that path requires SOLANA_RPC_URL to point at a " +
+      "dedicated RPC (the public endpoint is refused). On Solana So1111..112 is wSOL, NOT COOK.",
     inputSchema: {
       inputMint: z
         .string()
@@ -305,7 +319,13 @@ registerTool(
         .enum(["cookiebox", "cookiescan"])
         .optional()
         .describe(
-          "which swap aggregator to execute through: cookiebox (default, no fee) or cookiescan (Candy Shop, ~20 bps fee)",
+          'which swap aggregator to execute through: cookiebox (default, no fee) or cookiescan (Candy Shop, ~20 bps fee). Cookie Chain only — rejected when chain is "solana", which always uses Jupiter',
+        ),
+      chain: z
+        .enum(["cookie", "solana"])
+        .optional()
+        .describe(
+          'which chain to swap on; defaults to cookie (Cookie Chain). "solana" buys/sells COOK on Solana mainnet via Jupiter (a COOK leg is required) and REQUIRES SOLANA_RPC_URL to be set to a dedicated RPC',
         ),
     },
   },
@@ -316,6 +336,7 @@ registerTool(
       amount: string | number;
       slippageBps?: number;
       aggregator?: "cookiebox" | "cookiescan";
+      chain?: "cookie" | "solana";
     }) => trade(a),
   ),
 );
