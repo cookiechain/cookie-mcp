@@ -227,7 +227,15 @@ first, and **preflights the destination's collateral**: the route releases from 
 account on the far side (Cookie's native-collateral PDA / the Solana escrow), and a transfer larger than
 it holds would lock your funds on the source chain behind an undeliverable message — source-chain
 simulation cannot see that, so `bridge` reads the far side and refuses before signing. The result
-reports that collateral as `destinationCollateral`.
+reports that collateral as `destinationCollateral`. On `cookie-to-solana` it also makes sure the
+recipient can actually receive: the delivery credits an SPL associated token account, and if the
+recipient has none, `bridge` **creates it from your wallet first** (one extra Solana tx, ~0.0021 SOL of
+account rent, which the recipient can reclaim by closing the account) and confirms it before dispatching
+— so a failure there costs nothing. The warp route can create that account itself, but pays from a PDA
+funded once at deploy time; when it runs dry the relayer's delivery fails _in simulation_, never reaches
+the chain, and the transfer hangs with no error anywhere (this happened on 2026-08-26). Pass
+`createRecipientAccount: false` to rely on that PDA instead — then `bridge` refuses when it is provably
+dry. The result reports the account as `recipientTokenAccount`.
 `get_balance` with `chain: "solana"` shows the Solana side before you bridge — the wallet's SPL
 COOK (what `solana-to-cookie` spends) and its SOL, which pays that transfer's fee and interchain gas;
 that view is COOK + SOL only and does not enumerate other Solana tokens.

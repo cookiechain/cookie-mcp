@@ -7,6 +7,8 @@ import {
   messageIdFromLogs,
   deriveNativeCollateralPda,
   deriveEscrowPda,
+  deriveAtaPayerPda,
+  ataPayerShortfall,
   scaleRaw,
 } from "./bridge";
 
@@ -91,6 +93,82 @@ describe("PDA derivation (seed-string guards)", () => {
     expect(deriveEscrowPda(solanaMainnetWarp).toBase58()).toBe(
       "88q7zoKctwAQRsoTxkMJy95sNE3tntuyEhSrhvR1eZwq",
     );
+  });
+
+  // Ground truth: this is the account that paid the rent on every observed cookie→solana delivery to a
+  // first-time recipient, and the one that ran dry on 2026-08-26 and stalled a transfer.
+  it("derives the live mainnet ATA payer PDA", () => {
+    const solanaMainnetWarp = new PublicKey("B1C91jLcqXYYz57bBWR8dSEjBrJDhWSeNokZ5SDEopu3");
+    expect(deriveAtaPayerPda(solanaMainnetWarp).toBase58()).toBe(
+      "2ZgyEecnwkuPt435WRp5H9LXyiQMPXjr7v2Vd36o4BWp",
+    );
+  });
+});
+
+// The numbers below are the real 2026-08-26 incident: a Token-2022 ATA costs 2_074_080 lamports of
+// rent, the route's payer held 2_296_160, and a 0-data system account must keep 890_880 for its own
+// rent-exemption — so it looked funded and could not actually create anything. The same function sizes
+// up our own wallet before it creates the recipient's account, with the reserve being fee headroom.
+describe("ataPayerShortfall", () => {
+  const ATA_RENT = 2_074_080n;
+  const RESERVE = 890_880n;
+
+  it("reports the incident balance as short", () => {
+    expect(
+      ataPayerShortfall({
+        payerLamports: 2_296_160n,
+        payerRentReserve: RESERVE,
+        ataRent: ATA_RENT,
+      }),
+    ).toBe(668_800n);
+  });
+
+  it("counts only the spendable balance, not the payer's own rent reserve", () => {
+    // Exactly rent + reserve is affordable; one lamport less is not.
+    const exact = ATA_RENT + RESERVE;
+    expect(
+      ataPayerShortfall({ payerLamports: exact, payerRentReserve: RESERVE, ataRent: ATA_RENT }),
+    ).toBe(0n);
+    expect(
+      ataPayerShortfall({
+        payerLamports: exact - 1n,
+        payerRentReserve: RESERVE,
+        ataRent: ATA_RENT,
+      }),
+    ).toBe(1n);
+  });
+
+  it("does not credit a payer below its own reserve with negative spendable", () => {
+    // 100 lamports is less than the reserve: the shortfall is the full rent, not rent + 790_780.
+    expect(
+      ataPayerShortfall({ payerLamports: 100n, payerRentReserve: RESERVE, ataRent: ATA_RENT }),
+    ).toBe(ATA_RENT);
+  });
+
+  it("sizes up our own wallet with the fee buffer as the reserve", () => {
+    const FEE_BUFFER = 15_000n;
+    // Exactly rent + fee headroom is enough to create the recipient's account...
+    expect(
+      ataPayerShortfall({
+        payerLamports: ATA_RENT + FEE_BUFFER,
+        payerRentReserve: FEE_BUFFER,
+        ataRent: ATA_RENT,
+      }),
+    ).toBe(0n);
+    // ...and a wallet with no SOL on Solana is short the whole rent, not a negative amount.
+    expect(
+      ataPayerShortfall({ payerLamports: 0n, payerRentReserve: FEE_BUFFER, ataRent: ATA_RENT }),
+    ).toBe(ATA_RENT);
+  });
+
+  it("is 0 for a well-funded payer", () => {
+    expect(
+      ataPayerShortfall({
+        payerLamports: 500_000_000n,
+        payerRentReserve: RESERVE,
+        ataRent: ATA_RENT,
+      }),
+    ).toBe(0n);
   });
 });
 

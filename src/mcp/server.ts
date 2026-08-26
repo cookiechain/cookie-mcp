@@ -1056,7 +1056,12 @@ registerTool(
       "account) or 'solana-to-cookie' (locks SPL COOK on Solana, credits native COOK on Cookie). " +
       "`to` is the recipient on the DESTINATION chain (base58; both chains share your keypair, so it " +
       "defaults to your own wallet). `amount` is a UI amount of COOK. Signs and sends one transaction " +
-      "on the source chain; a relayer delivers on the far side in a few minutes. Simulates first. " +
+      "on the source chain; a relayer delivers on the far side in a few minutes. Simulates first, and " +
+      "preflights the far side before signing: the destination's collateral must cover the release. On " +
+      "cookie-to-solana, if the recipient has no SPL COOK account yet, `bridge` creates it from this " +
+      "wallet first (one extra Solana tx, ~0.0021 SOL of account rent) — the warp route can do this " +
+      "itself but pays from a PDA that runs dry, and when it is dry the delivery fails inside the " +
+      "relayer and the transfer hangs with no error anywhere. " +
       "Requires COOKIE_PRIVATE_KEY plus COOKIE_WARP_PROGRAM_ID / " +
       "SOLANA_WARP_PROGRAM_ID. Returns the source tx signature and the Hyperlane message id (use " +
       "bridge_status to confirm delivery); pass waitForDelivery to poll up to ~3 min inline. A wait " +
@@ -1076,6 +1081,14 @@ registerTool(
         .boolean()
         .optional()
         .describe("poll the destination chain for delivery (up to ~3 min) before returning"),
+      createRecipientAccount: z
+        .boolean()
+        .optional()
+        .describe(
+          "cookie-to-solana: create the recipient's SPL COOK account from this wallet if they have " +
+            "none (default true). False relies on the warp route's own ATA payer instead, and is " +
+            "refused when that payer cannot cover the rent",
+        ),
     },
   },
   tool(
@@ -1084,6 +1097,7 @@ registerTool(
       to?: string;
       amount: string | number;
       waitForDelivery?: boolean;
+      createRecipientAccount?: boolean;
     }) => bridge(a),
   ),
 );
