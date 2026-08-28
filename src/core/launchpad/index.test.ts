@@ -17,7 +17,6 @@ import {
   sendFailure,
 } from "./index";
 import { CookieMcpError } from "../errors";
-import { LAUNCHPAD_PROGRAM_PRE_SLIPPAGE } from "./program";
 import type { LaunchpadPool } from "./api";
 
 // Shape mirrors GET /v1/launchpad/pools for the live pool 3YyYM3J8… (SAKURA, expired/fair).
@@ -522,7 +521,7 @@ describe("launchpadSimError", () => {
     // 6021 is InsufficientShares on EVERY build — the codes never renumbered (see program.test.ts).
     // An earlier version of this test asserted 6022 here, matching a phantom +1 shift MCP had taken
     // from the launchpad's (wrong) IDL; the program id must make no difference.
-    for (const id of [null, LAUNCHPAD_PROGRAM_PRE_SLIPPAGE]) {
+    for (const id of [null, "EZWe5C5gV1heTEsaoqh2gVVZQAhrgACSpufPyT9SKruF"]) {
       expect(
         launchpadSimError("sell", { InstructionError: [1, { Custom: 6021 }] }, null, id).message,
       ).toContain("more shares than you hold");

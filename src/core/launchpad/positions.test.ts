@@ -12,14 +12,18 @@ import {
   userPositionPda,
   USER_POSITION_DISCRIMINATOR,
 } from "./positions";
-import { LAUNCHPAD_PROGRAM_CURRENT, LAUNCHPAD_PROGRAM_PRE_SLIPPAGE } from "./program";
+import { LAUNCHPAD_PROGRAM_CURRENT } from "./program";
 
 // Golden: the real on-chain UserPosition `7c4j8hud…` — wallet 9rj5GEEy… on pool 4pZSDRbe… (the MOMO
 // test launch). Its decoded values match what GET /pools/:pool/position/:owner reports for the same
 // wallet, so this fixture pins BOTH the PDA seeds and the field offsets against silent drift.
-// The pool predates the redeploy, so its PDAs only reproduce under the OLD program — pass it
-// explicitly rather than leaning on the configured default, which now points at `momoL7wu…`.
-const GOLDEN_PROGRAM = new PublicKey(LAUNCHPAD_PROGRAM_PRE_SLIPPAGE);
+// The pool predates the redeploy, so its PDAs only reproduce under the program that owned it — pass it
+// explicitly rather than leaning on the configured default, which now points at `momoL7wu…`. That id is
+// a **fixture detail, not a supported deployment**: MCP no longer targets it anywhere, and it lives here
+// only because this golden account is real on-chain evidence and cannot be re-derived under another
+// program. Any *other* program id would do for the "not the default" half of these tests; only the
+// GOLDEN_PDA assertions need this exact one.
+const GOLDEN_PROGRAM = new PublicKey("7tLQV8D6uUyG9r1nEtQuBMqDb5Nfi9TXxsdVZUtsct2M");
 const GOLDEN_POOL = "4pZSDRbeimD86umZM9RGLT3mzcSQxbnohicMQcccn8gy";
 const GOLDEN_OWNER = "9rj5GEEypdCbJ1W9is4LHeQxg86h9vxSny6pmsxmakni";
 const GOLDEN_PDA = "7c4j8hudvNyuhTef4AoCmK4LECnqBfe1SgnBgWsEcobB";

@@ -5,7 +5,6 @@ import {
   launchpadErrorMessage,
   launchpadProgramIdFromTx,
   LAUNCHPAD_PROGRAM_CURRENT,
-  LAUNCHPAD_PROGRAM_PRE_SLIPPAGE,
 } from "./program";
 
 const CU_PROGRAM = "ComputeBudget111111111111111111111111111111";
@@ -29,7 +28,7 @@ describe("launchpadErrorMessage", () => {
   // every code >= 6019 — e.g. calling "no sale tokens left" a slippage failure. Anchor codes are the
   // compiled enum discriminants, so source wins. These tests pin the SOURCE numbering.
   const DEPLOYMENTS = [
-      LAUNCHPAD_PROGRAM_CURRENT,
+    LAUNCHPAD_PROGRAM_CURRENT,
     "EZWe5C5gV1heTEsaoqh2gVVZQAhrgACSpufPyT9SKruF", // the fee-free clone
     null, // no id available → must not change the answer
   ];
@@ -96,6 +95,10 @@ describe("launchpadErrorMessage", () => {
   });
 });
 
+// Any launchpad build that is not the configured one — the fee-free clone stands in for "some other
+// deployment", since resolution is by construction id-agnostic.
+const OTHER_DEPLOYMENT = "EZWe5C5gV1heTEsaoqh2gVVZQAhrgACSpufPyT9SKruF";
+
 describe("launchpadProgramIdFromTx", () => {
   it("picks the launchpad out of an API-built transaction full of ambient programs", () => {
     const tx = new Transaction().add(
@@ -111,17 +114,15 @@ describe("launchpadProgramIdFromTx", () => {
     expect(launchpadProgramIdFromTx(tx)).toBe(LAUNCHPAD_PROGRAM_CURRENT);
   });
 
-  it("works for the old deployment too", () => {
-    const tx = new Transaction().add(ix(CU_PROGRAM), ix(LAUNCHPAD_PROGRAM_PRE_SLIPPAGE));
-    expect(launchpadProgramIdFromTx(tx)).toBe(LAUNCHPAD_PROGRAM_PRE_SLIPPAGE);
+  it("works for a deployment it has never heard of", () => {
+    // The point of reading the id off the transaction is that it needs no list of known builds.
+    const tx = new Transaction().add(ix(CU_PROGRAM), ix(OTHER_DEPLOYMENT));
+    expect(launchpadProgramIdFromTx(tx)).toBe(OTHER_DEPLOYMENT);
   });
 
   it("returns null when it cannot tell, instead of guessing wrong", () => {
     // Two unknown programs: no basis to pick one, so the caller falls back to the configured id.
-    const ambiguous = new Transaction().add(
-      ix(LAUNCHPAD_PROGRAM_CURRENT),
-      ix(LAUNCHPAD_PROGRAM_PRE_SLIPPAGE),
-    );
+    const ambiguous = new Transaction().add(ix(LAUNCHPAD_PROGRAM_CURRENT), ix(OTHER_DEPLOYMENT));
     expect(launchpadProgramIdFromTx(ambiguous)).toBeNull();
     expect(launchpadProgramIdFromTx(new Transaction().add(ix(CU_PROGRAM)))).toBeNull();
     expect(launchpadProgramIdFromTx(new Transaction())).toBeNull();

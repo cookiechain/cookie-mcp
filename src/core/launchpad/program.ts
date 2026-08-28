@@ -1,8 +1,8 @@
 // Which `cookie_launchpad` deployment we are talking to is a RUNTIME fact, not a constant.
 //
-// The launchpad has already been redeployed under a new program id once (`7tLQV8D6…` → `momoL7wu…`,
-// 2026-07-25) and the old pools stay behind on the old id forever, so both things we derive locally are
-// program-scoped: the **PDA seeds** (`UserPosition`, `creator_fee_vault`) and the **anchor error codes**.
+// The launchpad has been redeployed under a new program id before, and a redeploy leaves the old pools
+// behind on the old id forever, so both things we derive locally are program-scoped: the **PDA seeds**
+// (`UserPosition`, `creator_fee_vault`) and the **anchor error codes**.
 //
 // A hardcoded program id fails in the worst possible way — the PDAs simply do not exist, so
 // `get_launchpad_positions` returns an empty portfolio with no error at all. So we read the id off the
@@ -11,13 +11,6 @@
 import { PublicKey, type Transaction } from "@solana/web3.js";
 
 import { PROGRAM_IDS } from "../config";
-
-/**
- * The pre-audit deployment. Kept by name because its anchor error enum predates `SlippageExceeded`,
- * which shifts every code from 6019 up (see `launchpadErrorMessage`). Any *other* deployment is a
- * post-audit build — the program only moves forward, so unknown ids are treated as current.
- */
-export const LAUNCHPAD_PROGRAM_PRE_SLIPPAGE = "7tLQV8D6uUyG9r1nEtQuBMqDb5Nfi9TXxsdVZUtsct2M";
 
 /** The current canonical deployment (`declare_id!` in the launchpad repo). Documentation only. */
 export const LAUNCHPAD_PROGRAM_CURRENT = "momoL7wu4TrXjnXMLCLzGsbx8Pm7XGgoYo7FVqDoqcw";

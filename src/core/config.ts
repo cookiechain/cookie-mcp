@@ -81,8 +81,8 @@ export const PROGRAM_IDS = {
   cookieswapBamm: "WTzkPUoprVx7PDc1tfKA5sS7k1ynCgU89WtwZhksHX5",
   cookieswapXybn: "xYBN2zddsqSy41tg1yD9nJScCmqquZnHUyzXBfLEqC8",
   // The launchpad deployment to assume when nothing on-chain is available to read the id from. It has
-  // changed once already (`7tLQV8D6…` → `momoL7wu…`) and the old pools stay on the old id, so this is
-  // only a fallback: PDAs and error codes are resolved per pool / per transaction at runtime.
+  // changed once already, and a redeploy leaves the old pools behind on the old id, so this is only a
+  // fallback: PDAs and error codes are resolved per pool / per transaction at runtime.
   // `api.momoswap.fun` completed the cutover on 2026-07-29 (verified: a create-pool tx it builds now
   // invokes `momoL7wu…`), so the fallback points at the current deployment. Override via env to talk to
   // a different one without waiting for a release.
