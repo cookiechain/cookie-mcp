@@ -294,11 +294,38 @@ export async function uploadImage(imageBase64: string, contentType: string): Pro
   return res.url;
 }
 
+/**
+ * Mint a single-use login nonce. Public — a nonce is worthless without the wallet's signature.
+ * Short-lived (the API returns its TTL), so fetch one per login rather than holding it.
+ */
+export async function fetchLoginNonce(): Promise<{ nonce: string; ttlSecs?: number }> {
+  return get<{ nonce: string; ttlSecs?: number }>("/session/nonce", "launchpad login nonce");
+}
+
+/** Trade a signed login message for a session token. `expiresAt` is epoch milliseconds. */
+export async function createSession(body: {
+  wallet: string;
+  ts: number;
+  nonce: string;
+  signature: string;
+}): Promise<{ token: string; wallet: string; expiresAt: number }> {
+  return post<{ token: string; wallet: string; expiresAt: number }>(
+    "/session",
+    body,
+    "launchpad session",
+  );
+}
+
+/**
+ * Build a launch. **Session-gated**: the API 401s without `session`, and rejects a `creator` that is
+ * not the session's own wallet — see `./session`.
+ */
 export async function buildCreatePoolTx(body: {
   creator: string;
   params: CreatePoolParams;
   metadata: LaunchpadMetadata;
   devBuyCook?: string;
+  session: string;
 }): Promise<BuiltTx> {
   return post<BuiltTx>("/tx/create-pool", body, "launch build", UPLOAD_TIMEOUT_MS);
 }

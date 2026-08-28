@@ -59,6 +59,7 @@ import {
   fetchPositionsForPools,
 } from "./positions";
 import { launchpadErrorMessage, launchpadProgramIdFromTx } from "./program";
+import { launchpadSessionToken, resetLaunchpadSession } from "./session";
 
 const MIN_DURATION_SECS = 60;
 const MAX_DURATION_SECS = 604_800; // 7 days, enforced on-chain
@@ -983,6 +984,45 @@ export function buildMetadata(args: DeployTokenArgs, imageUrl?: string): Launchp
   };
 }
 
+/**
+ * The API rejected our session token. It is a bare `"session"` because that is the API's whole error
+ * body for a 401 on the launch build — matched exactly rather than by substring so an unrelated
+ * message that merely contains the word can't trigger a silent re-login.
+ */
+function isSessionRejected(e: unknown): boolean {
+  return e instanceof CookieMcpError && e.message === "session";
+}
+
+/**
+ * Run a session-gated build, minting a login token if we don't hold a live one.
+ *
+ * Retries **once** on a rejected token, because the cached token can expire or be revoked server-side
+ * between two launches in the same process and the client cannot tell from the outside. The retry is
+ * safe specifically because this wraps a *build*: no transaction has been signed or sent, so the worst
+ * case is a second signed login message. Never widen it past a build.
+ */
+async function withLaunchSession<T>(
+  keypair: Keypair,
+  build: (session: string) => Promise<T>,
+): Promise<T> {
+  try {
+    return await build(await launchpadSessionToken(keypair));
+  } catch (e) {
+    if (!isSessionRejected(e)) throw e;
+    resetLaunchpadSession();
+    try {
+      return await build(await launchpadSessionToken(keypair));
+    } catch (retry) {
+      if (!isSessionRejected(retry)) throw retry;
+      throw new CookieMcpError(
+        "the launchpad rejected this wallet's login session, so the launch could not be built",
+        "the launch API requires a wallet-signed session; nothing was spent and no transaction was " +
+          "sent. Retry — if it keeps failing, the launchpad's login service is down.",
+      );
+    }
+  }
+}
+
 /** Validate + assemble on-chain `PoolParams` (pure). `launchTs` 0 lets the API stamp "now". */
 export function buildCreateParams(args: DeployTokenArgs, launchTs = 0): CreatePoolParams {
   const name = args.name?.trim() ?? "";
@@ -1096,12 +1136,15 @@ export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenRes
   }
   const metadata = buildMetadata(args, imageUrl);
 
-  const built = await buildCreatePoolTx({
-    creator,
-    params,
-    metadata,
-    ...(devBuyRaw > 0n ? { devBuyCook: devBuyRaw.toString() } : {}),
-  });
+  const built = await withLaunchSession(keypair, (session) =>
+    buildCreatePoolTx({
+      creator,
+      params,
+      metadata,
+      ...(devBuyRaw > 0n ? { devBuyCook: devBuyRaw.toString() } : {}),
+      session,
+    }),
+  );
   const signature = await submitBuilt(built, keypair, "launch");
 
   const mint = built.mint ?? null;
