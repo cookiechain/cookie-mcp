@@ -85,14 +85,23 @@ const LAUNCHPAD_ERRORS: Record<number, string> = {
   6025: "there is nothing to claim",
   6026: "this has already been claimed",
   6035: "self-referral is not allowed",
-  // Reachable from a CLAIM, not a trade: `claim_fair` on an `ended` pool expires it first, and that
-  // transition refuses a migratable pool that met its graduation target until its 1-hour grace window
-  // runs out, so it still has a chance to graduate instead of a claimant forcing it into expiry.
-  6039: "this pool met its graduation target, so it has a one-hour grace period to graduate before it can be expired or claimed against",
+  // No longer emitted by anything: audit #1 replaced this grace-window guard with 6048
+  // `PoolMustGraduate`, and the variant survives only so the codes after it keep their numbers
+  // (`lib.rs`: *"Retained ONLY to keep error-code numbering stable; no longer reachable"*). Mapped
+  // anyway so that a build we did not anticipate reporting it still gets an explanation rather than a
+  // raw code — but the text must not promise a grace window that no longer exists.
+  6039: "this pool met its graduation target, so it could not be expired or claimed against yet — this is a retired error that current launchpad builds no longer emit; see 6048, which replaced it",
   6040: "the anti-snipe window caps how much one wallet can buy right after launch",
   // Appended by the min-out audit fix, so it only exists on post-audit builds. Harmless to keep in the
   // shared table: a pre-audit build can never emit 6046.
   6046: "the trade would return less than the minimum you asked for (slippage) — the curve moved",
+  // Audit #1's replacement for 6039, and the one a holder actually hits: reachable from a CLAIM, not a
+  // trade, because `claim_fair`/`claim_launchpad` lazily expire an `ended` pool first and that
+  // transition refuses a migratable pool that met its target — graduation wins over expiry, which must
+  // not be able to re-route the raise. The refusal is bounded so a dark migration authority can never
+  // freeze the raise forever: `Fair` pools re-open after one hour (a Fair expiry pays holders pro-rata,
+  // so little is at stake), every other expiry mode after 30 days.
+  6048: "this pool met its graduation target, so it has to graduate rather than expire — the permissionless claim/expiry path only re-opens if it doesn't (one hour after the launch ended for a fair-mode pool, 30 days for any other mode)",
 };
 
 /**

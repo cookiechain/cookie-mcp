@@ -29,8 +29,7 @@ describe("launchpadErrorMessage", () => {
   // every code >= 6019 — e.g. calling "no sale tokens left" a slippage failure. Anchor codes are the
   // compiled enum discriminants, so source wins. These tests pin the SOURCE numbering.
   const DEPLOYMENTS = [
-    LAUNCHPAD_PROGRAM_PRE_SLIPPAGE,
-    LAUNCHPAD_PROGRAM_CURRENT,
+      LAUNCHPAD_PROGRAM_CURRENT,
     "EZWe5C5gV1heTEsaoqh2gVVZQAhrgACSpufPyT9SKruF", // the fee-free clone
     null, // no id available → must not change the answer
   ];
@@ -52,13 +51,35 @@ describe("launchpadErrorMessage", () => {
   });
 
   // 6039 = GraduationGraceActive, counted off the `#[error_code]` enum in source (Paused = 6000, so the
-  // 40th variant is 6039) — the same method that pins 6011/6040/6046, and 6011 is confirmed against the
-  // deployed program, which reports it for expire_pool on a settled pool.
-  it("explains the graduation grace window at 6039, which only a claim can reach", () => {
-    expect(launchpadErrorMessage(6039)).toContain("grace period");
+  // 40th variant is 6039) — the same method that pins 6011/6040/6046/6048, and 6011 is confirmed against
+  // the deployed program, which reports it for expire_pool on a settled pool. Audit #1 made the variant
+  // unreachable (source: "Retained ONLY to keep error-code numbering stable") without renumbering
+  // anything, so it stays mapped — an unexplained code is worse than a retired one — but its text must
+  // point at 6048 instead of promising a grace window.
+  it("marks 6039 retired rather than promising a grace window that no longer exists", () => {
+    expect(launchpadErrorMessage(6039)).toContain("graduation target");
+    expect(launchpadErrorMessage(6039)).toContain("retired");
+    expect(launchpadErrorMessage(6039)).toContain("6048");
     // Its neighbours are deliberately unmapped; nothing may bleed into them.
     expect(launchpadErrorMessage(6038)).toBeUndefined();
     expect(launchpadErrorMessage(6037)).toBeUndefined();
+  });
+
+  // 6048 = PoolMustGraduate, the audit #1 guard that replaced 6039. Counted off the same enum, where it
+  // is the 49th variant — appended after SlippageExceeded (6046) and NoPendingAuthority (6047), per the
+  // source's "only ever append variants" rule, so nothing before it moved.
+  it("explains the graduation-priority refusal at 6048, which only a claim can reach", () => {
+    for (const id of DEPLOYMENTS) {
+      const msg = launchpadErrorMessage(6048, id);
+      expect(msg).toContain("graduate rather than expire");
+      // Both bounds matter to the holder: which one applies is the pool's expiry mode.
+      expect(msg).toContain("one hour");
+      expect(msg).toContain("30 days");
+    }
+    // 6047 (NoPendingAuthority) is an admin-only code and deliberately unmapped — 6048 must not bleed
+    // into it, the way the old IDL-shift bug bled every code into its neighbour.
+    expect(launchpadErrorMessage(6047)).toBeUndefined();
+    expect(launchpadErrorMessage(6049)).toBeUndefined();
   });
 
   it("explains slippage at 6046, where the audit fix actually appended it", () => {
