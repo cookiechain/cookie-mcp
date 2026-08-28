@@ -87,8 +87,8 @@ export interface LaunchpadPool {
   // --- economics SNAPSHOTTED onto the pool at create_pool -----------------------------------------
   // A pool keeps the fee schedule it launched with, so a later admin `update_config` cannot re-price
   // it. Resolve these through `./fees` (never read the `/config` value for a pool) — and note they are
-  // OPTIONAL: the deployed API predates the release that serializes them, so today they are absent and
-  // every resolution falls back to `/config`.
+  // OPTIONAL: the backend's pool serializer still does not emit them (re-checked 2026-08-28), so today
+  // they are absent and every resolution falls back to `/config`.
   tradeFeeBps?: number;
   treasuryFeeBps?: number;
   creatorFeeBps?: number;

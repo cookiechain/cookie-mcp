@@ -8,10 +8,13 @@
 //
 // So: ALWAYS resolve a pool's fee through here; never read `cfg.tradeFeeBps` directly for a pool.
 //
-// The snapshot fields are OPTIONAL on `LaunchpadPool` on purpose: the launchpad API only started
-// serving them in momoswap-frontend #2, which is merged to `main` but NOT yet deployed. Until it is,
-// every pool JSON arrives without them and every call here falls through to `/config` — i.e. exactly
-// the behaviour this module replaces. That makes the fix safe to ship ahead of their release.
+// The snapshot fields are OPTIONAL on `LaunchpadPool` on purpose, and as of 2026-08-28 they are STILL
+// never sent: the program's `Pool` account carries them (`trade_fee_bps` … `buyback_fee_bps`), but the
+// backend's pool serializer — `DecodedPool` in `momoswap-backend/src/services/launchpad/program.ts` —
+// simply does not copy them out, on `main` or in production. So every pool JSON arrives without them
+// and every call here falls through to `/config`, i.e. exactly the behaviour this module replaces.
+// That makes the module a no-op today and correct the moment the backend starts serving them — which
+// is the point: nothing here has to change when it does.
 import type { LaunchpadConfig, LaunchpadPool } from "./api";
 
 /** The launch default (1%), used only when neither the pool nor `/config` states a fee. */
