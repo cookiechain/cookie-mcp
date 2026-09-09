@@ -133,9 +133,49 @@ export async function fetchToken(mint: string): Promise<CookiescanToken | null> 
   return tokens.find((t) => t.mint === mint) ?? null;
 }
 
+function marketSide(raw: unknown): CookiescanMarketSide | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  const mint = asStr(o.mint) ?? asStr(o.address);
+  if (!mint) return undefined;
+  return {
+    mint,
+    symbol: asStr(o.symbol),
+    amount: asNum(o.amount),
+    priceUsd: asNum(o.priceUsd),
+  };
+}
+
+/**
+ * Same dual-host problem as tokens: `api.cookiescan.io/api/markets` is nested
+ * (`marketId` / `baseToken.mint` / `liquidityUsd`); explorer `cookiescan.io/api/markets`
+ * is a flat array (`address` / `tokenA.address` / `tvl`). `get_pools` reads `marketId`
+ * and `baseToken.mint`, so a flat row would yield empty pool ids.
+ *
+ * Do not treat explorer `tvlCook` as USD — that figure is native COOK.
+ */
+export function normalizeCookiescanMarket(raw: unknown): CookiescanMarket | null {
+  if (!raw || typeof raw !== "object") return null;
+  const t = raw as Record<string, unknown>;
+  const marketId = asStr(t.marketId) ?? asStr(t.address);
+  const baseToken = marketSide(t.baseToken) ?? marketSide(t.tokenA);
+  const quoteToken = marketSide(t.quoteToken) ?? marketSide(t.tokenB);
+  if (!marketId || !baseToken || !quoteToken) return null;
+  return {
+    marketId,
+    type: asStr(t.type) ?? asStr(t.programId) ?? "",
+    baseToken,
+    quoteToken,
+    liquidityUsd: asNum(t.liquidityUsd),
+    liquidityDisplay: asStr(t.liquidityDisplay) ?? asStr(t.tvl),
+  };
+}
+
 export async function fetchMarkets(): Promise<CookiescanMarket[]> {
   const json = await fetchJson<unknown>(`${COOKIESCAN_API_URL}/api/markets`);
-  return unwrap<CookiescanMarket>(json, ["data", "markets"]);
+  return unwrap<unknown>(json, ["data", "markets"])
+    .map(normalizeCookiescanMarket)
+    .filter((m): m is CookiescanMarket => m != null);
 }
 
 // COOK's USD price, from Cookiescan's dedicated endpoint. Needed to value COOK-denominated fields

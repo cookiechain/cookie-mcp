@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { normalizeCookiescanToken } from "./cookiescan";
+import { normalizeCookiescanMarket, normalizeCookiescanToken } from "./cookiescan";
 
 const OMNOM = "9V6z4wiifv2BrCxd7rwBWBAaWS2dxSepWZmWjRpfQ66p";
 
@@ -46,5 +46,47 @@ describe("normalizeCookiescanToken", () => {
     expect(normalizeCookiescanToken({ symbol: "OMNOM", decimals: 6 })).toBeNull();
     expect(normalizeCookiescanToken(null)).toBeNull();
     expect(normalizeCookiescanToken("nope")).toBeNull();
+  });
+});
+
+const BCOOK = "EkPafx58mgwkEnGwo62jXhXDAdJ37Z8G8MFBRPsr9uhz";
+const COOK = "So11111111111111111111111111111111111111112";
+
+describe("normalizeCookiescanMarket", () => {
+  it("keeps the nested api.cookiescan.io markets shape", () => {
+    const m = normalizeCookiescanMarket({
+      marketId: "DmzxJyiCpoW9FC2iimG2fDm24LW5C8YbFtVJGVKrePkc",
+      type: "COOKIESWAP CPAMM",
+      baseToken: { mint: BCOOK, symbol: "bCOOK", amount: 1, priceUsd: 0.00012 },
+      quoteToken: { mint: COOK, symbol: "wCOOK", amount: 2, priceUsd: 0.00009 },
+      liquidityUsd: 1511.35,
+      liquidityDisplay: "1 bCOOK / 2 wCOOK",
+    });
+    expect(m?.marketId).toBe("DmzxJyiCpoW9FC2iimG2fDm24LW5C8YbFtVJGVKrePkc");
+    expect(m?.type).toBe("COOKIESWAP CPAMM");
+    expect(m?.baseToken.mint).toBe(BCOOK);
+    expect(m?.liquidityUsd).toBeCloseTo(1511.35, 2);
+  });
+
+  it("lifts a flat cookiescan.io explorer pool so get_pools still has marketId/mints", () => {
+    const m = normalizeCookiescanMarket({
+      address: "DmzxJyiCpoW9FC2iimG2fDm24LW5C8YbFtVJGVKrePkc",
+      programId: "xYBN2zddsqSy41tg1yD9nJScCmqquZnHUyzXBfLEqC8",
+      tokenA: { address: BCOOK, symbol: "bCOOK" },
+      tokenB: { address: COOK, symbol: "wCOOK" },
+      tvl: "15,420,730.92 COOK",
+      tvlCook: 15420730.923,
+    });
+    expect(m?.marketId).toBe("DmzxJyiCpoW9FC2iimG2fDm24LW5C8YbFtVJGVKrePkc");
+    expect(m?.type).toBe("xYBN2zddsqSy41tg1yD9nJScCmqquZnHUyzXBfLEqC8");
+    expect(m?.baseToken.mint).toBe(BCOOK);
+    expect(m?.quoteToken.symbol).toBe("wCOOK");
+    expect(m?.liquidityUsd).toBeUndefined();
+    expect(m?.liquidityDisplay).toBe("15,420,730.92 COOK");
+  });
+
+  it("returns null when the pool id or either mint is missing", () => {
+    expect(normalizeCookiescanMarket({ type: "COOKIESWAP CPAMM" })).toBeNull();
+    expect(normalizeCookiescanMarket(null)).toBeNull();
   });
 });
