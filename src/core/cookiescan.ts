@@ -49,10 +49,83 @@ function unwrap<T>(json: unknown, keys: string[]): T[] {
   return [];
 }
 
+function asNum(v: unknown): number | undefined {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v.replace(/,/g, ""));
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
+}
+
+function asStr(v: unknown): string | undefined {
+  return typeof v === "string" && v.trim() !== "" ? v : undefined;
+}
+
+/**
+ * Cookiescan has two public `/api/tokens` shapes:
+ * - `api.cookiescan.io` (default): nested `metadata` / `price` / `marketData`
+ * - `cookiescan.io` (explorer REST): flat `symbol`, `decimals`, `logoUri`, string `price`
+ *
+ * `get_quote` reads `metadata.decimals` (else 9). A flat OMNOM row (6 decimals) would otherwise
+ * quote 1000× too large. Normalize both shapes onto the nested interface.
+ */
+export function normalizeCookiescanToken(raw: unknown): CookiescanToken | null {
+  if (!raw || typeof raw !== "object") return null;
+  const t = raw as Record<string, unknown>;
+  const mint = asStr(t.mint);
+  if (!mint) return null;
+
+  const nested =
+    t.metadata && typeof t.metadata === "object"
+      ? (t.metadata as NonNullable<CookiescanToken["metadata"]>)
+      : undefined;
+  const priceObj =
+    t.price && typeof t.price === "object" && !Array.isArray(t.price)
+      ? (t.price as { usd?: string | number; native?: number; change24h?: number })
+      : undefined;
+  const market =
+    t.marketData && typeof t.marketData === "object"
+      ? (t.marketData as NonNullable<CookiescanToken["marketData"]>)
+      : undefined;
+
+  const usdRaw = priceObj?.usd ?? (typeof t.price === "object" ? undefined : t.price);
+  const usd =
+    typeof usdRaw === "number" && Number.isFinite(usdRaw) ? String(usdRaw) : asStr(usdRaw);
+
+  return {
+    mint,
+    metadata: {
+      name: nested?.name ?? asStr(t.name),
+      symbol: nested?.symbol ?? asStr(t.symbol),
+      logo: nested?.logo ?? asStr(t.logo) ?? asStr(t.logoUri),
+      decimals: nested?.decimals ?? asNum(t.decimals),
+      description: nested?.description ?? asStr(t.description),
+      updateAuthority: nested?.updateAuthority,
+    },
+    price: {
+      usd,
+      native: priceObj?.native ?? asNum(t.priceNative),
+      change24h: priceObj?.change24h ?? asNum(t.change24h),
+    },
+    marketData: {
+      volume24h: market?.volume24h ?? asNum(t.volume24h),
+      volumeChange24h: market?.volumeChange24h,
+      liquidity: market?.liquidity ?? asNum(t.liquidity),
+      marketCap: market?.marketCap ?? asNum(t.marketCap),
+      supply: market?.supply ?? asNum(t.supply),
+      holderCount: market?.holderCount ?? asNum(t.holderCount),
+    },
+    lastUpdated: asStr(t.lastUpdated),
+  };
+}
+
 // Full registry (~6k tokens). Callers must filter/paginate — never return all of it to the model.
 export async function fetchTokens(): Promise<CookiescanToken[]> {
   const json = await fetchJson<unknown>(`${COOKIESCAN_API_URL}/api/tokens`);
-  return unwrap<CookiescanToken>(json, ["data", "tokens"]);
+  return unwrap<unknown>(json, ["data", "tokens"])
+    .map(normalizeCookiescanToken)
+    .filter((t): t is CookiescanToken => t != null);
 }
 
 export async function fetchToken(mint: string): Promise<CookiescanToken | null> {
