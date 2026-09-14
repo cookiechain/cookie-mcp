@@ -2,7 +2,9 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-# Unreleased
+# [0.5.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.5.0)
+
+_September 14, 2026_
 
 ### Added
 
