@@ -9,7 +9,6 @@
 // signing. Every op routes through the shared simulate-first sender.
 import {
   ComputeBudgetProgram,
-  Keypair,
   PublicKey,
   Transaction,
   type Connection,
@@ -39,9 +38,10 @@ import { CookieMcpError } from "../errors";
 
 import { uiToRaw } from "../format";
 import { signSendConfirm, LP_NOTE } from "./send";
+import { anchorWalletFor, type TxSigner } from "../signer";
 import whirlpoolIdl from "../../idl/whirlpool.json" with { type: "json" };
 
-const { AnchorProvider, Wallet } = anchorPkg;
+const { AnchorProvider } = anchorPkg;
 
 export const CLMM_PROGRAM_ID = new PublicKey("CLMMmWqTtyNSomqXP3kETJy2SGKPdr31USsm4GfbLyKs");
 
@@ -80,8 +80,11 @@ export interface ClmmLpResult {
 // --- client + tx plumbing -------------------------------------------------------------------------
 
 /** Build a WhirlpoolClient retargeted to Cookie's CLMM program (IDL address merge). */
-export function buildClmmClient(conn: Connection, keypair: Keypair): WhirlpoolClient {
-  const provider = new AnchorProvider(conn, new Wallet(keypair), { commitment: "confirmed" });
+export function buildClmmClient(conn: Connection, signer: TxSigner): WhirlpoolClient {
+  // The SDK only reads `wallet.publicKey` from the provider: every transaction it builds goes through
+  // our own simulate-first sender below, never through `provider.sendAndConfirm`.
+  const wallet = anchorWalletFor(signer, { what: "liquidity", submit: { via: "cookie-rpc" } });
+  const provider = new AnchorProvider(conn, wallet as never, { commitment: "confirmed" });
   const program = new anchorPkg.Program(
     { ...(whirlpoolIdl as Idl), address: CLMM_PROGRAM_ID.toBase58() },
     provider,
@@ -125,29 +128,29 @@ async function builderToTx(
   return { tx, signers: payload.signers as Signer[] };
 }
 
-/** Build → send a single builder; returns its signature. keypair signs as fee payer + extra signers. */
+/** Build → send a single builder; returns its signature. The wallet signs as fee payer + extra signers. */
 async function sendBuilder(
   conn: Connection,
-  keypair: Keypair,
+  signer: TxSigner,
   builder: TransactionBuilder,
   computeUnits: number,
   what = "liquidity",
 ): Promise<string> {
   const { tx, signers } = await builderToTx(builder, computeUnits);
-  return signSendConfirm(conn, tx, [keypair, ...signers], what);
+  return signSendConfirm(conn, tx, signer, signers, what);
 }
 
 /** Build → send a list of builders sequentially (skipping empty ones); returns the last signature. */
 async function sendBuilders(
   conn: Connection,
-  keypair: Keypair,
+  signer: TxSigner,
   builders: TransactionBuilder[],
   computeUnits: number,
 ): Promise<string> {
   let last = "";
   for (const b of builders) {
     if (b.isEmpty()) continue;
-    last = await sendBuilder(conn, keypair, b, computeUnits);
+    last = await sendBuilder(conn, signer, b, computeUnits);
   }
   if (!last) {
     throw new CookieMcpError("nothing to send", "the operation produced no instructions");
@@ -313,14 +316,14 @@ function result(signature: string, pool: string): ClmmLpResult {
  */
 export async function addClmmLiquidity(
   conn: Connection,
-  keypair: Keypair,
+  signer: TxSigner,
   args: { poolPk: string; amountA?: string | number; amountB?: string | number },
 ): Promise<ClmmLpResult> {
   if (args.amountA == null && args.amountB == null) {
     throw new CookieMcpError("provide amountA and/or amountB", "specify how much to deposit");
   }
-  const client = buildClmmClient(conn, keypair);
-  const owner = keypair.publicKey;
+  const client = buildClmmClient(conn, signer);
+  const owner = signer.publicKey;
   let pool: Whirlpool;
   try {
     pool = await client.getPool(new PublicKey(args.poolPk));
@@ -363,17 +366,17 @@ export async function addClmmLiquidity(
       owner,
     );
     if (tickInit && !tickInit.isEmpty()) {
-      await sendBuilder(conn, keypair, tickInit, OPEN_POSITION_CU);
+      await sendBuilder(conn, signer, tickInit, OPEN_POSITION_CU);
     }
     const tx = await position.increaseLiquidity(depositParams, true, owner, owner, owner);
-    const sig = await sendBuilder(conn, keypair, tx, OPEN_POSITION_CU);
+    const sig = await sendBuilder(conn, signer, tx, OPEN_POSITION_CU);
     return result(sig, pool.getAddress().toBase58());
   }
 
   const [tickLower, tickUpper] = TickUtil.getFullRangeTickIndex(data.tickSpacing);
   const tickInit = await pool.initTickArrayForTicks([tickLower, tickUpper], owner);
   if (tickInit && !tickInit.isEmpty()) {
-    await sendBuilder(conn, keypair, tickInit, OPEN_POSITION_CU);
+    await sendBuilder(conn, signer, tickInit, OPEN_POSITION_CU);
   }
   const { tx } = await pool.openPositionWithMetadata(
     tickLower,
@@ -384,7 +387,7 @@ export async function addClmmLiquidity(
     undefined,
     TOKEN_2022_PROGRAM_ID,
   );
-  const sig = await sendBuilder(conn, keypair, tx, OPEN_POSITION_CU);
+  const sig = await sendBuilder(conn, signer, tx, OPEN_POSITION_CU);
   return result(sig, pool.getAddress().toBase58());
 }
 
@@ -394,11 +397,11 @@ export async function addClmmLiquidity(
  */
 export async function removeClmmLiquidity(
   conn: Connection,
-  keypair: Keypair,
+  signer: TxSigner,
   args: { poolPk: string; bps?: number },
 ): Promise<ClmmLpResult> {
-  const client = buildClmmClient(conn, keypair);
-  const owner = keypair.publicKey;
+  const client = buildClmmClient(conn, signer);
+  const owner = signer.publicKey;
   const poolPk = new PublicKey(args.poolPk);
   const all = await findClmmPositions(conn, client, owner, poolPk);
   const pos = all.find((p) => !p.locked);
@@ -410,7 +413,7 @@ export async function removeClmmLiquidity(
 
   if (bps >= 10_000) {
     const builders = await pool.closePosition(pos.positionAddress, slippage, owner, owner, owner);
-    const sig = await sendBuilders(conn, keypair, builders, OPEN_POSITION_CU);
+    const sig = await sendBuilders(conn, signer, builders, OPEN_POSITION_CU);
     return result(sig, poolPk.toBase58());
   }
 
@@ -447,7 +450,7 @@ export async function removeClmmLiquidity(
     owner,
     owner,
   );
-  const sig = await sendBuilder(conn, keypair, tx, OPEN_POSITION_CU);
+  const sig = await sendBuilder(conn, signer, tx, OPEN_POSITION_CU);
   return result(sig, poolPk.toBase58());
 }
 
@@ -466,11 +469,11 @@ export async function removeClmmLiquidity(
  */
 export async function lockClmmLiquidity(
   conn: Connection,
-  keypair: Keypair,
+  signer: TxSigner,
   args: { poolPk: string },
 ): Promise<ClmmLpResult> {
-  const client = buildClmmClient(conn, keypair);
-  const owner = keypair.publicKey;
+  const client = buildClmmClient(conn, signer);
+  const owner = signer.publicKey;
   const poolPk = new PublicKey(args.poolPk);
 
   const all = await findClmmPositions(conn, client, owner, poolPk);
@@ -501,24 +504,24 @@ export async function lockClmmLiquidity(
 
   const position = await client.getPosition(pos.positionAddress);
   const builder = await position.lock(LockConfigUtil.getPermanentLockType(), owner, owner);
-  const sig = await sendBuilder(conn, keypair, builder, LOCK_POSITION_CU, "lock_liquidity");
+  const sig = await sendBuilder(conn, signer, builder, LOCK_POSITION_CU, "lock_liquidity");
   return result(sig, poolPk.toBase58());
 }
 
 /** Sweep the position's accrued swap fees (+ rewards) to the wallet, keeping the position open. */
 export async function claimClmmFees(
   conn: Connection,
-  keypair: Keypair,
+  signer: TxSigner,
   args: { poolPk: string },
 ): Promise<ClmmLpResult> {
-  const client = buildClmmClient(conn, keypair);
-  const owner = keypair.publicKey;
+  const client = buildClmmClient(conn, signer);
+  const owner = signer.publicKey;
   const poolPk = new PublicKey(args.poolPk);
   const pos = await findClmmPosition(conn, client, owner, poolPk);
   if (!pos) throw noPositionError();
 
   const builders = await client.collectFeesAndRewardsForPositions([pos.positionAddress]);
-  const sig = await sendBuilders(conn, keypair, builders, OPEN_POSITION_CU);
+  const sig = await sendBuilders(conn, signer, builders, OPEN_POSITION_CU);
   return result(sig, poolPk.toBase58());
 }
 
@@ -529,7 +532,7 @@ export async function claimClmmFees(
  */
 export async function createClmmPool(
   conn: Connection,
-  keypair: Keypair,
+  signer: TxSigner,
   args: {
     tokenAMint: string;
     tokenBMint: string;
@@ -539,8 +542,8 @@ export async function createClmmPool(
     initialPrice?: string | number;
   },
 ): Promise<ClmmLpResult> {
-  const client = buildClmmClient(conn, keypair);
-  const owner = keypair.publicKey;
+  const client = buildClmmClient(conn, signer);
+  const owner = signer.publicKey;
 
   const feeBps = args.feeTier ?? DEFAULT_CLMM_FEE_TIER_BPS;
   const tickSpacing = CLMM_FEE_TIER_TICK_SPACING[feeBps];
@@ -591,7 +594,7 @@ export async function createClmmPool(
     initialTick,
     owner,
   );
-  await sendBuilder(conn, keypair, createTx, INIT_POOL_CU);
+  await sendBuilder(conn, signer, createTx, INIT_POOL_CU);
 
   // Seed a full-range position with the provided amounts.
   const pool = await client.getPool(poolKey);
@@ -602,7 +605,7 @@ export async function createClmmPool(
   const [tickLower, tickUpper] = TickUtil.getFullRangeTickIndex(tickSpacing);
   const tickInit = await pool.initTickArrayForTicks([tickLower, tickUpper], owner);
   if (tickInit && !tickInit.isEmpty()) {
-    await sendBuilder(conn, keypair, tickInit, OPEN_POSITION_CU);
+    await sendBuilder(conn, signer, tickInit, OPEN_POSITION_CU);
   }
   const slippage = Percentage.fromFraction(DEFAULT_SLIPPAGE_BPS, 10_000);
   const { lowerBound, upperBound } = PriceMath.getSlippageBoundForSqrtPrice(
@@ -618,6 +621,6 @@ export async function createClmmPool(
     undefined,
     TOKEN_2022_PROGRAM_ID,
   );
-  const sig = await sendBuilder(conn, keypair, openTx, OPEN_POSITION_CU);
+  const sig = await sendBuilder(conn, signer, openTx, OPEN_POSITION_CU);
   return result(sig, poolKey.toBase58());
 }

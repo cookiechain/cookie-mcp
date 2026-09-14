@@ -23,7 +23,7 @@ import {
 import { CookieMcpError } from "../errors";
 import { bpsToPct, rawToUi, uiToRaw } from "../format";
 import { getConnection } from "../rpc";
-import { requireWallet } from "../wallet";
+import { requireSigner } from "../wallet";
 import { displayName } from "./names";
 import { domainPda } from "./program";
 import {
@@ -205,10 +205,10 @@ export async function listDomain(args: {
   name: string;
   priceCook: string | number;
 }): Promise<ListDomainResult> {
-  const { keypair } = requireWallet();
+  const signer = requireSigner();
   const label = requireValidName(args.name);
   const conn = getConnection();
-  const owner = keypair.publicKey;
+  const owner = signer.publicKey;
 
   let priceRaw: bigint;
   try {
@@ -316,10 +316,10 @@ export async function buyDomain(args: {
   name: string;
   maxPriceCook?: string | number;
 }): Promise<BuyDomainResult> {
-  const { keypair } = requireWallet();
+  const signer = requireSigner();
   const label = requireValidName(args.name);
   const conn = getConnection();
-  const buyer = keypair.publicKey;
+  const buyer = signer.publicKey;
 
   const [listing, cfg] = await Promise.all([fetchListing(conn, label), fetchMarketConfig(conn)]);
   if (!listing) {
@@ -418,10 +418,10 @@ export interface CancelDomainListingResult {
 export async function cancelDomainListing(args: {
   name: string;
 }): Promise<CancelDomainListingResult> {
-  const { keypair } = requireWallet();
+  const signer = requireSigner();
   const label = requireValidName(args.name);
   const conn = getConnection();
-  const owner = keypair.publicKey;
+  const owner = signer.publicKey;
 
   const listing = await fetchListing(conn, label);
   if (!listing) {

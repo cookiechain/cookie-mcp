@@ -6,9 +6,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   launchpadSessionToken,
   loginMessage,
+  parseLoginMessage,
   resetLaunchpadSession,
   signLoginMessage,
 } from "./session";
+import { runWithRequestContext } from "../context";
+import { ExternalSigner, SignatureRequired } from "../signer";
 
 const KP = Keypair.generate();
 const WALLET = KP.publicKey.toBase58();
@@ -116,5 +119,60 @@ describe("launchpadSessionToken", () => {
     await launchpadSessionToken(KP);
     stubLogin({ token: "tok-b" });
     expect(await launchpadSessionToken(Keypair.generate())).toBe("tok-b");
+  });
+});
+
+describe("launchpadSessionToken — external signer", () => {
+  it("stops with the exact login message to sign, having spent nothing", async () => {
+    const { bodies } = stubLogin();
+    const signer = new ExternalSigner(KP.publicKey);
+    const err = await launchpadSessionToken(signer).catch((e) => e);
+    expect(err).toBeInstanceOf(SignatureRequired);
+    const p = (err as SignatureRequired).payload;
+    if (p.kind !== "message") throw new Error("expected a message payload");
+    expect(parseLoginMessage(p.message)).toEqual({
+      wallet: WALLET,
+      nonce: "abc123",
+      ts: expect.any(Number),
+    });
+    expect(bodies).toHaveLength(0); // nonce fetched, no session created
+  });
+
+  it("completes the login from a supplied signature over our message (nonce + ts from it)", async () => {
+    const { bodies } = stubLogin();
+    const message = loginMessage(WALLET, 1735689600, "abc123");
+    const signature = signLoginMessage(message, KP);
+    const token = await runWithRequestContext(
+      { providedSignatures: [{ message, signature }] },
+      () => launchpadSessionToken(new ExternalSigner(KP.publicKey, [{ message, signature }])),
+    );
+    expect(token).toBe("tok-1");
+    const body = bodies[0] as Record<string, unknown>;
+    expect(body).toMatchObject({ wallet: WALLET, nonce: "abc123", ts: 1735689600, signature });
+  });
+
+  it("ignores a supplied signature for a different wallet", async () => {
+    stubLogin();
+    const other = Keypair.generate();
+    const message = loginMessage(other.publicKey.toBase58(), 1735689600, "abc123");
+    const signature = signLoginMessage(message, other);
+    const err = await runWithRequestContext({ providedSignatures: [{ message, signature }] }, () =>
+      launchpadSessionToken(new ExternalSigner(KP.publicKey, [{ message, signature }])),
+    ).catch((e) => e);
+    expect(err).toBeInstanceOf(SignatureRequired);
+  });
+});
+
+describe("parseLoginMessage", () => {
+  it("round-trips loginMessage and rejects other text", () => {
+    expect(parseLoginMessage(loginMessage("W", 5, "n"))).toEqual({
+      wallet: "W",
+      ts: 5,
+      nonce: "n",
+    });
+    expect(parseLoginMessage("hello")).toBeNull();
+    expect(
+      parseLoginMessage("MOMO Login\ndomain: evil.example\nnonce: n\nwallet: W\nts: 5"),
+    ).toBeNull();
   });
 });

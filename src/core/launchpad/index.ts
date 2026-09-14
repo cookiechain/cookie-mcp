@@ -13,7 +13,6 @@ import {
   Transaction,
   VersionedTransaction,
   type Connection,
-  type Keypair,
 } from "@solana/web3.js";
 import {
   createAssociatedTokenAccountIdempotentInstruction,
@@ -41,7 +40,9 @@ import { rawToUi, uiToRaw } from "../format";
 import { fetchRemoteImage } from "../imageFetch";
 import { readImageFile } from "../imageFile";
 import { getConnection } from "../rpc";
-import { ownPublicKey, requireWallet } from "../wallet";
+import { ownPublicKey, requireSigner } from "../wallet";
+import type { TxSigner } from "../signer";
+import { withProvidedSignatures, type ProvidedSignature } from "../context";
 import {
   buildBuyTx,
   buildClaimCreatorFeesTx,
@@ -331,10 +332,10 @@ export function altPinMismatch(tables: string[] | undefined, pinned: string): st
  */
 async function ensureWrappedCook(
   conn: Connection,
-  keypair: Keypair,
+  signer: TxSigner,
   needRaw: bigint,
 ): Promise<string | null> {
-  const owner = keypair.publicKey;
+  const owner = signer.publicKey;
   const ata = getAssociatedTokenAddressSync(new PublicKey(COOK_MINT), owner, true);
   let haveRaw = 0n;
   try {
@@ -358,7 +359,14 @@ async function ensureWrappedCook(
   if (sim.value.err) {
     throw launchpadSimError("wrapping COOK for the dev buy", sim.value.err, sim.value.logs ?? null);
   }
-  tx.partialSign(keypair);
+  await signer.signTransaction(tx, {
+    what: "COOK wrap for the dev buy",
+    blockhash,
+    lastValidBlockHeight,
+    submit: { via: "cookie-rpc" },
+    step: "intermediate",
+    summary: { wrapsCookLamports: shortfall.toString(), into: ata.toBase58() },
+  });
   let signature: string;
   try {
     signature = await conn.sendRawTransaction(tx.serialize());
@@ -483,9 +491,10 @@ export function deserializeBuilt(built: BuiltTx): Transaction | VersionedTransac
  */
 async function submitBuilt(
   built: BuiltTx,
-  keypair: Keypair,
+  signer: TxSigner,
   what: string,
   codeHints?: Record<number, SimCodeHint>,
+  summary?: Record<string, unknown>,
 ): Promise<string> {
   if (!built.transactionBase64) {
     throw new CookieMcpError(
@@ -550,8 +559,13 @@ async function submitBuilt(
 
   // Legacy takes a variadic; a VersionedTransaction takes an array and merges into the existing
   // signature slots, which is what keeps the API's own partial signatures (the leased mint + vaults).
-  if (tx instanceof VersionedTransaction) tx.sign([keypair]);
-  else tx.partialSign(keypair);
+  await signer.signTransaction(tx, {
+    what,
+    blockhash: built.blockhash,
+    lastValidBlockHeight: built.lastValidBlockHeight,
+    submit: { via: "cookie-rpc" },
+    ...(summary ? { summary } : {}),
+  });
   let signature: string;
   try {
     signature = await conn.sendRawTransaction(tx.serialize());
@@ -1284,6 +1298,11 @@ export async function getLaunchpadToken(args: {
 export interface DeployTokenArgs {
   name: string;
   symbol: string;
+  /**
+   * External signer only: the wallet's signature over the launchpad login message a previous
+   * `deploy_token` call returned in `needs_signature` (`kind: "message"`). Ignored with a local key.
+   */
+  loginSignature?: ProvidedSignature;
   description?: string;
   imageBase64?: string;
   imageMimeType?: string;
@@ -1451,16 +1470,16 @@ function isSessionRejected(e: unknown): boolean {
  * case is a second signed login message. Never widen it past a build.
  */
 async function withLaunchSession<T>(
-  keypair: Keypair,
+  signer: TxSigner,
   build: (session: string) => Promise<T>,
 ): Promise<T> {
   try {
-    return await build(await launchpadSessionToken(keypair));
+    return await build(await launchpadSessionToken(signer));
   } catch (e) {
     if (!isSessionRejected(e)) throw e;
-    resetLaunchpadSession();
+    resetLaunchpadSession(signer.publicKey.toBase58());
     try {
-      return await build(await launchpadSessionToken(keypair));
+      return await build(await launchpadSessionToken(signer));
     } catch (retry) {
       if (!isSessionRejected(retry)) throw retry;
       throw new CookieMcpError(
@@ -1543,8 +1562,15 @@ export interface DeployTokenResult {
  * Costs the launchpad's creation fee (read live from `/config`) plus rent and any dev buy.
  */
 export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenResult> {
-  const { keypair } = requireWallet();
-  const creator = keypair.publicKey.toBase58();
+  // The signer is resolved inside the context so an external one can see `loginSignature`.
+  return withProvidedSignatures(args.loginSignature ? [args.loginSignature] : undefined, () =>
+    deployTokenInner(args),
+  );
+}
+
+async function deployTokenInner(args: DeployTokenArgs): Promise<DeployTokenResult> {
+  const signer = requireSigner();
+  const creator = signer.publicKey.toBase58();
 
   const sources = (["imagePath", "imageBase64", "imageUrl"] as const).filter((k) =>
     args[k]?.trim(),
@@ -1604,7 +1630,7 @@ export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenRes
   // fail at simulation having already burned a pin and a rate-limited mint.
   let wrapSignature: string | null = null;
   if (devBuyRaw > 0n) {
-    wrapSignature = await ensureWrappedCook(getConnection(), keypair, devBuyRaw);
+    wrapSignature = await ensureWrappedCook(getConnection(), signer, devBuyRaw);
   }
 
   // Pin the logo first and reference its URL from the metadata JSON (never inline the base64 blob).
@@ -1624,7 +1650,7 @@ export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenRes
   }
   const metadata = buildMetadata(args, imageUrl);
 
-  const built = await withLaunchSession(keypair, (session) =>
+  const built = await withLaunchSession(signer, (session) =>
     buildCreatePoolTx({
       creator,
       params,
@@ -1637,7 +1663,12 @@ export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenRes
       session,
     }),
   );
-  const signature = await submitBuilt(built, keypair, "launch");
+  const signature = await submitBuilt(built, signer, "launch", undefined, {
+    name: args.name,
+    symbol: args.symbol,
+    mint: built.mint ?? null,
+    ...(devBuyRaw > 0n ? { devBuyCook: rawToUi(devBuyRaw, COOK_DECIMALS) } : {}),
+  });
 
   const mint = built.mint ?? null;
   // The pool PDA is keyed by a random pool_id the API picked, so read it back by mint.
@@ -1792,8 +1823,8 @@ export async function launchpadBuy(args: {
   amountCook: string | number;
   referrer?: string;
 }): Promise<LaunchpadBuyResult> {
-  const { keypair } = requireWallet();
-  const buyer = keypair.publicKey.toBase58();
+  const signer = requireSigner();
+  const buyer = signer.publicKey.toBase58();
 
   let paymentRaw: bigint;
   try {
@@ -1828,7 +1859,10 @@ export async function launchpadBuy(args: {
     paymentAmount: paymentRaw.toString(),
     referrer,
   });
-  const signature = await submitBuilt(built, keypair, "buy");
+  const signature = await submitBuilt(built, signer, "buy", undefined, {
+    ref: args.ref,
+    amountCook: String(args.amountCook),
+  });
 
   // Post-trade curve state, so the reported price/progress reflect this buy.
   const after = {
@@ -1882,8 +1916,8 @@ export async function launchpadSell(args: {
   shares: string | number;
   unwrap?: boolean;
 }): Promise<LaunchpadSellResult> {
-  const { keypair } = requireWallet();
-  const seller = keypair.publicKey.toBase58();
+  const signer = requireSigner();
+  const seller = signer.publicKey.toBase58();
 
   const [cfg, pool] = await Promise.all([fetchLaunchpadConfig(), resolvePool(args.ref)]);
   assertTradeable(pool, "sell");
@@ -1925,7 +1959,10 @@ export async function launchpadSell(args: {
     tokenShares: sharesRaw.toString(),
     unwrap: args.unwrap ?? true,
   });
-  const signature = await submitBuilt(built, keypair, "sell");
+  const signature = await submitBuilt(built, signer, "sell", undefined, {
+    ref: args.ref,
+    shares: String(args.shares),
+  });
 
   return {
     signature,
@@ -2042,8 +2079,8 @@ export async function claimLaunchpad(args: {
   ref: string;
   kind?: ClaimKind | "auto";
 }): Promise<ClaimLaunchpadResult> {
-  const { keypair } = requireWallet();
-  const claimant = keypair.publicKey.toBase58();
+  const signer = requireSigner();
+  const claimant = signer.publicKey.toBase58();
 
   const [cfg, pool] = await Promise.all([fetchLaunchpadConfig(), resolvePool(args.ref)]);
   const decs = await tokenDecimals(pool, cfg);
@@ -2149,7 +2186,7 @@ export async function claimLaunchpad(args: {
           },
         }
       : undefined;
-  const signature = await submitBuilt(built, keypair, "claim", codeHints);
+  const signature = await submitBuilt(built, signer, "claim", codeHints);
 
   // Report what landed: shares → SPL tokens 1:1 for graduated claims, COOK for payouts. Best-effort —
   // the claim already succeeded, so a failed estimate must never turn into a thrown error.
@@ -2200,8 +2237,8 @@ export async function claimCreatorFees(args: {
   ref: string;
   unwrap?: boolean;
 }): Promise<ClaimCreatorFeesResult> {
-  const { keypair } = requireWallet();
-  const creator = keypair.publicKey.toBase58();
+  const signer = requireSigner();
+  const creator = signer.publicKey.toBase58();
 
   const pool = await resolvePool(args.ref);
   if (pool.creator !== creator) {
@@ -2224,7 +2261,7 @@ export async function claimCreatorFees(args: {
     pool: pool.pubkey,
     unwrap: args.unwrap ?? true,
   });
-  const signature = await submitBuilt(built, keypair, "creator-fee claim");
+  const signature = await submitBuilt(built, signer, "creator-fee claim");
 
   return {
     signature,

@@ -37,7 +37,8 @@ import {
 import { confirmSent } from "./confirm";
 import { CookieMcpError } from "./errors";
 import { getConnection, getSolanaConnection } from "./rpc";
-import { requireWallet, ownPublicKey } from "./wallet";
+import { requireSigner, ownPublicKey } from "./wallet";
+import { signWithCosigners, type TxSigner } from "./signer";
 import { rawToUi, uiToRaw } from "./format";
 
 // Standard Solana SPL no-op program used by Hyperlane for log emission.
@@ -501,7 +502,7 @@ async function readRecipientAta(
 async function ensureRecipientTokenAccount(
   route: Route,
   recipient: PublicKey,
-  keypair: Keypair,
+  signer: TxSigner,
   opts: { create: boolean },
 ): Promise<RecipientTokenAccountInfo | null> {
   const read = await readRecipientAta(route, recipient);
@@ -536,7 +537,7 @@ async function ensureRecipientTokenAccount(
   }
 
   const conn = route.destConn;
-  const solBalance = BigInt(await conn.getBalance(keypair.publicKey, "confirmed"));
+  const solBalance = BigInt(await conn.getBalance(signer.publicKey, "confirmed"));
   const shortfall = ataPayerShortfall({
     payerLamports: solBalance,
     payerRentReserve: ATA_CREATE_FEE_BUFFER,
@@ -556,17 +557,28 @@ async function ensureRecipientTokenAccount(
 
   // Idempotent: harmless if the relayer, the recipient, or a concurrent bridge wins the race.
   const createIx = createAssociatedTokenAccountIdempotentInstruction(
-    keypair.publicKey,
+    signer.publicKey,
     read.ata,
     recipient,
     route.destSplMint!,
     read.tokenProgram,
   );
   const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
-  const tx = new Transaction({ feePayer: keypair.publicKey, blockhash, lastValidBlockHeight }).add(
+  const tx = new Transaction({ feePayer: signer.publicKey, blockhash, lastValidBlockHeight }).add(
     createIx,
   );
-  tx.sign(keypair);
+  await signer.signTransaction(tx, {
+    what: "recipient-account",
+    blockhash,
+    lastValidBlockHeight,
+    submit: { via: "solana-rpc" },
+    step: "intermediate",
+    summary: {
+      creates: "the recipient's SPL COOK token account on Solana",
+      recipient: recipient.toBase58(),
+      tokenAccount: read.ata.toBase58(),
+    },
+  });
   const signature = await conn.sendRawTransaction(tx.serialize());
   // Confirm before the caller dispatches: the bridge must not go out against an unconfirmed account.
   await confirmSent(conn, { signature, blockhash, lastValidBlockHeight }, "recipient-account", {
@@ -630,8 +642,8 @@ export async function bridge(args: {
       "use 'cookie-to-solana' or 'solana-to-cookie'",
     );
   }
-  const { keypair } = requireWallet();
-  const sender = keypair.publicKey;
+  const signer = requireSigner();
+  const sender = signer.publicKey;
   const route = resolveRoute(args.direction);
 
   // Recipient on the destination chain. Both chains are SVM and use the same keypair, so default to
@@ -667,7 +679,7 @@ export async function bridge(args: {
   const recipientTokenAccount = await ensureRecipientTokenAccount(
     route,
     new PublicKey(recipient32),
-    keypair,
+    signer,
     { create: args.createRecipientAccount !== false },
   );
 
@@ -686,9 +698,6 @@ export async function bridge(args: {
   const tx = new Transaction({ feePayer: sender, blockhash, lastValidBlockHeight })
     .add(computeIx)
     .add(transferIx);
-  // Ephemeral signer first (replay protection), then the wallet.
-  tx.partialSign(uniqueMsg);
-  tx.partialSign(keypair);
 
   // Simulate defensively: the Cookie Chain Agave fork can reject the rich simulate call even for a
   // valid tx (a known fork quirk), so a *thrown* simulation is treated as "couldn't simulate" and we
@@ -715,6 +724,21 @@ export async function bridge(args: {
     if (e instanceof CookieMcpError) throw e;
     // Fork rejected the simulate call itself — not an error; proceed to send.
   }
+
+  // Ephemeral signer first (replay protection), then the wallet. Signing comes AFTER the simulation
+  // so an external signer sees the same pre-flight refusals a local one does.
+  await signWithCosigners(signer, tx, [uniqueMsg], {
+    what: "bridge",
+    blockhash,
+    lastValidBlockHeight,
+    submit: { via: route.sourceChain === "solana" ? "solana-rpc" : "cookie-rpc" },
+    summary: {
+      direction: args.direction,
+      amount: String(args.amount),
+      recipient: to,
+      ...(recipientTokenAccount ? { recipientTokenAccount } : {}),
+    },
+  });
 
   const sourceSignature = await route.sourceConn.sendRawTransaction(tx.serialize());
   // A confirm timeout here does not mean the transfer failed — the dispatch may still land and the

@@ -4,13 +4,15 @@
 // getPoolInfoFromRpc auto-retargets to the pool's own program (poolKeys.programId == WTzk…), so the
 // high-level raydium.clmm.* builders work on the fork. add_liquidity opens a full-range position by
 // default; create_pool initializes a new pool on a chosen fork ammConfig, then seeds it full-range.
-import { PublicKey, type Keypair, type Connection } from "@solana/web3.js";
+import { PublicKey, VersionedTransaction, type Keypair, type Connection } from "@solana/web3.js";
 import BN from "bn.js";
 import Decimal from "decimal.js";
 import { Raydium, TxVersion, PoolUtils, ClmmConfigLayout } from "@raydium-io/raydium-sdk-v2";
 
 import { DEFAULT_SLIPPAGE_BPS, explorerTxUrl } from "../config";
+import { confirmSent } from "../confirm";
 import { CookieMcpError } from "../errors";
+import { signWithCosigners, type TxSigner } from "../signer";
 
 import { uiToRaw } from "../format";
 
@@ -63,39 +65,66 @@ export interface BammLpResult {
 }
 const NOTE = "verify the result on cookiescan.io";
 
-async function loadRaydium(connection: Connection, keypair: Keypair): Promise<Raydium> {
+async function loadRaydium(connection: Connection, signer: TxSigner): Promise<Raydium> {
   return Raydium.load({
     connection,
-    owner: keypair,
+    // A public key, not a keypair: the SDK builds, we sign and send (`execTx`).
+    owner: signer.publicKey,
     cluster: "mainnet",
     disableLoadToken: true,
     disableFeatureCheck: true,
   });
 }
 
-// Raydium `MakeTxData`: sign with owner + ephemeral signers and send over our connection.
-//
-// ⚠️ Unlike every other send path, the SDK owns both the send and the confirm here, so we cannot wrap
-// the confirm in `confirmSent` — a confirm timeout surfaces as the SDK's own error and does NOT carry
-// the "sent, do not retry blindly" warning. The transaction may still land, so a BAMM op that reports a
-// confirmation failure must be checked on the explorer before retrying. Fixing this properly means
-// dropping `sendAndConfirm` and sending the built tx ourselves.
-async function execTx(built: {
-  execute: (o?: { sendAndConfirm?: boolean }) => Promise<{ txId: string }>;
-}): Promise<string> {
-  const { txId } = await built.execute({ sendAndConfirm: true });
-  return txId;
+// Raydium `MakeTxData`: the SDK built a v0 transaction (blockhash set) plus the ephemeral signers it
+// needs; we simulate on our RPC, add the signatures ourselves, send, and confirm through `confirmSent`
+// so a confirm timeout carries the "sent, do not retry blindly" warning like every other send path.
+async function execTx(
+  conn: Connection,
+  signer: TxSigner,
+  built: { transaction: VersionedTransaction; signers?: Keypair[] },
+  what: string,
+): Promise<string> {
+  const tx = built.transaction;
+  if (!(tx instanceof VersionedTransaction)) {
+    throw new CookieMcpError(
+      "expected a v0 transaction from the Raydium builder",
+      "this is a bug — BAMM builders are called with txVersion V0",
+    );
+  }
+  const sim = await conn.simulateTransaction(tx, {
+    replaceRecentBlockhash: true,
+    sigVerify: false,
+    commitment: "confirmed",
+  });
+  if (sim.value.err) {
+    const logs = sim.value.logs ?? [];
+    throw new CookieMcpError(
+      `${what} simulation failed${logs.length ? `: ${logs.slice(-2).join(" | ")}` : ""}`,
+      "check your balances and the pool state; the transaction was not sent",
+    );
+  }
+  const { lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
+  const blockhash = tx.message.recentBlockhash;
+  await signWithCosigners(signer, tx, built.signers ?? [], {
+    what,
+    blockhash,
+    lastValidBlockHeight,
+    submit: { via: "cookie-rpc" },
+  });
+  const signature = await conn.sendRawTransaction(Buffer.from(tx.serialize()));
+  return confirmSent(conn, { signature, blockhash, lastValidBlockHeight }, what);
 }
 
 export async function addBammLiquidity(
   conn: Connection,
-  keypair: Keypair,
+  signer: TxSigner,
   args: { poolPk: string; amountA?: string | number; amountB?: string | number },
 ): Promise<BammLpResult> {
   if (args.amountA == null && args.amountB == null) {
     throw new CookieMcpError("provide amountA and/or amountB", "specify how much to deposit");
   }
-  const raydium = await loadRaydium(conn, keypair);
+  const raydium = await loadRaydium(conn, signer);
   const { poolInfo, poolKeys } = await raydium.clmm.getPoolInfoFromRpc(args.poolPk);
 
   const decA = poolInfo.mintA.decimals;
@@ -134,16 +163,16 @@ export async function addBammLiquidity(
     txVersion: TxVersion.V0,
   } as never);
 
-  const signature = await execTx(built as never);
+  const signature = await execTx(conn, signer, built as never, "add_liquidity");
   return { signature, pool: args.poolPk, explorerUrl: explorerTxUrl(signature), note: NOTE };
 }
 
 export async function removeBammLiquidity(
   conn: Connection,
-  keypair: Keypair,
+  signer: TxSigner,
   args: { poolPk: string },
 ): Promise<BammLpResult> {
-  const raydium = await loadRaydium(conn, keypair);
+  const raydium = await loadRaydium(conn, signer);
   const { poolInfo, poolKeys } = await raydium.clmm.getPoolInfoFromRpc(args.poolPk);
 
   const positions = await raydium.clmm.getOwnerPositionInfo({ programId: BAMM_PROGRAM_ID });
@@ -168,16 +197,16 @@ export async function removeBammLiquidity(
     txVersion: TxVersion.V0,
   } as never);
 
-  const signature = await execTx(built as never);
+  const signature = await execTx(conn, signer, built as never, "remove_liquidity");
   return { signature, pool: args.poolPk, explorerUrl: explorerTxUrl(signature), note: NOTE };
 }
 
 export async function claimBammFees(
   conn: Connection,
-  keypair: Keypair,
+  signer: TxSigner,
   args: { poolPk: string },
 ): Promise<BammLpResult> {
-  const raydium = await loadRaydium(conn, keypair);
+  const raydium = await loadRaydium(conn, signer);
   const { poolInfo, poolKeys } = await raydium.clmm.getPoolInfoFromRpc(args.poolPk);
 
   const positions = await raydium.clmm.getOwnerPositionInfo({ programId: BAMM_PROGRAM_ID });
@@ -204,7 +233,7 @@ export async function claimBammFees(
     txVersion: TxVersion.V0,
   } as never);
 
-  const signature = await execTx(built as never);
+  const signature = await execTx(conn, signer, built as never, "claim_fees");
   return { signature, pool: args.poolPk, explorerUrl: explorerTxUrl(signature), note: NOTE };
 }
 
@@ -236,7 +265,7 @@ async function resolveMint(
  */
 export async function createBammPool(
   conn: Connection,
-  keypair: Keypair,
+  signer: TxSigner,
   args: {
     tokenAMint: string;
     tokenBMint: string;
@@ -246,7 +275,7 @@ export async function createBammPool(
     initialPrice?: string | number;
   },
 ): Promise<BammLpResult> {
-  const raydium = await loadRaydium(conn, keypair);
+  const raydium = await loadRaydium(conn, signer);
 
   let cfgPk: PublicKey;
   try {
@@ -328,10 +357,10 @@ export async function createBammPool(
       "this is a bug — the Raydium builder shape changed",
     );
   }
-  await execTx(built as never);
+  await execTx(conn, signer, built as never, "create_pool");
 
   // Seed the new pool full-range. The pool's mintA == the canonically-smaller mint (a), so amountA→a.
-  const seed = await addBammLiquidity(conn, keypair, {
+  const seed = await addBammLiquidity(conn, signer, {
     poolPk,
     amountA: a.ui,
     amountB: b.ui,

@@ -13,7 +13,10 @@ onchain tools for the [Cookie Chain](https://www.cookiechain.wtf) blockchain —
 launch tokens, manage liquidity, stake, trade NFTs, and bridge to Solana.
 
 It runs **locally over stdio** and **signs with your key on your machine**, so it is non-custodial by
-design. It is a community project for the whole Cookie Chain ecosystem.
+design. For hosted apps (a web chat, a bot behind a website) it runs in **external-signer mode**: the
+server holds no key, every action stops at the signing step with a verified transaction, and the
+user's own browser wallet signs it — same tools, same guardrails ([details](#hosted--wallet-signed-mode)).
+It is a community project for the whole Cookie Chain ecosystem.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/cookiechain/cookie-mcp/main/docs/demo.gif" alt="An AI agent using cookie-mcp: checking chain health, bridging COOK from Solana, buying COOKHOUSE, staking for bCOOK, and bridging back to Solana" width="820">
@@ -27,6 +30,7 @@ design. It is a community project for the whole Cookie Chain ecosystem.
 - [Try it](#try-it)
 - [Configuration](#configuration)
 - [Tools](#tools)
+- [Hosted / wallet-signed mode](#hosted--wallet-signed-mode) — for web apps and other integrators
 - [Safety](#safety)
 - [Development](#development)
 
@@ -165,14 +169,18 @@ it never turns a name straight into a trade.
 
 ## Configuration
 
-| Variable              | Default                               | Purpose                                                |
-| --------------------- | ------------------------------------- | ------------------------------------------------------ |
-| `COOKIE_RPC_URL`      | `https://rpc.cookiescan.io`           | Cookie Chain RPC.                                      |
-| `COOKIE_PRIVATE_KEY`  | —                                     | Wallet key for money-moving tools. Read-only if unset. |
-| `COOKIE_SLIPPAGE_BPS` | `500`                                 | Default slippage (bps).                                |
-| `COOKIE_REFERRER`     | `mcp treasury`                        | Referral wallet (MomoSwap only).                       |
-| `SOLANA_RPC_URL`      | `https://api.mainnet-beta.solana.com` | Solana RPC.                                            |
-| `JUPITER_API_KEY`     | —                                     | Optional; else keyless Jupiter at 0.5 req/s.           |
+| Variable                                   | Default                               | Purpose                                                                                           |
+| ------------------------------------------ | ------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `COOKIE_RPC_URL`                           | `https://rpc.cookiescan.io`           | Cookie Chain RPC.                                                                                 |
+| `COOKIE_PRIVATE_KEY`                       | —                                     | Wallet key for money-moving tools. Read-only if unset.                                            |
+| `COOKIE_SIGNER`                            | `local`                               | `external` = no key in the process; tools return `needs_signature` for the user's wallet to sign. |
+| `COOKIE_WALLET_ADDRESS`                    | —                                     | External mode: default wallet when a request carries no `x-cookie-wallet` header.                 |
+| `COOKIE_MCP_HTTP_PORT` / `_HOST` / `_PATH` | — / `127.0.0.1` / `/mcp`              | Serve Streamable HTTP instead of stdio (same as `--http [port]`).                                 |
+| `COOKIE_MCP_CORS_ORIGIN`                   | `*`                                   | Allowed browser origin for the HTTP server.                                                       |
+| `COOKIE_SLIPPAGE_BPS`                      | `500`                                 | Default slippage (bps).                                                                           |
+| `COOKIE_REFERRER`                          | `mcp treasury`                        | Referral wallet (MomoSwap only).                                                                  |
+| `SOLANA_RPC_URL`                           | `https://api.mainnet-beta.solana.com` | Solana RPC.                                                                                       |
+| `JUPITER_API_KEY`                          | —                                     | Optional; else keyless Jupiter at 0.5 req/s.                                                      |
 
 ## Tools
 
@@ -326,11 +334,79 @@ Read and built straight from the program — no API, no indexer.
 Use the COOK / native mint `So11111111111111111111111111111111111111112` for COOK. Every tool returns
 JSON; failures return `{ error, hint }` — never a stack trace, never your key.
 
+## Hosted / wallet-signed mode
+
+The default setup assumes you are both the operator and the user. A hosted product — a web chat, a
+Telegram bot, a shared agent — cannot hold users' keys and should not ask for them. For that,
+cookie-mcp runs **without any key** and lets the user's own wallet sign:
+
+```bash
+COOKIE_SIGNER=external npx cookie-mcp --http 3000 --host 0.0.0.0
+```
+
+- Every request names the wallet it acts for with an `x-cookie-wallet: <base58>` header (or set
+  `COOKIE_WALLET_ADDRESS` for a single-wallet deployment). Reads work as before.
+- Every money-moving tool runs **all** of its checks — instruction decoding, spend refusals, the
+  simulation — and then, instead of signing, returns a normal (non-error) result:
+
+  ```json
+  {
+    "status": "needs_signature",
+    "tool": "transfer",
+    "kind": "transaction",
+    "what": "transfer",
+    "signer": "FFWf…4wq2",
+    "transactionBase64": "AQAAAA…",
+    "version": "legacy",
+    "blockhash": "6FdF…TSvT",
+    "lastValidBlockHeight": 24638662,
+    "submit": { "via": "cookie-rpc" },
+    "step": "final",
+    "summary": { "to": "…", "symbol": "COOK", "amount": "0.001" },
+    "next": "sign transactionBase64 with wallet … then call submit_signed_tx …"
+  }
+  ```
+
+  Your app hands `transactionBase64` to the browser wallet **unchanged** (it is already co-signed by
+  any ephemeral or API-side signers), then calls **`submit_signed_tx`** with the signed bytes and the
+  same `submit` / `blockhash` / `lastValidBlockHeight` / `what` fields. It sends on the named route
+  (Cookie RPC, Solana RPC, or Candy Shop) and confirms. It refuses bytes that still lack a signature
+  and never builds transactions itself.
+
+- `step: "intermediate"` marks a prerequisite (wrapping COOK for a dev buy, creating a Solana token
+  account before a bridge, CLMM tick-array init). After it confirms, call the same tool again with the
+  same arguments to continue.
+- `kind: "message"` (only `deploy_token`, for the launchpad login) asks the wallet to `signMessage`
+  the exact text; call `deploy_token` again with `loginSignature: { message, signature }`.
+- Blockhashes expire in about a minute. If the wallet prompt is slow, `submit_signed_tx` reports the
+  timeout with the signature and a "do not retry blindly" hint; re-run the tool for fresh bytes.
+- The HTTP server is stateless (one fresh server per POST), answers `/healthz`, and sends permissive
+  CORS headers so a browser front-end can call it directly. It **refuses to start** with a local
+  `COOKIE_PRIVATE_KEY` unless `COOKIE_HTTP_ALLOW_LOCAL_KEY=1`, because anyone reaching the port could
+  spend from that key.
+
+**As a library.** The same flows are importable without MCP:
+
+```ts
+import {
+  ExternalSigner,
+  transfer,
+  submitSignedTransaction,
+  runWithRequestContext,
+} from "cookie-mcp";
+import { createServer } from "cookie-mcp/server"; // embed the MCP server in your own process
+```
+
+Money functions resolve their signer from `COOKIE_SIGNER` + the request context
+(`runWithRequestContext({ wallet }, () => transfer({...}))`) and throw `SignatureRequired` with the
+same payload the tool returns. Local agents (`COOKIE_PRIVATE_KEY`, stdio) are unaffected by any of this.
+
 ## Safety
 
-Non-custodial and local: no hosted server, no remote key storage. The key stays in `COOKIE_PRIVATE_KEY`,
-signs locally, and is redacted from all output. Read-only until a key is set; every money-moving action
-is simulated before it is sent.
+Non-custodial: no remote key storage. With a local key it stays in `COOKIE_PRIVATE_KEY`, signs locally,
+and is redacted from all output. In hosted mode the process holds no key at all and the user's wallet
+signs. Read-only until a signer is configured; every money-moving action is simulated before it is
+sent (or handed out for signing).
 
 ## Development
 
@@ -338,11 +414,11 @@ is simulated before it is sent.
 yarn install
 yarn test    # lint + format + typecheck + unit tests + boot smoke
 yarn mcp     # run the server on stdio from source (tsx)
-yarn build   # bundle to dist/mcp/server.js (what gets published)
+yarn build   # bundle to dist/ (CLI, `cookie-mcp/server` factory, `cookie-mcp` library)
 ```
 
 To point an agent at a local checkout instead of the published package, set the command to
-`npx tsx /ABS/PATH/cookie-mcp/src/mcp/server.ts`.
+`npx tsx /ABS/PATH/cookie-mcp/src/mcp/server.ts`. `--http [port]` serves Streamable HTTP instead.
 
 ## License
 

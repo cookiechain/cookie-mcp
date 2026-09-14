@@ -1,7 +1,7 @@
 // trade — non-custodial swap through either aggregator: the aggregator quotes and builds the tx →
 // simulate on our RPC → sign locally → submit → confirm. Cookiebox submits via our own RPC;
 // Candy Shop submits/confirms via its own endpoints.
-import { VersionedTransaction, Transaction, type Keypair } from "@solana/web3.js";
+import { VersionedTransaction, Transaction } from "@solana/web3.js";
 
 import {
   DEFAULT_SLIPPAGE_BPS,
@@ -34,7 +34,8 @@ import {
   assertSolanaCookPair,
 } from "./jupiter";
 import { getConnection, getSolanaConnection } from "./rpc";
-import { requireWallet } from "./wallet";
+import { requireSigner } from "./wallet";
+import type { SignContext, TxSigner } from "./signer";
 import { rawToUi, uiToRaw } from "./format";
 import { noRouteError } from "./launchpad";
 
@@ -89,13 +90,10 @@ export function simErrorMessage(
 
 async function signAndSerialize(
   tx: VersionedTransaction | Transaction,
-  keypair: Keypair,
+  signer: TxSigner,
+  ctx: SignContext,
 ): Promise<string> {
-  if (tx instanceof VersionedTransaction) {
-    tx.sign([keypair]);
-  } else {
-    tx.partialSign(keypair);
-  }
+  await signer.signTransaction(tx, ctx);
   return Buffer.from(tx.serialize()).toString("base64");
 }
 
@@ -126,7 +124,7 @@ export async function trade(args: {
   wrapSol?: boolean;
   unwrapSol?: boolean;
 }): Promise<TradeResult> {
-  const { keypair } = requireWallet();
+  const signer = requireSigner();
   const slippageBps = args.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
   const chain = args.chain ?? "cookie";
   if (args.inputMint === args.outputMint) {
@@ -144,7 +142,7 @@ export async function trade(args: {
       'use aggregator "cookiebox" (and chain "cookie"), or omit the flags',
     );
   }
-  if (chain === "solana") return tradeSolana(args, slippageBps, keypair);
+  if (chain === "solana") return tradeSolana(args, slippageBps, signer);
   const aggregator = args.aggregator ?? DEFAULT_SWAP_AGGREGATOR;
 
   const { input, output } = await resolveMeta(args.inputMint, args.outputMint);
@@ -177,7 +175,7 @@ export async function trade(args: {
         outputMint: args.outputMint,
         amount: amountRaw.toString(),
         slippageBps,
-        owner: keypair.publicKey.toBase58(),
+        owner: signer.publicKey.toBase58(),
         ...(args.wrapSol !== undefined ? { wrapSol: args.wrapSol } : {}),
         ...(args.unwrapSol !== undefined ? { unwrapSol: args.unwrapSol } : {}),
       });
@@ -220,7 +218,7 @@ export async function trade(args: {
         "reduce the amount or choose a more liquid token",
       );
     }
-    ({ transactionBase64 } = await buildSwapTx(multiRoute, keypair.publicKey.toBase58()));
+    ({ transactionBase64 } = await buildSwapTx(multiRoute, signer.publicKey.toBase58()));
   }
 
   const conn = getConnection();
@@ -240,7 +238,29 @@ export async function trade(args: {
     throw simErrorMessage(sim.value.err, sim.value.logs ?? null);
   }
 
-  const signedBase64 = await signAndSerialize(tx, keypair);
+  const gross = multiRoute.grossOutAmount ?? multiRoute.totalOutAmount;
+  const signedBase64 = await signAndSerialize(tx, signer, {
+    what: "trade",
+    ...(aggBlockhash ?? {}),
+    submit: aggBlockhash
+      ? { via: "cookie-rpc" }
+      : { via: "candyshop", pools: routePoolAddresses(multiRoute) },
+    summary: {
+      aggregator,
+      input: {
+        mint: args.inputMint,
+        symbol: input.sym,
+        amount: rawToUi(multiRoute.totalInAmount, input.dec),
+      },
+      output: {
+        mint: args.outputMint,
+        symbol: output.sym,
+        expectedAmount: rawToUi(gross, output.dec),
+        minAmount: rawToUi(multiRoute.minOutAmount, output.dec),
+      },
+      slippageBps,
+    },
+  });
 
   let signature: string;
   let finalConfirmed: boolean;
@@ -273,7 +293,6 @@ export async function trade(args: {
     }
   }
 
-  const gross = multiRoute.grossOutAmount ?? multiRoute.totalOutAmount;
   return {
     signature,
     confirmed: finalConfirmed,
@@ -325,7 +344,7 @@ async function tradeSolana(
     aggregator?: SwapAggregator;
   },
   slippageBps: number,
-  keypair: Keypair,
+  signer: TxSigner,
 ): Promise<TradeResult> {
   assertSolanaAggregator(args.aggregator);
   assertSolanaCookPair(args.inputMint, args.outputMint);
@@ -364,7 +383,7 @@ async function tradeSolana(
     );
   }
   const multiRoute = routeFromJupQuote(jup);
-  const built = await buildJupSwapTx({ quote: jup, owner: keypair.publicKey.toBase58() });
+  const built = await buildJupSwapTx({ quote: jup, owner: signer.publicKey.toBase58() });
 
   const conn = getSolanaConnection();
   const tx = deserializeTx(built.transactionBase64);
@@ -379,11 +398,23 @@ async function tradeSolana(
     throw simErrorMessage(sim.value.err, sim.value.logs ?? null, "solana");
   }
 
-  const signedBase64 = await signAndSerialize(tx, keypair);
-  const signature = await conn.sendRawTransaction(Buffer.from(signedBase64, "base64"));
-
   const blockhash =
     tx instanceof VersionedTransaction ? tx.message.recentBlockhash : tx.recentBlockhash;
+  const signedBase64 = await signAndSerialize(tx, signer, {
+    what: "trade",
+    blockhash: blockhash!,
+    lastValidBlockHeight: built.lastValidBlockHeight,
+    submit: { via: "solana-rpc" },
+    summary: {
+      chain: "solana",
+      aggregator: "jupiter",
+      input: { mint: args.inputMint, symbol: input.sym, amount: String(args.amount) },
+      output: { mint: args.outputMint, symbol: output.sym },
+      slippageBps,
+    },
+  });
+  const signature = await conn.sendRawTransaction(Buffer.from(signedBase64, "base64"));
+
   let finalConfirmed: boolean;
   try {
     const conf = await conn.confirmTransaction(

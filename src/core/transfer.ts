@@ -13,7 +13,7 @@ import { resolveWallet } from "./domains";
 import { CookieMcpError } from "./errors";
 import { fetchToken } from "./cookiescan";
 import { getConnection } from "./rpc";
-import { requireWallet } from "./wallet";
+import { requireSigner } from "./wallet";
 import { rawToUi, uiToRaw } from "./format";
 
 export function parsePubkey(addr: string, label: string): PublicKey {
@@ -78,9 +78,9 @@ export async function transfer(args: {
   amount: string | number;
   memo?: string;
 }): Promise<TransferResult> {
-  const { keypair } = requireWallet();
+  const signer = requireSigner();
   const conn = getConnection();
-  const from = keypair.publicKey;
+  const from = signer.publicKey;
   // Built first so a bad memo fails before any RPC round trip.
   const memoIx = args.memo !== undefined ? memoInstruction(args.memo, from) : null;
   // `to` may be a base58 address or a `.cook` name; an address costs no extra round trip.
@@ -170,7 +170,20 @@ export async function transfer(args: {
     );
   }
 
-  tx.sign(keypair);
+  await signer.signTransaction(tx, {
+    what: "transfer",
+    blockhash,
+    lastValidBlockHeight,
+    submit: { via: "cookie-rpc" },
+    summary: {
+      to: to.toBase58(),
+      ...(recipient.name ? { toName: recipient.name } : {}),
+      mint,
+      symbol,
+      amount: String(args.amount),
+      ...(args.memo !== undefined ? { memo: args.memo } : {}),
+    },
+  });
   const signature = await conn.sendRawTransaction(tx.serialize());
   await confirmSent(conn, { signature, blockhash, lastValidBlockHeight }, "transfer");
 

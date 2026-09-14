@@ -1,13 +1,22 @@
-// Wallet loading + read-only mode. The key is read only from COOKIE_PRIVATE_KEY; when unset the
-// server is read-only (money tools error, read tools work). The secret is never logged or echoed.
+// Wallet resolution + read-only mode.
+//
+// Two signer modes (`COOKIE_SIGNER`):
+//   local    (default) — the key is read from COOKIE_PRIVATE_KEY and the process signs. When the key
+//                        is unset the server is read-only (money tools error, read tools work).
+//   external           — the process holds NO key. The wallet's public key comes from the request
+//                        (`x-cookie-wallet` header over HTTP) or COOKIE_WALLET_ADDRESS; money tools
+//                        run every check and stop at the signing step with `needs_signature`.
+// The secret is never logged or echoed in either mode.
 import fs from "node:fs";
 import path from "node:path";
 
-import { Keypair } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 
 import { COOKIE_RPC_URL } from "./config";
+import { requestContext } from "./context";
 import { CookieMcpError } from "./errors";
+import { ExternalSigner, LocalKeypairSigner, type TxSigner } from "./signer";
 
 // Accepts a keygen JSON byte array, a { secretKey: [...] } object, or a base58 secret.
 export function decodeSecret(raw: string): Uint8Array {
@@ -48,17 +57,24 @@ export function loadKeypair(input: string): Keypair {
   return Keypair.fromSecretKey(decodeSecret(raw));
 }
 
-let _loaded: { keypair: Keypair } | null | undefined;
+export type SignerMode = "local" | "external";
 
-export function getWallet(): { keypair: Keypair } | null {
-  if (_loaded !== undefined) return _loaded;
+/** `COOKIE_SIGNER`: "external" for wallet-signed (hosted) mode; anything else is local. */
+export function signerMode(): SignerMode {
+  return process.env.COOKIE_SIGNER?.trim().toLowerCase() === "external" ? "external" : "local";
+}
+
+let _local: LocalKeypairSigner | null | undefined;
+
+function localSigner(): LocalKeypairSigner | null {
+  if (_local !== undefined) return _local;
   const secret = process.env.COOKIE_PRIVATE_KEY?.trim();
   if (!secret) {
-    _loaded = null;
+    _local = null;
     return null;
   }
   try {
-    _loaded = { keypair: loadKeypair(secret) };
+    _local = new LocalKeypairSigner(loadKeypair(secret));
   } catch {
     // Deliberately omit the underlying error — it could echo secret material.
     throw new CookieMcpError(
@@ -66,22 +82,54 @@ export function getWallet(): { keypair: Keypair } | null {
       "provide a base58 secret, a solana-keygen JSON byte array, or a path to a keypair file",
     );
   }
-  return _loaded;
+  return _local;
 }
 
-export function requireWallet(): { keypair: Keypair } {
-  const w = getWallet();
-  if (!w) {
+/** The wallet an external signer acts for: the request's, else the process default. */
+function externalWalletAddress(): string | null {
+  const fromRequest = requestContext()?.wallet?.trim();
+  const addr = fromRequest || process.env.COOKIE_WALLET_ADDRESS?.trim() || "";
+  return addr || null;
+}
+
+function externalSigner(): ExternalSigner | null {
+  const addr = externalWalletAddress();
+  if (!addr) return null;
+  let pk: PublicKey;
+  try {
+    pk = new PublicKey(addr);
+  } catch {
     throw new CookieMcpError(
-      "no wallet configured — this tool needs a key",
-      "set COOKIE_PRIVATE_KEY (base58 / keygen JSON / path) to enable trade, transfer, and own-wallet reads",
+      "the wallet address for external signing is not a valid public key",
+      "pass a base58 Solana public key in the x-cookie-wallet header (HTTP) or COOKIE_WALLET_ADDRESS",
     );
   }
-  return w;
+  return new ExternalSigner(pk, requestContext()?.providedSignatures ?? []);
+}
+
+/** The signer for this request, or null in read-only mode. */
+export function getSigner(): TxSigner | null {
+  return signerMode() === "external" ? externalSigner() : localSigner();
+}
+
+export function requireSigner(): TxSigner {
+  const s = getSigner();
+  if (s) return s;
+  if (signerMode() === "external") {
+    throw new CookieMcpError(
+      "no wallet address for this request — this tool needs to know which wallet it acts for",
+      "external signer mode: send the wallet's public key in the x-cookie-wallet header (HTTP), or " +
+        "set COOKIE_WALLET_ADDRESS for a single-wallet setup",
+    );
+  }
+  throw new CookieMcpError(
+    "no wallet configured — this tool needs a key",
+    "set COOKIE_PRIVATE_KEY (base58 / keygen JSON / path) to enable trade, transfer, and own-wallet reads",
+  );
 }
 
 export function ownPublicKey(): string | null {
-  return getWallet()?.keypair.publicKey.toBase58() ?? null;
+  return getSigner()?.publicKey.toBase58() ?? null;
 }
 
 /**
@@ -89,11 +137,16 @@ export function ownPublicKey(): string | null {
  * or the RPC host is down — and it reports the key the *running process* booted with, which is the
  * only thing that matters and is not always what `.env` or a config file on disk now says.
  */
-export function walletInfo(): { wallet: string | null; readOnly: boolean; rpcUrl: string } {
+export function walletInfo(): {
+  wallet: string | null;
+  readOnly: boolean;
+  signer: SignerMode;
+  rpcUrl: string;
+} {
   const wallet = ownPublicKey();
-  return { wallet, readOnly: wallet === null, rpcUrl: COOKIE_RPC_URL };
+  return { wallet, readOnly: wallet === null, signer: signerMode(), rpcUrl: COOKIE_RPC_URL };
 }
 
 export function _resetWalletCache(): void {
-  _loaded = undefined;
+  _local = undefined;
 }

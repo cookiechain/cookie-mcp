@@ -6,13 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **External-signer (hosted) mode — cookie-mcp can now run behind a website without holding a key.**
+  `COOKIE_SIGNER=external` makes every money-moving tool run all of its checks (instruction decoding,
+  spend refusals, simulation) and then return `{ status: "needs_signature", transactionBase64, submit,
+blockhash, lastValidBlockHeight, ... }` instead of signing. The user's own wallet signs the bytes
+  unchanged and the new **`submit_signed_tx`** tool sends and confirms them on the named route (Cookie
+  RPC, Solana RPC, or Candy Shop); it refuses bytes that still lack a signature. `deploy_token`'s
+  launchpad login becomes a `kind: "message"` request answered via the new `loginSignature` argument.
+  The wallet a request acts for comes from the `x-cookie-wallet` header or `COOKIE_WALLET_ADDRESS`.
+- **Streamable HTTP transport:** `cookie-mcp --http [port]` (or `COOKIE_MCP_HTTP_PORT`). Stateless,
+  one fresh server per request with per-request wallet context, `/healthz`, CORS for browser apps.
+  Refuses to start with a local spending key unless `COOKIE_HTTP_ALLOW_LOCAL_KEY=1`.
+- **Library entry points:** `import { trade, ExternalSigner, submitSignedTransaction, ... } from
+"cookie-mcp"` and `import { createServer } from "cookie-mcp/server"`, with type declarations.
+- `get_wallet` now reports `signer: "local" | "external"`.
 - **`transfer` takes an optional `memo`**, written to the transaction through the SPL Memo program so
   apps that reconcile payments by memo (an invoice reference, an order id) can match the transfer.
   UTF-8, up to 566 bytes; an empty or oversized memo is refused before any RPC call. The memo is
   echoed in the result.
 
+### Changed
+
+- All signing goes through one `TxSigner` seam (`LocalKeypairSigner` is the default and behaves exactly
+  as before). BAMM liquidity ops now simulate before sending and confirm through the shared
+  "sent but unconfirmed — do not retry blindly" path instead of the Raydium SDK's own send.
+- The bridge dispatch is now simulated before it is signed (previously after), so external signers
+  see the same pre-flight refusals.
+
 ### Fixed
 
+- **`stake` / `unstake` failed in simulation with stake-pool error `0x9` (`InvalidFeeAccount`)** after
+  the pool manager rotated the manager fee account. The reserve, pool mint and manager fee account are
+  now read from the stake pool account at call time instead of being pinned; the mint is checked against
+  bCOOK. Validated on chain (stake 0.01 COOK, `5g75mb…`).
 - **`get_quote`, `trade` and the limit-order tools no longer assume 9 decimals for a mint the
   Cookiescan registry does not carry decimals for.** Decimals are now read from the SPL mint account
   on-chain when the registry lacks them, and a mint neither source knows is refused with a clear error

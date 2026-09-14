@@ -10,7 +10,7 @@ import { confirmSent } from "../confirm";
 import { CookieMcpError } from "../errors";
 import { rawToUi } from "../format";
 import { getConnection } from "../rpc";
-import { requireWallet } from "../wallet";
+import { requireSigner } from "../wallet";
 import { displayName, looksLikeName, nameError, normalizeName, type DomainsConfig } from "./names";
 import {
   configPda,
@@ -185,10 +185,10 @@ export async function sendDomainTx(
   what: string,
   translate: (logs: string[]) => string | null,
 ): Promise<string> {
-  const { keypair } = requireWallet();
+  const signer = requireSigner();
   const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
   tx.recentBlockhash = blockhash;
-  tx.feePayer = keypair.publicKey;
+  tx.feePayer = signer.publicKey;
 
   const sim = await conn.simulateTransaction(tx);
   if (sim.value.err) {
@@ -207,7 +207,12 @@ export async function sendDomainTx(
     );
   }
 
-  tx.sign(keypair);
+  await signer.signTransaction(tx, {
+    what,
+    blockhash,
+    lastValidBlockHeight,
+    submit: { via: "cookie-rpc" },
+  });
   const signature = await conn.sendRawTransaction(tx.serialize());
   return confirmSent(conn, { signature, blockhash, lastValidBlockHeight }, what);
 }
