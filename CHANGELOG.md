@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **External-signer (hosted) mode — cookie-mcp can now run behind a website without holding a key.**
   `COOKIE_SIGNER=external` makes every money-moving tool run all of its checks (instruction decoding,
   spend refusals, simulation) and then return `{ status: "needs_signature", transactionBase64, submit,
-  blockhash, lastValidBlockHeight, ... }` instead of signing. The user's own wallet signs the bytes
+blockhash, lastValidBlockHeight, ... }` instead of signing. The user's own wallet signs the bytes
   unchanged and the new **`submit_signed_tx`** tool sends and confirms them on the named route (Cookie
   RPC, Solana RPC, or Candy Shop); it refuses bytes that still lack a signature. `deploy_token`'s
   launchpad login becomes a `kind: "message"` request answered via the new `loginSignature` argument.
@@ -18,7 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   one fresh server per request with per-request wallet context, `/healthz`, CORS for browser apps.
   Refuses to start with a local spending key unless `COOKIE_HTTP_ALLOW_LOCAL_KEY=1`.
 - **Library entry points:** `import { trade, ExternalSigner, submitSignedTransaction, ... } from
-  "cookie-mcp"` and `import { createServer } from "cookie-mcp/server"`, with type declarations.
+"cookie-mcp"` and `import { createServer } from "cookie-mcp/server"`, with type declarations.
 - `get_wallet` now reports `signer: "local" | "external"`.
 - **`transfer` takes an optional `memo`**, written to the transaction through the SPL Memo program so
   apps that reconcile payments by memo (an invoice reference, an order id) can match the transfer.
