@@ -4,6 +4,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 # Unreleased
 
+### Added
+
+- **`transfer` takes an optional `memo`**, written to the transaction through the SPL Memo program so
+  apps that reconcile payments by memo (an invoice reference, an order id) can match the transfer.
+  UTF-8, up to 566 bytes; an empty or oversized memo is refused before any RPC call. The memo is
+  echoed in the result.
+
 ### Fixed
 
 - **`get_quote`, `trade` and the limit-order tools no longer assume 9 decimals for a mint the

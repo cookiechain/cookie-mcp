@@ -504,8 +504,10 @@ registerTool(
     title: "Transfer COOK or a token",
     description:
       "Send native COOK (omit `mint` or use the COOK mint) or an SPL/Token-2022 token to another " +
-      "wallet, creating the recipient's token account if needed. Simulates before sending. " +
-      "Requires COOKIE_PRIVATE_KEY.",
+      "wallet, creating the recipient's token account if needed. An optional `memo` is written to " +
+      "the transaction through the SPL Memo program, signed by this wallet — pass it when paying " +
+      "an invoice or payment request whose app matches transfers by memo. Simulates before " +
+      "sending. Requires COOKIE_PRIVATE_KEY.",
     inputSchema: {
       to: z
         .string()
@@ -518,9 +520,19 @@ registerTool(
         .optional()
         .describe("token mint to send; omit for native COOK"),
       amount: z.union([z.number().positive(), z.string()]).describe("UI amount to send"),
+      memo: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          "text recorded on-chain with the transfer via the SPL Memo program (UTF-8, up to 566 " +
+            "bytes), e.g. an invoice reference; omit for a plain transfer",
+        ),
     },
   },
-  tool(async (a: { to: string; mint?: string; amount: string | number }) => transfer(a)),
+  tool(async (a: { to: string; mint?: string; amount: string | number; memo?: string }) =>
+    transfer(a),
+  ),
 );
 
 registerTool(

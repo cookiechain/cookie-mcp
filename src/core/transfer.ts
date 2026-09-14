@@ -1,13 +1,13 @@
 // transfer — send native COOK (SystemProgram) or an SPL/Token-2022 token (idempotent ATA create +
-// transfer-checked). Same safety as trade: simulate-before-send on confirmed.
-import { PublicKey, Transaction, SystemProgram } from "@solana/web3.js";
+// transfer-checked), with an optional SPL Memo. Same safety as trade: simulate-before-send on confirmed.
+import { PublicKey, Transaction, SystemProgram, TransactionInstruction } from "@solana/web3.js";
 import {
   getAssociatedTokenAddressSync,
   createAssociatedTokenAccountIdempotentInstruction,
   createTransferCheckedInstruction,
 } from "@solana/spl-token";
 
-import { COOK_MINT, COOK_SYMBOL, COOK_DECIMALS, explorerTxUrl } from "./config";
+import { COOK_MINT, COOK_SYMBOL, COOK_DECIMALS, MEMO_PROGRAM_ID, explorerTxUrl } from "./config";
 import { confirmSent } from "./confirm";
 import { resolveWallet } from "./domains";
 import { CookieMcpError } from "./errors";
@@ -29,6 +29,36 @@ export function isNativeTransfer(mint?: string): boolean {
   return !mint || mint === COOK_MINT;
 }
 
+/**
+ * The longest memo a transfer carries, in UTF-8 bytes. The Memo program itself only requires valid
+ * UTF-8; the cap keeps the instruction well inside the transaction size limit next to a token
+ * transfer with an account create.
+ */
+export const MAX_MEMO_BYTES = 566;
+
+/**
+ * An SPL Memo instruction signed by the sender, so the memo is attributable to the wallet that paid.
+ * Payment-request and invoicing apps on Cookie Chain read the memo back out of the transaction to
+ * match a transfer to a request, which is why a transfer can carry one.
+ */
+export function memoInstruction(memo: string, signer: PublicKey): TransactionInstruction {
+  const data = Buffer.from(memo, "utf8");
+  if (memo.trim().length === 0) {
+    throw new CookieMcpError("memo is empty", "omit `memo`, or pass the text to record");
+  }
+  if (data.length > MAX_MEMO_BYTES) {
+    throw new CookieMcpError(
+      `memo is ${data.length} bytes; the limit is ${MAX_MEMO_BYTES}`,
+      "shorten the memo",
+    );
+  }
+  return new TransactionInstruction({
+    programId: new PublicKey(MEMO_PROGRAM_ID),
+    keys: [{ pubkey: signer, isSigner: true, isWritable: false }],
+    data,
+  });
+}
+
 export interface TransferResult {
   signature: string;
   explorerUrl: string;
@@ -38,16 +68,21 @@ export interface TransferResult {
   mint: string;
   symbol: string | null;
   amount: string;
+  /** The memo written alongside the transfer, when one was given. */
+  memo?: string;
 }
 
 export async function transfer(args: {
   to: string;
   mint?: string;
   amount: string | number;
+  memo?: string;
 }): Promise<TransferResult> {
   const { keypair } = requireWallet();
   const conn = getConnection();
   const from = keypair.publicKey;
+  // Built first so a bad memo fails before any RPC round trip.
+  const memoIx = args.memo !== undefined ? memoInstruction(args.memo, from) : null;
   // `to` may be a base58 address or a `.cook` name; an address costs no extra round trip.
   const recipient = await resolveWallet(args.to, "recipient");
   const to = recipient.pubkey;
@@ -113,6 +148,8 @@ export async function transfer(args: {
     );
   }
 
+  if (memoIx) tx.add(memoIx);
+
   const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
   tx.recentBlockhash = blockhash;
   tx.feePayer = from;
@@ -147,5 +184,6 @@ export async function transfer(args: {
     amount: isNative
       ? rawToUi(uiToRaw(args.amount, COOK_DECIMALS), COOK_DECIMALS)
       : String(args.amount),
+    ...(args.memo !== undefined ? { memo: args.memo } : {}),
   };
 }

@@ -75,6 +75,9 @@ export const COOK_MINT = "So11111111111111111111111111111111111111112";
 export const COOK_DECIMALS = 9;
 export const COOK_SYMBOL = "COOK";
 
+/** SPL Memo v2 — the program a `transfer` memo is written through. */
+export const MEMO_PROGRAM_ID = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
+
 export const PROGRAM_IDS = {
   cookieboxDamm: "DAMMjDCEFTDkt7ywazZS8GoaLtjb3HaJo3pLbf64xrPY",
   cookieboxClmm: "CLMMmWqTtyNSomqXP3kETJy2SGKPdr31USsm4GfbLyKs",

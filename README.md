@@ -185,8 +185,9 @@ APY / fees), launchpad reads `get_launchpad_pools` / `get_launchpad_token` /
 `get_wallet_nfts`, `get_nft_offers`, `get_nft_market_stats`, and `.cook` name reads
 `resolve_domain` / `get_owned_domains` / `get_domain_listings`.
 
-**Money** (need `COOKIE_PRIVATE_KEY`): `trade` (swap via Cookiebox or Cookiescan), `transfer` (COOK or any token),
-`stake` / `unstake` (COOK ⇄ bCOOK liquid staking).
+**Money** (need `COOKIE_PRIVATE_KEY`): `trade` (swap via Cookiebox or Cookiescan), `transfer` (COOK or any token,
+with an optional `memo` written through the SPL Memo program — the way to pay an invoice or payment
+request that matches transfers by memo), `stake` / `unstake` (COOK ⇄ bCOOK liquid staking).
 
 **Limit orders** ([Cookiebox](https://cookiebox.app/trade) limit-order escrow, program `L1M1tk…`):
 `get_limit_orders` lists a wallet's resting orders with no key (yours, or any address / `.cook` name);
