@@ -5,7 +5,7 @@ import { PublicKey } from "@solana/web3.js";
 
 import { CookieMcpError } from "../errors";
 import { getConnection } from "../rpc";
-import { requireWallet } from "../wallet";
+import { requireSigner } from "../wallet";
 import {
   createPool as createDammPool,
   addLiquidity as addDammLiquidity,
@@ -73,12 +73,12 @@ export async function addLiquidity(args: {
 }): Promise<AnyLpResult> {
   const venue = await detectVenue(args.poolPk);
   if (venue === "cookieswap-bamm") {
-    const { keypair } = requireWallet();
-    return addBammLiquidity(getConnection(), keypair, args);
+    const signer = requireSigner();
+    return addBammLiquidity(getConnection(), signer, args);
   }
   if (venue === "cookiebox-clmm") {
-    const { keypair } = requireWallet();
-    return addClmmLiquidity(getConnection(), keypair, args);
+    const signer = requireSigner();
+    return addClmmLiquidity(getConnection(), signer, args);
   }
   return addDammLiquidity(args);
 }
@@ -89,12 +89,12 @@ export async function removeLiquidity(args: {
 }): Promise<AnyLpResult> {
   const venue = await detectVenue(args.poolPk);
   if (venue === "cookieswap-bamm") {
-    const { keypair } = requireWallet();
-    return removeBammLiquidity(getConnection(), keypair, args);
+    const signer = requireSigner();
+    return removeBammLiquidity(getConnection(), signer, args);
   }
   if (venue === "cookiebox-clmm") {
-    const { keypair } = requireWallet();
-    return removeClmmLiquidity(getConnection(), keypair, args);
+    const signer = requireSigner();
+    return removeClmmLiquidity(getConnection(), signer, args);
   }
   return removeDammLiquidity(args);
 }
@@ -108,8 +108,8 @@ export async function lockLiquidity(args: { poolPk: string }): Promise<AnyLpResu
     );
   }
   if (venue === "cookiebox-clmm") {
-    const { keypair } = requireWallet();
-    return lockClmmLiquidity(getConnection(), keypair, args);
+    const signer = requireSigner();
+    return lockClmmLiquidity(getConnection(), signer, args);
   }
   return lockDammLiquidity(args);
 }
@@ -117,12 +117,12 @@ export async function lockLiquidity(args: { poolPk: string }): Promise<AnyLpResu
 export async function claimFees(args: { poolPk: string }): Promise<AnyLpResult> {
   const venue = await detectVenue(args.poolPk);
   if (venue === "cookieswap-bamm") {
-    const { keypair } = requireWallet();
-    return claimBammFees(getConnection(), keypair, args);
+    const signer = requireSigner();
+    return claimBammFees(getConnection(), signer, args);
   }
   if (venue === "cookiebox-clmm") {
-    const { keypair } = requireWallet();
-    return claimClmmFees(getConnection(), keypair, args);
+    const signer = requireSigner();
+    return claimClmmFees(getConnection(), signer, args);
   }
   return claimDammFees(args);
 }
@@ -139,12 +139,12 @@ export async function createPool(args: {
   ammConfig?: string;
 }): Promise<AnyLpResult> {
   if (args.dex === "cookieswap-bamm") {
-    const { keypair } = requireWallet();
-    return createBammPool(getConnection(), keypair, args);
+    const signer = requireSigner();
+    return createBammPool(getConnection(), signer, args);
   }
   if (args.dex === "cookiebox-clmm") {
-    const { keypair } = requireWallet();
-    return createClmmPool(getConnection(), keypair, args);
+    const signer = requireSigner();
+    return createClmmPool(getConnection(), signer, args);
   }
   return createDammPool(args);
 }

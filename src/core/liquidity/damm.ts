@@ -11,7 +11,7 @@ import BN from "bn.js";
 import { explorerTxUrl } from "../config";
 import { CookieMcpError } from "../errors";
 import { getConnection } from "../rpc";
-import { requireWallet } from "../wallet";
+import { requireSigner } from "../wallet";
 import { uiToRaw } from "../format";
 import { signSendConfirm, LP_NOTE } from "./send";
 import {
@@ -111,10 +111,10 @@ export async function addLiquidity(args: {
   amountA?: string | number;
   amountB?: string | number;
 }): Promise<LpResult> {
-  const { keypair } = requireWallet();
+  const signer = requireSigner();
   const conn = getConnection();
   const ctx = await loadPool(conn, args.poolPk);
-  const owner = keypair.publicKey;
+  const owner = signer.publicKey;
 
   if (args.amountA == null && args.amountB == null) {
     throw new CookieMcpError(
@@ -153,7 +153,7 @@ export async function addLiquidity(args: {
     tokenBAmountThreshold: new BN(maxB.toString()),
   });
 
-  const signature = await signSendConfirm(conn, tx, [keypair, positionNft], "add_liquidity");
+  const signature = await signSendConfirm(conn, tx, signer, [positionNft], "add_liquidity");
   return {
     signature,
     pool: ctx.pool.toBase58(),
@@ -175,16 +175,16 @@ async function firstPosition(ctx: PoolCtx, owner: PublicKey) {
 }
 
 export async function removeLiquidity(args: { poolPk: string; bps?: number }): Promise<LpResult> {
-  const { keypair } = requireWallet();
+  const signer = requireSigner();
   const conn = getConnection();
   const ctx = await loadPool(conn, args.poolPk);
-  const pos = await firstPosition(ctx, keypair.publicKey);
+  const pos = await firstPosition(ctx, signer.publicKey);
   const bps = args.bps ?? 10_000;
   const unlocked = pos.positionState.unlockedLiquidity;
 
   const tx = await buildRemoveLiquidityTx({
     deps: ctx.deps,
-    owner: keypair.publicKey,
+    owner: signer.publicKey,
     pool: ctx.pool,
     position: pos.position,
     positionNftAccount: pos.positionNftAccount,
@@ -197,7 +197,7 @@ export async function removeLiquidity(args: { poolPk: string; bps?: number }): P
     liquidityDelta: bps >= 10_000 ? null : unlocked.mul(new BN(bps)).div(new BN(10_000)),
   });
 
-  const signature = await signSendConfirm(conn, tx, [keypair], "remove_liquidity");
+  const signature = await signSendConfirm(conn, tx, signer, [], "remove_liquidity");
   return {
     signature,
     pool: ctx.pool.toBase58(),
@@ -207,14 +207,14 @@ export async function removeLiquidity(args: { poolPk: string; bps?: number }): P
 }
 
 export async function claimFees(args: { poolPk: string }): Promise<LpResult> {
-  const { keypair } = requireWallet();
+  const signer = requireSigner();
   const conn = getConnection();
   const ctx = await loadPool(conn, args.poolPk);
-  const pos = await firstPosition(ctx, keypair.publicKey);
+  const pos = await firstPosition(ctx, signer.publicKey);
 
   const tx = await buildClaimPositionFeeTx({
     deps: ctx.deps,
-    owner: keypair.publicKey,
+    owner: signer.publicKey,
     pool: ctx.pool,
     position: pos.position,
     positionNftAccount: pos.positionNftAccount,
@@ -226,7 +226,7 @@ export async function claimFees(args: { poolPk: string }): Promise<LpResult> {
     tokenBProgram: ctx.bProgram,
   });
 
-  const signature = await signSendConfirm(conn, tx, [keypair], "claim_fees");
+  const signature = await signSendConfirm(conn, tx, signer, [], "claim_fees");
   return {
     signature,
     pool: ctx.pool.toBase58(),
@@ -236,21 +236,21 @@ export async function claimFees(args: { poolPk: string }): Promise<LpResult> {
 }
 
 export async function lockLiquidity(args: { poolPk: string }): Promise<LpResult> {
-  const { keypair } = requireWallet();
+  const signer = requireSigner();
   const conn = getConnection();
   const ctx = await loadPool(conn, args.poolPk);
-  const pos = await firstPosition(ctx, keypair.publicKey);
+  const pos = await firstPosition(ctx, signer.publicKey);
 
   const tx = await buildLockPositionTx({
     deps: ctx.deps,
-    owner: keypair.publicKey,
+    owner: signer.publicKey,
     pool: ctx.pool,
     position: pos.position,
     positionNftAccount: pos.positionNftAccount,
     unlockedLiquidity: pos.positionState.unlockedLiquidity,
   });
 
-  const signature = await signSendConfirm(conn, tx, [keypair], "lock_liquidity");
+  const signature = await signSendConfirm(conn, tx, signer, [], "lock_liquidity");
   return {
     signature,
     pool: ctx.pool.toBase58(),
@@ -266,9 +266,9 @@ export async function createPool(args: {
   amountB: string | number;
   config?: string;
 }): Promise<LpResult> {
-  const { keypair } = requireWallet();
+  const signer = requireSigner();
   const conn = getConnection();
-  const owner = keypair.publicKey;
+  const owner = signer.publicKey;
   const deps = buildCpAmmDeps(conn);
 
   let configPk: PublicKey;
@@ -336,7 +336,7 @@ export async function createPool(args: {
     tokenBAmount: b.raw,
   });
 
-  const signature = await signSendConfirm(conn, tx, [keypair, positionNft], "create_pool");
+  const signature = await signSendConfirm(conn, tx, signer, [positionNft], "create_pool");
   return {
     signature,
     pool: derivePoolAddress(configPk, a.mint, b.mint).toBase58(),

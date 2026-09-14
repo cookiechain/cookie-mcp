@@ -29,7 +29,7 @@ import {
 import { CookieMcpError } from "../errors";
 import { rawToUi, uiToRaw } from "../format";
 import { getConnection } from "../rpc";
-import { getWallet, requireWallet } from "../wallet";
+import { getSigner, requireSigner } from "../wallet";
 import {
   ACCOUNT_DISCRIMINATORS,
   clearPrimaryDomainIx,
@@ -459,14 +459,14 @@ function bs58Discriminator(disc: readonly number[]): string {
 }
 
 function parseOwnPubkey(): PublicKey {
-  const w = getWallet();
+  const w = getSigner();
   if (!w) {
     throw new CookieMcpError(
       "no wallet address provided and no wallet configured",
       "pass a `wallet` address or .cook name, or set COOKIE_PRIVATE_KEY",
     );
   }
-  return w.keypair.publicKey;
+  return w.publicKey;
 }
 
 // --- Writes ----------------------------------------------------------------------------------------
@@ -504,7 +504,7 @@ export async function registerDomain(args: {
   maxPriceCook?: string | number;
   setPrimary?: boolean;
 }): Promise<RegisterDomainResult> {
-  const { keypair } = requireWallet();
+  const signer = requireSigner();
   const label = requireValidName(args.name);
   const conn = getConnection();
 
@@ -523,12 +523,12 @@ export async function registerDomain(args: {
   const tx = new Transaction().add(
     registerDomainIx({
       label,
-      payer: keypair.publicKey,
+      payer: signer.publicKey,
       feeReceiver: new PublicKey(cfg.feeReceiver),
     }),
   );
   if (args.setPrimary) {
-    tx.add(setPrimaryDomainIx({ label, owner: keypair.publicKey }));
+    tx.add(setPrimaryDomainIx({ label, owner: signer.publicKey }));
   }
 
   const signature = await sendRegistryTx(conn, tx, "domain registration", label);
@@ -537,7 +537,7 @@ export async function registerDomain(args: {
     explorerUrl: explorerTxUrl(signature),
     name: displayName(label),
     account: domainPda(label).toBase58(),
-    owner: keypair.publicKey.toBase58(),
+    owner: signer.publicKey.toBase58(),
     paid: `${price.priceCook} ${COOK_SYMBOL}`,
     tier: price.tier,
     primarySet: Boolean(args.setPrimary),
@@ -566,9 +566,9 @@ export async function setPrimaryDomain(args: {
   name?: string;
   clear?: boolean;
 }): Promise<PrimaryDomainResult> {
-  const { keypair } = requireWallet();
+  const signer = requireSigner();
   const conn = getConnection();
-  const owner = keypair.publicKey;
+  const owner = signer.publicKey;
 
   if (args.clear) {
     const current = await fetchPrimary(conn, owner);
@@ -644,10 +644,10 @@ export async function transferDomain(args: {
   name: string;
   to: string;
 }): Promise<TransferDomainResult> {
-  const { keypair } = requireWallet();
+  const signer = requireSigner();
   const label = requireValidName(args.name);
   const conn = getConnection();
-  const owner = keypair.publicKey;
+  const owner = signer.publicKey;
 
   const [domain, recipient] = await Promise.all([
     fetchDomain(conn, label),
@@ -715,7 +715,7 @@ export async function updateDomain(args: {
   resolver?: string;
   metadata?: string;
 }): Promise<UpdateDomainResult> {
-  const { keypair } = requireWallet();
+  const signer = requireSigner();
   const label = requireValidName(args.name);
   if (args.resolver === undefined && args.metadata === undefined) {
     throw new CookieMcpError(
@@ -724,7 +724,7 @@ export async function updateDomain(args: {
     );
   }
   const conn = getConnection();
-  const owner = keypair.publicKey;
+  const owner = signer.publicKey;
 
   const domain = await fetchDomain(conn, label);
   if (!domain) {

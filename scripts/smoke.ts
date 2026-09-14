@@ -15,6 +15,7 @@ import {
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const EXPECTED_TOOLS = [
+  "submit_signed_tx",
   "chain_health",
   "get_pools",
   "get_token_info",

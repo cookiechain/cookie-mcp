@@ -27,15 +27,17 @@ import { COOK_DECIMALS, COOK_SYMBOL, explorerTxUrl, explorerAddressUrl } from ".
 import { confirmSent } from "./confirm";
 import { CookieMcpError } from "./errors";
 import { getConnection } from "./rpc";
-import { requireWallet } from "./wallet";
+import { requireSigner } from "./wallet";
+import { signWithCosigners, type TxSigner } from "./signer";
 import { rawToUi, uiToRaw } from "./format";
 
 // --- Cookie Chain bCOOK stake pool (canonical SPL Stake Pool program) ---------------------------
 export const STAKE_POOL_PROGRAM = new PublicKey("GZgs5uREPp6BvDt8eysmhavQPAHBAtjePgV4zfhgd9pH");
 export const STAKE_POOL = new PublicKey("GxbNKNYdtNXQkhDkpHdLDAMX64GxaECgANqdfp6cUGH4");
 export const BCOOK_MINT = new PublicKey("EkPafx58mgwkEnGwo62jXhXDAdJ37Z8G8MFBRPsr9uhz");
-const RESERVE_STAKE = new PublicKey("GAw1vRQ8R3ohDsSgGZV58dc32W7jYhHtc8DzuiVdvm8F");
-const MANAGER_FEE = new PublicKey("6ay8hjir4VZJ38x9sfL44Su8bvDEXmc5FrNyErHyv7G8");
+// The reserve and the manager fee account are READ FROM THE POOL at call time, never pinned: the
+// manager rotated the fee account once already (2026-09-14, `6ay8hjir…` → `6Fzdzi3L…`) and a stale
+// constant makes every deposit/withdrawal fail in simulation with `InvalidFeeAccount` (0x9).
 
 export const BCOOK_DECIMALS = 9;
 export const DEPOSIT_FEE_BPS = 50; // 0.5% on deposit
@@ -52,7 +54,12 @@ export const WITHDRAW_AUTHORITY = PublicKey.findProgramAddressSync(
   STAKE_POOL_PROGRAM,
 )[0];
 
-// SPL StakePool account layout offsets (accountType u8, then 9 pubkeys + a bump byte, then two u64s).
+// SPL StakePool account layout: accountType u8; manager, staker, stake_deposit_authority (32 each);
+// stake_withdraw_bump_seed u8; validator_list, reserve_stake, pool_mint, manager_fee_account,
+// token_program_id (32 each); then total_lamports and pool_token_supply (u64 LE).
+const OFF_RESERVE_STAKE = 130;
+const OFF_POOL_MINT = 162;
+const OFF_MANAGER_FEE = 194;
 const OFF_TOTAL_LAMPORTS = 258;
 const OFF_POOL_TOKEN_SUPPLY = 266;
 
@@ -67,11 +74,15 @@ export function encodeStakeIxData(tag: number, amount: bigint): Buffer {
   return Buffer.concat([Buffer.from([tag]), u64LE(amount)]);
 }
 
-interface StakePoolState {
+export interface StakePoolState {
   totalLamports: bigint;
   poolTokenSupply: bigint;
   /** COOK per bCOOK; only ever rises. */
   rate: number;
+  /** Program-scoped accounts the deposit/withdraw instructions must name — from the pool itself. */
+  reserveStake: PublicKey;
+  poolMint: PublicKey;
+  managerFeeAccount: PublicKey;
 }
 
 /** COOK per bCOOK from the pool's two u64s (1 when the pool is empty). */
@@ -89,7 +100,15 @@ export function decodeStakePool(data: Buffer): StakePoolState {
   }
   const totalLamports = data.readBigUInt64LE(OFF_TOTAL_LAMPORTS);
   const poolTokenSupply = data.readBigUInt64LE(OFF_POOL_TOKEN_SUPPLY);
-  return { totalLamports, poolTokenSupply, rate: poolRate(totalLamports, poolTokenSupply) };
+  const pk = (off: number) => new PublicKey(data.subarray(off, off + 32));
+  return {
+    totalLamports,
+    poolTokenSupply,
+    rate: poolRate(totalLamports, poolTokenSupply),
+    reserveStake: pk(OFF_RESERVE_STAKE),
+    poolMint: pk(OFF_POOL_MINT),
+    managerFeeAccount: pk(OFF_MANAGER_FEE),
+  };
 }
 
 /** bCOOK received for staking `cookUi` COOK, after the deposit fee. */
@@ -110,7 +129,16 @@ async function fetchStakePool(conn: Connection): Promise<StakePoolState> {
       "the stake pool account was not found or has an unexpected layout; retry",
     );
   }
-  return decodeStakePool(acc.data);
+  const pool = decodeStakePool(acc.data);
+  // The one thing we do pin is the mint: if the pool at this address ever minted something else, no
+  // amount of reading accounts from it would make a deposit safe.
+  if (!pool.poolMint.equals(BCOOK_MINT)) {
+    throw new CookieMcpError(
+      "the bCOOK stake pool's mint does not match the expected bCOOK mint",
+      "refusing to stake against an unexpected pool; update cookie-mcp if bCOOK migrated",
+    );
+  }
+  return pool;
 }
 
 // APY from the public hourly rate-history (JSONL) — best-effort; null if unreachable.
@@ -171,12 +199,13 @@ export async function getStakeInfo(): Promise<StakeInfo> {
 async function signSendConfirm(
   conn: Connection,
   tx: Transaction,
-  signers: Keypair[],
+  signer: TxSigner,
+  cosigners: Keypair[],
   what: string,
 ): Promise<string> {
   const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
   tx.recentBlockhash = blockhash;
-  tx.feePayer = signers[0]!.publicKey;
+  tx.feePayer = signer.publicKey;
   const sim = await conn.simulateTransaction(tx);
   if (sim.value.err) {
     const logs = sim.value.logs ?? [];
@@ -192,7 +221,12 @@ async function signSendConfirm(
       "check your balance and the amount; the transaction was not sent",
     );
   }
-  tx.sign(...signers);
+  await signWithCosigners(signer, tx, cosigners, {
+    what,
+    blockhash,
+    lastValidBlockHeight,
+    submit: { via: "cookie-rpc" },
+  });
   const signature = await conn.sendRawTransaction(tx.serialize());
   return confirmSent(conn, { signature, blockhash, lastValidBlockHeight }, what);
 }
@@ -208,8 +242,8 @@ export interface StakeResult {
 // DepositSol (instruction 14): funds an ephemeral system account with the deposit, which the pool
 // program debits — receives `amount × (1 − depositFee) / rate` bCOOK.
 export async function stake(args: { amount: string | number }): Promise<StakeResult> {
-  const { keypair } = requireWallet();
-  const owner = keypair.publicKey;
+  const signer = requireSigner();
+  const owner = signer.publicKey;
   const conn = getConnection();
 
   const amountUi = Number(args.amount);
@@ -232,10 +266,10 @@ export async function stake(args: { amount: string | number }): Promise<StakeRes
     keys: [
       { pubkey: STAKE_POOL, isSigner: false, isWritable: true },
       { pubkey: WITHDRAW_AUTHORITY, isSigner: false, isWritable: false },
-      { pubkey: RESERVE_STAKE, isSigner: false, isWritable: true },
+      { pubkey: pool.reserveStake, isSigner: false, isWritable: true },
       { pubkey: ephemeral.publicKey, isSigner: true, isWritable: true }, // funding account
       { pubkey: destAta, isSigner: false, isWritable: true },
-      { pubkey: MANAGER_FEE, isSigner: false, isWritable: true },
+      { pubkey: pool.managerFeeAccount, isSigner: false, isWritable: true },
       { pubkey: destAta, isSigner: false, isWritable: true }, // referral = self
       { pubkey: BCOOK_MINT, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
@@ -249,7 +283,7 @@ export async function stake(args: { amount: string | number }): Promise<StakeRes
     depositIx,
   );
 
-  const signature = await signSendConfirm(conn, tx, [keypair, ephemeral], "stake");
+  const signature = await signSendConfirm(conn, tx, signer, [ephemeral], "stake");
   const estBcook = estimateBcookOut(amountUi, pool.rate);
   return {
     signature,
@@ -271,8 +305,8 @@ export interface UnstakeResult {
 // WithdrawSol (instruction 16): burns bCOOK and pays COOK from the reserve immediately —
 // `poolTokens × rate × (1 − withdrawFee)`. Approves an ephemeral transfer authority for the burn.
 export async function unstake(args: { amount: string | number }): Promise<UnstakeResult> {
-  const { keypair } = requireWallet();
-  const owner = keypair.publicKey;
+  const signer = requireSigner();
+  const owner = signer.publicKey;
   const conn = getConnection();
 
   const amountUi = Number(args.amount);
@@ -297,9 +331,9 @@ export async function unstake(args: { amount: string | number }): Promise<Unstak
       { pubkey: WITHDRAW_AUTHORITY, isSigner: false, isWritable: false },
       { pubkey: transferAuthority.publicKey, isSigner: true, isWritable: false },
       { pubkey: sourceAta, isSigner: false, isWritable: true },
-      { pubkey: RESERVE_STAKE, isSigner: false, isWritable: true },
+      { pubkey: pool.reserveStake, isSigner: false, isWritable: true },
       { pubkey: owner, isSigner: false, isWritable: true }, // destination = wallet
-      { pubkey: MANAGER_FEE, isSigner: false, isWritable: true },
+      { pubkey: pool.managerFeeAccount, isSigner: false, isWritable: true },
       { pubkey: BCOOK_MINT, isSigner: false, isWritable: true },
       { pubkey: SYSVAR_CLOCK_PUBKEY, isSigner: false, isWritable: false },
       { pubkey: SYSVAR_STAKE_HISTORY_PUBKEY, isSigner: false, isWritable: false },
@@ -313,7 +347,7 @@ export async function unstake(args: { amount: string | number }): Promise<Unstak
     withdrawIx,
   );
 
-  const signature = await signSendConfirm(conn, tx, [keypair, transferAuthority], "unstake");
+  const signature = await signSendConfirm(conn, tx, signer, [transferAuthority], "unstake");
   const estCook = estimateCookOut(amountUi, pool.rate);
   return {
     signature,

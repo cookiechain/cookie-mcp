@@ -25,7 +25,6 @@ import {
   SystemInstruction,
   SystemProgram,
   VersionedTransaction,
-  type Keypair,
   type MessageV0,
 } from "@solana/web3.js";
 
@@ -46,7 +45,8 @@ import { fetchJson } from "./http";
 import { noRouteError } from "./launchpad";
 import { getConnection } from "./rpc";
 import { resolveMeta, type TokenMeta } from "./trade";
-import { ownPublicKey, requireWallet } from "./wallet";
+import { ownPublicKey, requireSigner } from "./wallet";
+import type { TxSigner } from "./signer";
 
 export const LIMIT_ORDER_PROGRAM_ID = new PublicKey(PROGRAM_IDS.limitOrder);
 
@@ -681,9 +681,10 @@ export async function getLimitOrders(args: { owner?: string }): Promise<{
 
 async function simulateSignSendConfirm(
   tx: VersionedTransaction,
-  keypair: Keypair,
+  signer: TxSigner,
   built: { blockhash: string; lastValidBlockHeight: number },
   what: string,
+  summary?: Record<string, unknown>,
 ): Promise<{ signature: string; confirmed: boolean }> {
   const conn = getConnection();
   const sim = await conn.simulateTransaction(tx, {
@@ -698,7 +699,13 @@ async function simulateSignSendConfirm(
       `${what} simulation`,
     );
   }
-  tx.sign([keypair]);
+  await signer.signTransaction(tx, {
+    what,
+    blockhash: built.blockhash,
+    lastValidBlockHeight: built.lastValidBlockHeight,
+    submit: { via: "cookie-rpc" },
+    ...(summary ? { summary } : {}),
+  });
   const signature = await conn.sendRawTransaction(Buffer.from(tx.serialize()));
   try {
     const conf = await conn.confirmTransaction({ signature, ...built }, "confirmed");
@@ -758,8 +765,8 @@ export async function placeLimitOrder(args: {
   unwrapSol?: boolean;
   skipMarketCheck?: boolean;
 }): Promise<PlaceLimitOrderResult> {
-  const { keypair } = requireWallet();
-  const owner = keypair.publicKey;
+  const signer = requireSigner();
+  const owner = signer.publicKey;
   const kind: LimitOrderKind = args.kind ?? "limit";
   if (args.inputMint === args.outputMint) {
     throw new CookieMcpError("inputMint and outputMint are the same", "pick two different tokens");
@@ -902,7 +909,13 @@ export async function placeLimitOrder(args: {
     order,
   });
 
-  const { signature } = await simulateSignSendConfirm(tx, keypair, built, "limit-order placement");
+  const { signature } = await simulateSignSendConfirm(tx, signer, built, "limit-order placement", {
+    kind,
+    inputMint: args.inputMint,
+    outputMint: args.outputMint,
+    amount: String(args.amount),
+    order,
+  });
 
   const feeBps = built.makerFeeBps;
   const shown = kind === "stop" ? triggerTakingAmount : takingAmount;
@@ -948,8 +961,8 @@ export async function cancelLimitOrder(args: {
   order: string;
   unwrapSol?: boolean;
 }): Promise<CancelLimitOrderResult> {
-  const { keypair } = requireWallet();
-  const owner = keypair.publicKey;
+  const signer = requireSigner();
+  const owner = signer.publicKey;
   let order: PublicKey;
   try {
     order = new PublicKey(args.order);
@@ -989,7 +1002,9 @@ export async function cancelLimitOrder(args: {
   const tx = VersionedTransaction.deserialize(Buffer.from(built.transactionBase64, "base64"));
   assertCancelTxTrustworthy(tx, { owner, order });
 
-  const { signature } = await simulateSignSendConfirm(tx, keypair, built, "limit-order cancel");
+  const { signature } = await simulateSignSendConfirm(tx, signer, built, "limit-order cancel", {
+    order,
+  });
   const { input } = await resolveMeta(mine.inputMint, mine.outputMint);
   return {
     signature,

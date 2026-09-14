@@ -13,7 +13,7 @@ import { resolveWallet } from "./domains";
 import { CookieMcpError } from "./errors";
 import { fetchToken } from "./cookiescan";
 import { getConnection } from "./rpc";
-import { requireWallet } from "./wallet";
+import { requireSigner } from "./wallet";
 import { rawToUi, uiToRaw } from "./format";
 
 export function parsePubkey(addr: string, label: string): PublicKey {
@@ -45,9 +45,9 @@ export async function transfer(args: {
   mint?: string;
   amount: string | number;
 }): Promise<TransferResult> {
-  const { keypair } = requireWallet();
+  const signer = requireSigner();
   const conn = getConnection();
-  const from = keypair.publicKey;
+  const from = signer.publicKey;
   // `to` may be a base58 address or a `.cook` name; an address costs no extra round trip.
   const recipient = await resolveWallet(args.to, "recipient");
   const to = recipient.pubkey;
@@ -133,7 +133,19 @@ export async function transfer(args: {
     );
   }
 
-  tx.sign(keypair);
+  await signer.signTransaction(tx, {
+    what: "transfer",
+    blockhash,
+    lastValidBlockHeight,
+    submit: { via: "cookie-rpc" },
+    summary: {
+      to: to.toBase58(),
+      ...(recipient.name ? { toName: recipient.name } : {}),
+      mint,
+      symbol,
+      amount: String(args.amount),
+    },
+  });
   const signature = await conn.sendRawTransaction(tx.serialize());
   await confirmSent(conn, { signature, blockhash, lastValidBlockHeight }, "transfer");
 

@@ -5,20 +5,24 @@ import { Keypair, Transaction, type Connection, type Signer } from "@solana/web3
 
 import { confirmSent } from "../confirm";
 import { CookieMcpError } from "../errors";
+import { signWithCosigners, type TxSigner } from "../signer";
 
 /**
- * Sign, simulate, send, and confirm a legacy Transaction. Signer[0] is the fee payer. `what` names the
- * action for the "sent but unconfirmed" warning — pass it so a retry-unsafe timeout is unambiguous.
+ * Simulate, sign, send, and confirm a legacy Transaction. `signer` is the wallet and fee payer;
+ * `cosigners` are ephemeral keypairs (position mints, transfer authorities) that sign first. `what`
+ * names the action for the "sent but unconfirmed" warning — pass it so a retry-unsafe timeout is
+ * unambiguous. With an external signer this stops after the simulation with `SignatureRequired`.
  */
 export async function signSendConfirm(
   conn: Connection,
   tx: Transaction,
-  signers: Signer[],
+  signer: TxSigner,
+  cosigners: Signer[],
   what = "transaction",
 ): Promise<string> {
   const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
   tx.recentBlockhash = blockhash;
-  tx.feePayer = signers[0]!.publicKey;
+  tx.feePayer = signer.publicKey;
   const sim = await conn.simulateTransaction(tx);
   if (sim.value.err) {
     const logs = sim.value.logs ?? [];
@@ -34,7 +38,12 @@ export async function signSendConfirm(
       "check your balances and the pool state; the transaction was not sent",
     );
   }
-  tx.sign(...(signers as Keypair[]));
+  await signWithCosigners(signer, tx, cosigners as Keypair[], {
+    what,
+    blockhash,
+    lastValidBlockHeight,
+    submit: { via: "cookie-rpc" },
+  });
   const signature = await conn.sendRawTransaction(tx.serialize());
   return confirmSent(conn, { signature, blockhash, lastValidBlockHeight }, what);
 }

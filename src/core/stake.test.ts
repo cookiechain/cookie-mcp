@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { Keypair } from "@solana/web3.js";
 
 import {
   encodeStakeIxData,
@@ -13,11 +14,18 @@ import {
   WITHDRAW_FEE_BPS,
 } from "./stake";
 
-// SPL StakePool account: accountType u8 (1 = StakePool) at 0; totalLamports u64 LE at 258;
-// poolTokenSupply u64 LE at 266. Enough bytes to reach the two u64s.
+const RESERVE = Keypair.generate().publicKey;
+const MINT = Keypair.generate().publicKey;
+const FEE = Keypair.generate().publicKey;
+
+// SPL StakePool account: accountType u8 (1 = StakePool) at 0; reserve_stake at 130, pool_mint at
+// 162, manager_fee_account at 194; totalLamports u64 LE at 258; poolTokenSupply u64 LE at 266.
 function poolAccount(totalLamports: bigint, poolTokenSupply: bigint, type = 1): Buffer {
   const buf = Buffer.alloc(266 + 8);
   buf[0] = type;
+  RESERVE.toBuffer().copy(buf, 130);
+  MINT.toBuffer().copy(buf, 162);
+  FEE.toBuffer().copy(buf, 194);
   buf.writeBigUInt64LE(totalLamports, 258);
   buf.writeBigUInt64LE(poolTokenSupply, 266);
   return buf;
@@ -44,6 +52,13 @@ describe("decodeStakePool", () => {
     expect(s.totalLamports).toBe(3_000_000_000n);
     expect(s.poolTokenSupply).toBe(2_000_000_000n);
     expect(s.rate).toBeCloseTo(1.5, 12);
+  });
+
+  it("reads the reserve, mint and manager fee account from the pool (never pinned)", () => {
+    const s = decodeStakePool(poolAccount(1n, 1n));
+    expect(s.reserveStake.equals(RESERVE)).toBe(true);
+    expect(s.poolMint.equals(MINT)).toBe(true);
+    expect(s.managerFeeAccount.equals(FEE)).toBe(true);
   });
 
   it("rejects a non-StakePool account type", () => {
