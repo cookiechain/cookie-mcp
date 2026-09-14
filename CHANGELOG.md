@@ -20,6 +20,10 @@ blockhash, lastValidBlockHeight, ... }` instead of signing. The user's own walle
 - **Library entry points:** `import { trade, ExternalSigner, submitSignedTransaction, ... } from
 "cookie-mcp"` and `import { createServer } from "cookie-mcp/server"`, with type declarations.
 - `get_wallet` now reports `signer: "local" | "external"`.
+- **`transfer` takes an optional `memo`**, written to the transaction through the SPL Memo program so
+  apps that reconcile payments by memo (an invoice reference, an order id) can match the transfer.
+  UTF-8, up to 566 bytes; an empty or oversized memo is refused before any RPC call. The memo is
+  echoed in the result.
 
 ### Changed
 
