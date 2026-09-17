@@ -114,3 +114,21 @@ describe("assertAggNativeFlagsHonoured", () => {
     ).not.toThrow();
   });
 });
+
+describe("routeFromAggQuote — transfer-hook warnings", () => {
+  const warning = {
+    type: "transferHook" as const,
+    mint: MON,
+    hookProgram: "4EShEanJPxFwcnovSXyznU5tLB9iMpVAdXzbrWtH5suR",
+    reviewed: true,
+    title: "Transfer hook · Counter (test)",
+    detail: "Counts transfers; never blocks one.",
+  };
+  it("passes the aggregator's warnings through untouched", () => {
+    expect(routeFromAggQuote({ ...base, warnings: [warning] }).warnings).toEqual([warning]);
+  });
+  it("omits the field when the agg sends none or predates it", () => {
+    expect(routeFromAggQuote(base).warnings).toBeUndefined();
+    expect(routeFromAggQuote({ ...base, warnings: [] }).warnings).toBeUndefined();
+  });
+});

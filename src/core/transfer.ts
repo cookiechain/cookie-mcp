@@ -5,6 +5,10 @@ import {
   getAssociatedTokenAddressSync,
   createAssociatedTokenAccountIdempotentInstruction,
   createTransferCheckedInstruction,
+  createTransferCheckedWithTransferHookInstruction,
+  getTransferHook,
+  TOKEN_2022_PROGRAM_ID,
+  unpackMint,
 } from "@solana/spl-token";
 
 import { COOK_MINT, COOK_SYMBOL, COOK_DECIMALS, MEMO_PROGRAM_ID, explorerTxUrl } from "./config";
@@ -106,14 +110,24 @@ export async function transfer(args: {
   } else {
     mint = args.mint!;
     const mintPk = parsePubkey(mint, "mint");
-    // The mint's owner tells us TOKEN vs TOKEN-2022; decimals come with the parsed mint.
-    const acct = await conn.getParsedAccountInfo(mintPk);
-    const parsed = acct.value?.data;
-    if (!acct.value || !parsed || !("parsed" in parsed)) {
+    // The mint's owner tells us TOKEN vs TOKEN-2022; decimals + extensions come from the raw mint.
+    const acct = await conn.getAccountInfo(mintPk);
+    if (!acct) {
       throw new CookieMcpError(`mint ${mint} not found on-chain`, "check the mint address");
     }
-    const tokenProgram = acct.value.owner;
-    const decimals: number = (parsed.parsed as { info: { decimals: number } }).info.decimals;
+    const tokenProgram = acct.owner;
+    let decimals: number;
+    let hookProgram: PublicKey | null = null;
+    try {
+      const parsedMint = unpackMint(mintPk, acct, tokenProgram);
+      decimals = parsedMint.decimals;
+      if (tokenProgram.equals(TOKEN_2022_PROGRAM_ID)) {
+        const hook = getTransferHook(parsedMint);
+        hookProgram = hook && !hook.programId.equals(PublicKey.default) ? hook.programId : null;
+      }
+    } catch {
+      throw new CookieMcpError(`${mint} is not a token mint`, "pass a token mint address");
+    }
 
     const registryToken = await fetchToken(mint);
     symbol = registryToken?.metadata?.symbol ?? null;
@@ -135,16 +149,31 @@ export async function transfer(args: {
     const destAta = getAssociatedTokenAddressSync(mintPk, to, true, tokenProgram);
     tx.add(
       createAssociatedTokenAccountIdempotentInstruction(from, destAta, to, mintPk, tokenProgram),
-      createTransferCheckedInstruction(
-        sourceAta,
-        mintPk,
-        destAta,
-        from,
-        rawAmount,
-        decimals,
-        [],
-        tokenProgram,
-      ),
+      // A Token-2022 mint with an active transfer hook needs the hook's extra accounts appended,
+      // or Token-2022 rejects the transfer; the plain instruction is kept for everything else.
+      hookProgram
+        ? await createTransferCheckedWithTransferHookInstruction(
+            conn,
+            sourceAta,
+            mintPk,
+            destAta,
+            from,
+            rawAmount,
+            decimals,
+            [],
+            "confirmed",
+            tokenProgram,
+          )
+        : createTransferCheckedInstruction(
+            sourceAta,
+            mintPk,
+            destAta,
+            from,
+            rawAmount,
+            decimals,
+            [],
+            tokenProgram,
+          ),
     );
   }
 

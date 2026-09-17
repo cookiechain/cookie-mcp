@@ -161,6 +161,7 @@ Once it's registered, just talk to your agent naturally:
 - _"Find the cookhouse token and show me its price and liquidity."_ → `search_tokens` → `get_token_info`
 - _"Quote swapping 10 COOK for bCOOK."_ → `get_quote`
 - _"Swap 10 COOK for bCOOK."_ → `get_quote` → `trade` (needs a key; simulated first)
+- Token-2022 **transfer-hook** tokens (issuer code runs on every transfer and can reject it): `get_quote` always returns `warnings[]` and `trade` returns `routeWarnings[]` — one entry per hooked mint with `reviewed`, `title`, `detail`. Read `detail` before trading. `transfer` handles hooked mints; `add_liquidity`/`create_pool` on Cookiebox CLMM split the open+deposit tx when a hooked mint would overflow it, and `create_pool` refuses up front when the mint still needs a Cookiebox TokenBadge.
 - _"What COOKHOUSE NFTs are listed, and buy the cheapest under 50 COOK."_ → `search_nfts` → `buy_nft`
 - _"Which wallet are you about to trade from?"_ → `get_wallet`
 

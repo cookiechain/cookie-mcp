@@ -22,6 +22,7 @@ import {
   confirmTx,
   routePoolAddresses,
   type CandyShopMultiRoute,
+  type RouteWarning,
 } from "./candyshop";
 import { buildAggSwapTx, routeFromAggQuote } from "./cookiebox";
 import {
@@ -109,6 +110,8 @@ export interface TradeResult {
   output: { mint: string; symbol: string | null; expectedOut: string; minOut: string };
   aggregatorFeeBps: number | null;
   route: { venues: string[]; split: boolean; multiHop: boolean };
+  /** Token-2022 transfer-hook notices for mints in the route (Cookiebox aggregator). */
+  routeWarnings?: RouteWarning[];
   /** Solana only: the priority fee Jupiter budgeted, in lamports. */
   priorityFeeLamports?: number | null;
 }
@@ -326,6 +329,9 @@ export async function trade(args: {
       split: Boolean(multiRoute.isSplit),
       multiHop: Boolean(multiRoute.isMultiHop),
     },
+    ...(multiRoute.warnings && multiRoute.warnings.length > 0
+      ? { routeWarnings: multiRoute.warnings }
+      : {}),
   };
 }
 

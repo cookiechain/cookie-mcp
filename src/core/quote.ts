@@ -9,7 +9,7 @@ import {
 } from "./config";
 import { CookieMcpError } from "./errors";
 import { resolveMintMeta, requireMintMeta } from "./mintMeta";
-import { quoteMultiRoute, type CandyShopMultiRoute } from "./candyshop";
+import { quoteMultiRoute, type CandyShopMultiRoute, type RouteWarning } from "./candyshop";
 import { quoteAgg } from "./cookiebox";
 import {
   quoteJup,
@@ -43,6 +43,11 @@ export interface QuoteResult {
     lowLiquidity: boolean;
     hops: Array<{ venue: string; poolAddress: string; inAmountRaw: string; outAmountRaw: string }>;
   };
+  /**
+   * Non-empty when a mint in the route runs a Token-2022 transfer hook — read `detail` before
+   * trading; the hook can reject transfers, including selling later. Empty = no hooks involved.
+   */
+  warnings: RouteWarning[];
 }
 
 export function formatQuote(
@@ -79,6 +84,7 @@ export function formatQuote(
       amount: r.protocolFeeAmount != null ? rawToUi(r.protocolFeeAmount, ctx.outDec) : null,
     },
     slippageBps: ctx.slippageBps,
+    warnings: r.warnings ?? [],
     route: {
       split: Boolean(r.isSplit),
       multiHop: Boolean(r.isMultiHop),

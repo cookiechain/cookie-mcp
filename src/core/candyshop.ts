@@ -33,6 +33,22 @@ export interface CandyShopMultiRoute {
   isMultiHop: boolean;
   programName?: string;
   lowLiquidity?: boolean;
+  /** Token-2022 transfer-hook notices from the Cookiebox aggregator (empty/absent = none). */
+  warnings?: RouteWarning[];
+}
+
+/**
+ * A mint in the route runs a Token-2022 transfer hook: issuer-chosen code executes on every
+ * transfer and can reject it (including sells). `reviewed` = Cookiebox has read the hook program and
+ * `detail` describes what it does; otherwise `detail` is a generic warning.
+ */
+export interface RouteWarning {
+  type: "transferHook";
+  mint: string;
+  hookProgram: string;
+  reviewed: boolean;
+  title: string;
+  detail: string;
 }
 
 export interface CandyShopQuoteResult {

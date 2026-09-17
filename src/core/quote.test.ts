@@ -80,3 +80,20 @@ describe("formatQuote", () => {
     expect(q.output.expectedOut).toBe("8873.627649");
   });
 });
+
+describe("formatQuote — transfer-hook warnings", () => {
+  it("always exposes `warnings`, empty when the route has none", () => {
+    expect(formatQuote(route, ctx).warnings).toEqual([]);
+  });
+  it("forwards route warnings so an agent sees them before trading", () => {
+    const w = {
+      type: "transferHook" as const,
+      mint: ctx.outputMint,
+      hookProgram: "4EShEanJPxFwcnovSXyznU5tLB9iMpVAdXzbrWtH5suR",
+      reviewed: false,
+      title: "Unreviewed transfer hook",
+      detail: "Issuer code runs on every transfer and can reject it.",
+    };
+    expect(formatQuote({ ...route, warnings: [w] }, ctx).warnings).toEqual([w]);
+  });
+});

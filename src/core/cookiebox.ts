@@ -5,7 +5,7 @@
 import { COOKIEBOX_AGG_API_URL } from "./config";
 import { CookieMcpError } from "./errors";
 import { fetchJson } from "./http";
-import type { CandyShopMultiRoute } from "./candyshop";
+import type { CandyShopMultiRoute, RouteWarning } from "./candyshop";
 
 // /swap-tx quotes, builds, and simulates server-side (a real network sim per DBC leg). It may also
 // lazily extend the agg's server-owned lookup table inside the call (several sequential
@@ -35,6 +35,8 @@ export interface AggQuote {
   isSplit: boolean;
   isMultiHop: boolean;
   segments: AggSegment[];
+  /** Absent on agg builds that predate transfer-hook support. */
+  warnings?: RouteWarning[];
 }
 
 export interface AggSwapTx {
@@ -119,6 +121,7 @@ export function routeFromAggQuote(q: AggQuote): CandyShopMultiRoute {
     route: q.path,
     isSplit: q.isSplit,
     isMultiHop: q.isMultiHop,
+    ...(q.warnings && q.warnings.length > 0 ? { warnings: q.warnings } : {}),
   };
 }
 

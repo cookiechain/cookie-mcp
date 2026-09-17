@@ -14,7 +14,13 @@ import {
   type Connection,
   type Signer,
 } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
+import {
+  ExtensionType,
+  getExtensionTypes,
+  TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+  unpackMint,
+} from "@solana/spl-token";
 import anchorPkg, { type Idl, type Program } from "@coral-xyz/anchor";
 import BN from "bn.js";
 import Decimal from "decimal.js";
@@ -30,8 +36,12 @@ import {
   type WhirlpoolClient,
   type Whirlpool,
 } from "@orca-so/whirlpools-sdk";
-import { Percentage } from "@orca-so/common-sdk";
-import type { TransactionBuilder } from "@orca-so/common-sdk";
+import {
+  Percentage,
+  TransactionBuilder as TransactionBuilderImpl,
+  type Instruction,
+  type TransactionBuilder,
+} from "@orca-so/common-sdk";
 
 import { DEFAULT_SLIPPAGE_BPS, explorerTxUrl } from "../config";
 import { CookieMcpError } from "../errors";
@@ -156,6 +166,123 @@ async function sendBuilders(
     throw new CookieMcpError("nothing to send", "the operation produced no instructions");
   }
   return last;
+}
+
+const LEGACY_TX_MAX_BYTES = 1232;
+
+type BuilderInternals = {
+  connection: ConstructorParameters<typeof TransactionBuilderImpl>[0];
+  wallet: ConstructorParameters<typeof TransactionBuilderImpl>[1];
+  opts: ConstructorParameters<typeof TransactionBuilderImpl>[2];
+  instructions: Instruction[];
+  signers: Signer[];
+};
+
+/** Wire size of a legacy tx (signatures + message); `serialize()` would throw when oversized. */
+export function legacyTxWireSize(tx: Transaction, feePayer: PublicKey): number {
+  const probe = new Transaction();
+  probe.recentBlockhash = tx.recentBlockhash ?? "11111111111111111111111111111111";
+  probe.feePayer = feePayer;
+  probe.add(...tx.instructions);
+  const message = probe.compileMessage();
+  return 1 + message.header.numRequiredSignatures * 64 + message.serialize().length;
+}
+
+/**
+ * Split an Orca `openPosition*` builder (open ix, ATA/wrap ixs, deposit) into [open] + [rest] at the
+ * SDK's first instruction boundary. Used when the combined legacy tx would exceed 1232 bytes —
+ * Token-2022 transfer-hook mints add the hook's extra accounts to `increase_liquidity_v2` on top of
+ * the position-NFT metadata accounts. The position-mint signer stays with the open tx; the wrap
+ * cleanup stays with the deposit. Pure over the builder's internals; exported for tests.
+ */
+export function splitOpenPositionBuilder(builder: TransactionBuilder): TransactionBuilder[] {
+  const b = builder as unknown as BuilderInternals;
+  if (b.instructions.length < 2) return [builder];
+  const open = new TransactionBuilderImpl(b.connection, b.wallet, b.opts).addInstruction(
+    b.instructions[0]!,
+  );
+  for (const sg of b.signers) open.addSigner(sg);
+  const rest = new TransactionBuilderImpl(b.connection, b.wallet, b.opts).addInstructions(
+    b.instructions.slice(1),
+  );
+  return [open, rest];
+}
+
+/** Send an open-position builder as one tx, or as open + deposit when it would not fit. */
+async function sendOpenPosition(
+  conn: Connection,
+  signer: TxSigner,
+  builder: TransactionBuilder,
+  computeUnits: number,
+): Promise<string> {
+  const { tx } = await builderToTx(builder, computeUnits);
+  if (legacyTxWireSize(tx, signer.publicKey) <= LEGACY_TX_MAX_BYTES) {
+    return sendBuilder(conn, signer, builder, computeUnits, "open position");
+  }
+  const [open, deposit] = splitOpenPositionBuilder(builder);
+  if (!deposit) return sendBuilder(conn, signer, builder, computeUnits, "open position");
+  await sendBuilder(conn, signer, open, computeUnits, "open position");
+  return sendBuilder(conn, signer, deposit, computeUnits, "deposit");
+}
+
+/** `["token_badge", config, mint]` — the admin-issued CLMM permission for a restricted Token-2022 mint. */
+export function clmmTokenBadgeAddress(mint: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("token_badge"), WHIRLPOOL_CONFIG_ADDRESS.toBuffer(), mint.toBuffer()],
+    CLMM_PROGRAM_ID,
+  )[0];
+}
+
+/**
+ * Extensions (and a freeze authority) the CLMM refuses without a TokenBadge. Returns the reasons,
+ * empty when the mint is permissionless. Pure over the raw mint account; exported for tests.
+ */
+export function clmmBadgeReasons(
+  mint: PublicKey,
+  account: { data: Buffer; owner: PublicKey },
+): string[] {
+  if (!account.owner.equals(TOKEN_2022_PROGRAM_ID)) return [];
+  const parsed = unpackMint(
+    mint,
+    { ...account, executable: false, lamports: 0, rentEpoch: 0 },
+    TOKEN_2022_PROGRAM_ID,
+  );
+  const reasons: string[] = [];
+  const exts = getExtensionTypes(parsed.tlvData);
+  if (exts.includes(ExtensionType.TransferHook)) reasons.push("transfer hook");
+  if (exts.includes(ExtensionType.PermanentDelegate)) reasons.push("permanent delegate");
+  if (exts.includes(ExtensionType.MintCloseAuthority)) reasons.push("mint close authority");
+  if (exts.includes(ExtensionType.DefaultAccountState)) reasons.push("default account state");
+  if (parsed.freezeAuthority) reasons.push("freeze authority");
+  return reasons;
+}
+
+/**
+ * Fail before spending anything when a mint needs a TokenBadge the CLMM does not have — the
+ * program would otherwise reject `initialize_pool` with an opaque `UnsupportedTokenMint` (6047).
+ */
+async function assertClmmMintsPoolable(conn: Connection, mints: PublicKey[]): Promise<void> {
+  const infos = await conn.getMultipleAccountsInfo(mints);
+  const needBadge: { mint: PublicKey; reasons: string[] }[] = [];
+  mints.forEach((m, i) => {
+    const info = infos[i];
+    if (!info) return;
+    const reasons = clmmBadgeReasons(m, info);
+    if (reasons.length) needBadge.push({ mint: m, reasons });
+  });
+  if (needBadge.length === 0) return;
+  const badges = await conn.getMultipleAccountsInfo(
+    needBadge.map((x) => clmmTokenBadgeAddress(x.mint)),
+  );
+  const missing = needBadge.filter((_, i) => badges[i] == null);
+  if (missing.length === 0) return;
+  const what = missing.map((x) => `${x.mint.toBase58()} (${x.reasons.join(", ")})`).join("; ");
+  throw new CookieMcpError(
+    `Cookiebox CLMM needs a TokenBadge for ${what}`,
+    "the CLMM only pools a Token-2022 mint with these extensions after a Cookiebox review " +
+      "(hook authority + hook program upgrade authority revoked, hook accounts resolvable); " +
+      "ask Cookiebox to badge the mint — see cookiebox docs/TOKEN_EXTENSIONS.md",
+  );
 }
 
 // --- helpers --------------------------------------------------------------------------------------
@@ -387,7 +514,7 @@ export async function addClmmLiquidity(
     undefined,
     TOKEN_2022_PROGRAM_ID,
   );
-  const sig = await sendBuilder(conn, signer, tx, OPEN_POSITION_CU);
+  const sig = await sendOpenPosition(conn, signer, tx, OPEN_POSITION_CU);
   return result(sig, pool.getAddress().toBase58());
 }
 
@@ -586,6 +713,7 @@ export async function createClmmPool(
     tickSpacing,
   );
 
+  await assertClmmMintsPoolable(conn, [a.mint, b.mint]);
   const { poolKey, tx: createTx } = await client.createPool(
     WHIRLPOOL_CONFIG_ADDRESS,
     a.mint,
@@ -621,6 +749,6 @@ export async function createClmmPool(
     undefined,
     TOKEN_2022_PROGRAM_ID,
   );
-  const sig = await sendBuilder(conn, signer, openTx, OPEN_POSITION_CU);
+  const sig = await sendOpenPosition(conn, signer, openTx, OPEN_POSITION_CU);
   return result(sig, poolKey.toBase58());
 }

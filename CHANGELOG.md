@@ -2,6 +2,28 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+# [Unreleased]
+
+### Added
+
+- **Token-2022 transfer-hook tokens.** A hooked mint runs issuer-chosen code on every transfer and can
+  reject it, including a later sell. `get_quote` now always returns `warnings[]` and `trade` returns
+  `routeWarnings[]`: one entry per hooked mint in the route with `hookProgram`, `reviewed` (Cookiebox
+  has read the hook program), `title` and a plain-language `detail`. Read `detail` before trading.
+  Populated from the Cookiebox aggregator's `route.warnings`; empty until that server ships it.
+- `create_pool` on Cookiebox CLMM refuses up front, naming the mint and the reason (transfer hook,
+  permanent delegate, mint close authority, default account state, freeze authority), when the mint
+  still needs a Cookiebox TokenBadge — instead of the program's opaque `UnsupportedTokenMint` after
+  the first transaction.
+
+### Fixed
+
+- `transfer` of a Token-2022 mint with an active transfer hook failed at simulation: the transfer now
+  carries the hook's extra accounts.
+- `add_liquidity` / `create_pool` on Cookiebox CLMM: the combined open-position + deposit
+  transaction could exceed the 1232-byte legacy limit for a hooked mint; it is now sent as two
+  transactions (open, then deposit) when it would not fit.
+
 # [0.5.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.5.0)
 
 _September 14, 2026_
