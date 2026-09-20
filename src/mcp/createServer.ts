@@ -25,11 +25,11 @@ import { transfer } from "../core/transfer";
 import {
   cancelLimitOrder,
   getLimitOrders,
-  placeLimitOrder,
   DEFAULT_EXPIRY_SECONDS,
   MAX_EXPIRY_SECONDS,
   type LimitOrderKind,
 } from "../core/limitOrders";
+import { placeOrder } from "../core/curveOrders";
 import { getStakeInfo, stake, unstake } from "../core/stake";
 import {
   createPool,
@@ -444,7 +444,10 @@ export function createServer(): McpServer {
         "the program enforces (`minReceive`), what the wallet actually receives after the maker fee " +
         "(`netAfterFee`), the price (a stop's TRIGGER), fill progress, expiry and status " +
         "(`open` / `filling` / `expired` — an expired order still holds its input until it is " +
-        "cancelled). `fees` is the live on-chain schedule in bps (null when unavailable).",
+        "cancelled). `fees` is the live on-chain schedule in bps (null when unavailable). MomoSwap " +
+        "curve orders placed on cookiebox.app appear too: `kind: 'curve-buy'` is an escrow order " +
+        "that pays out as curve shares, `kind: 'curve-sell'` is a launchpad sale authorization — " +
+        "`escrowed: false`, the shares stay spendable; cancel_limit_order revokes it.",
       inputSchema: {
         owner: z
           .string()
@@ -475,7 +478,14 @@ export function createServer(): McpServer {
         "request (maker, amounts, kind, pinned accounts, programs) and simulated. Refuses an order " +
         "that would fill or trigger immediately (use `trade` for that) unless `skipMarketCheck` is " +
         "set. Native COOK input is wrapped inside the same transaction; cancel / expiry refunds it as " +
-        "COOK. Returns the `order` address for get_limit_orders / cancel_limit_order.",
+        "COOK. Returns the `order` address for get_limit_orders / cancel_limit_order. MomoSwap " +
+        "launchpad tokens still on their bonding curve are supported for the direct COOK pair only, " +
+        "detected automatically (plain `limit` only): COOK → token is a `curve-buy`, an escrow order " +
+        "the keeper fills into your launchpad position (shares, not SPL tokens; a one-time free " +
+        "buy-for opt-in rides along on the first order); token → COOK is a `curve-sell`, a launchpad " +
+        "sale authorization — NOTHING is escrowed, the shares stay spendable, the fill pays wCOOK to " +
+        "your token account, it must expire within 30 days (no GTC), one per pool. Both are built " +
+        "locally (the aggregator has no curve builder) and the buy is checked by the same verifier.",
       inputSchema: {
         inputMint: z.string().min(32).max(44).describe("token to sell (COOK/native mint for COOK)"),
         outputMint: z.string().min(32).max(44).describe("token to receive"),
@@ -500,7 +510,7 @@ export function createServer(): McpServer {
           .max(MAX_EXPIRY_SECONDS)
           .optional()
           .describe(
-            `lifetime in seconds (default ${DEFAULT_EXPIRY_SECONDS} = 1 week, max one year); 0 = good-til-cancelled. An expired order is NOT auto-refunded until cancelled or reaped`,
+            `lifetime in seconds (default ${DEFAULT_EXPIRY_SECONDS} = 1 week, max one year); 0 = good-til-cancelled. An expired order is NOT auto-refunded until cancelled or reaped. A curve sell must expire within 30 days and cannot be GTC`,
           ),
         floorPrice: z
           .union([z.string(), z.number().positive()])
@@ -540,7 +550,7 @@ export function createServer(): McpServer {
         wrapSol?: boolean;
         unwrapSol?: boolean;
         skipMarketCheck?: boolean;
-      }) => placeLimitOrder(a),
+      }) => placeOrder(a),
     ),
   );
 
@@ -553,8 +563,10 @@ export function createServer(): McpServer {
         "COOKIE_PRIVATE_KEY; only the maker can cancel. The refund lands in the order's pinned input " +
         "account (recreated first if it was closed); a native-COOK order is refunded as COOK, a " +
         "wCOOK-funded one is unwrapped in the same tx unless `unwrapSol: false`. Also how an EXPIRED " +
-        "order's input is recovered. The built transaction is decoded and checked (your order, refund " +
-        "to you, known programs only) and simulated before signing.",
+        "order's input is recovered. A `curve-sell` (a launchpad sale authorization, nothing escrowed) " +
+        "is revoked directly on the launchpad instead — the shares never left the position, so the " +
+        "result has `revoked: true` and no refund moves. The built transaction is decoded and checked " +
+        "(your order, refund to you, known programs only) and simulated before signing.",
       inputSchema: {
         order: z.string().min(32).max(44).describe("the `order` address from get_limit_orders"),
         unwrapSol: z

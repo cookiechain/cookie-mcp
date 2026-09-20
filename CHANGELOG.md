@@ -15,6 +15,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   permanent delegate, mint close authority, default account state, freeze authority), when the mint
   still needs a Cookiebox TokenBadge — instead of the program's opaque `UnsupportedTokenMint` after
   the first transaction.
+- **MomoSwap curve orders in `get_limit_orders`.** Orders placed on cookiebox.app against a launchpad
+  bonding curve are listed alongside limit / stop orders. `kind: "curve-buy"` is an ordinary escrow
+  order whose fill lands as curve shares; `kind: "curve-sell"` is a launchpad sale authorization, not
+  an escrow — nothing is held, the shares stay spendable and `createdAt` is null. Every row now
+  carries `curvePool` (null for a plain order) and `escrowed` (false only for a curve sell).
+- **`cancel_limit_order` revokes a curve sell.** The aggregator has no cancel transaction for a sale
+  authorization, so the server builds the launchpad's `revoke_position_sale` itself after reading the
+  authorization from chain and checking it is launchpad-owned, has the right discriminator and names
+  your wallet as owner. The result carries `revoked: true`; no refund moves because nothing was held.
+- **`place_limit_order` places curve orders.** For the direct COOK pair of a MomoSwap token still on
+  its bonding curve (detected from the mints, plain `limit` only): COOK → token is a `curve-buy`, an
+  escrow order paid out into your launchpad position, with the one-time `enable_buy_for` opt-in
+  added when missing and the pool's minimum-buy / per-wallet cap checked first; token → COOK is a
+  `curve-sell`, a sale authorization for the Cookiebox keeper at your floor that pays wCOOK to your
+  token account, one per pool, expiring within 30 days. Built locally and simulated; the buy goes
+  through the same verifier as an aggregator build. The result carries `curvePool` and `escrowed`.
 
 ### Fixed
 

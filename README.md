@@ -216,6 +216,24 @@ from chain (`fees` in `get_limit_orders`). Orders default to a one-week expiry (
 `0` = good-til-cancelled, max one year); an **expired order still holds its input until it is
 cancelled**. Native COOK is wrapped inside the placement and refunded as COOK on cancel.
 
+MomoSwap **curve orders** placed on cookiebox.app show up in `get_limit_orders` as well: a
+`curve-buy` is an ordinary escrow order whose fill lands as curve shares (cancel it here like any
+other); a `curve-sell` is a launchpad sale authorization, not an escrow — `escrowed: false`, the
+shares stay spendable and `createdAt` is null. `cancel_limit_order` revokes it: the aggregator has no
+`cancel-tx` for it, so this server builds the launchpad's `revoke_position_sale` itself after reading
+the authorization from chain (launchpad-owned, right discriminator, your wallet as owner). The result
+says `revoked: true`; nothing is refunded because nothing was held.
+
+`place_limit_order` places curve orders too, for the **direct COOK pair** of a token still on its
+curve (detected from the mints; `limit` only, no stops). COOK → token becomes a `curve-buy`: an
+ordinary escrow order whose payout is your launchpad position, filled by the keeper's `buy_for`; the
+free one-time `enable_buy_for` opt-in is added to the first order when your wallet lacks it, and the
+pool's `minBuy` / per-wallet cap are checked so an unfillable order is refused up front. Token → COOK
+becomes a `curve-sell`: an `approve_position_sale` for the Cookiebox keeper at your floor, paying
+wCOOK to your token account, one per pool, expiring within 30 days. The aggregator has no builder for
+either, so this server assembles them itself; the buy is then run through the same instruction-level
+verifier as an aggregator build, and both are simulated before signing.
+
 > ⚠️ **The aggregator builds the transaction; this server verifies it before signing.** Every
 > instruction is decoded against the program IDL and checked — fee payer, maker, amounts, kind,
 > expiry, the pinned refund / payout accounts, the order PDA, and that only the five expected

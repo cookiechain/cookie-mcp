@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import anchorPkg, { type Idl } from "@coral-xyz/anchor";
 import BN from "bn.js";
@@ -33,6 +34,11 @@ import {
   expiryFromSeconds,
   fillsImmediately,
   formatLimitOrder,
+  decodeSaleAuth,
+  buildRevokePositionSaleIx,
+  SALE_AUTH_DISCRIMINATOR,
+  REVOKE_POSITION_SALE_DISCRIMINATOR,
+  SALE_AUTH_SIZE,
   makerNetOut,
   normalizePrice,
   orderPda,
@@ -172,6 +178,81 @@ describe("formatLimitOrder", () => {
   it("keeps a stop's floor price", () => {
     const v = formatLimitOrder({ ...raw, kind: "stop", floorPrice: 0.375 }, cook, mon, 0);
     expect(v.floorPrice).toBe(0.375);
+  });
+  it("a plain order is escrowed and has no curve pool", () => {
+    const v = formatLimitOrder(raw, cook, mon, 1_759_000_000);
+    expect(v.escrowed).toBe(true);
+    expect(v.curvePool).toBeNull();
+    expect(v.createdAt).toBe("2025-09-12T18:00:00.000Z");
+  });
+  it("a curve buy is an escrow order that names its pool", () => {
+    const v = formatLimitOrder(
+      { ...raw, kind: "curve-buy", curvePool: "pool111" },
+      cook,
+      mon,
+      1_759_000_000,
+    );
+    expect(v.kind).toBe("curve-buy");
+    expect(v.curvePool).toBe("pool111");
+    expect(v.escrowed).toBe(true);
+  });
+  it("a curve sell is not escrowed and has no creation time (not 1970)", () => {
+    const v = formatLimitOrder(
+      { ...raw, kind: "curve-sell", curvePool: "pool111", createdAt: null, escrowed: false },
+      mon,
+      cook,
+      1_759_000_000,
+    );
+    expect(v.kind).toBe("curve-sell");
+    expect(v.escrowed).toBe(false);
+    expect(v.createdAt).toBeNull();
+    expect(v.status).toBe("open");
+  });
+});
+
+// --- Curve sells: SaleAuthorization decode + revoke ix ----------------------------------------------
+
+describe("curve-sell revoke", () => {
+  const pool = Keypair.generate().publicKey;
+  const ownerPk = Keypair.generate().publicKey;
+  const delegate = Keypair.generate().publicKey;
+  const saleAuthBytes = (over: { disc?: number[]; size?: number } = {}) => {
+    const b = Buffer.alloc(SALE_AUTH_SIZE);
+    Buffer.from(over.disc ?? SALE_AUTH_DISCRIMINATOR).copy(b, 0);
+    pool.toBuffer().copy(b, 8);
+    ownerPk.toBuffer().copy(b, 40);
+    delegate.toBuffer().copy(b, 72);
+    b.writeBigUInt64LE(22_580_000_000n, 136); // approved
+    b.writeBigUInt64LE(12_340_000_000n, 144); // remaining
+    return over.size === undefined ? b : b.subarray(0, over.size);
+  };
+  it("discriminators are the anchor sighashes", () => {
+    const sighash = (s: string) => [...createHash("sha256").update(s).digest().subarray(0, 8)];
+    expect([...SALE_AUTH_DISCRIMINATOR]).toEqual(sighash("account:SaleAuthorization"));
+    expect([...REVOKE_POSITION_SALE_DISCRIMINATOR]).toEqual(sighash("global:revoke_position_sale"));
+  });
+  it("decodes pool, owner, delegate and the remaining shares", () => {
+    const a = decodeSaleAuth(saleAuthBytes())!;
+    expect(a.pool.equals(pool)).toBe(true);
+    expect(a.owner.equals(ownerPk)).toBe(true);
+    expect(a.delegate.equals(delegate)).toBe(true);
+    expect(a.remainingShares).toBe(12_340_000_000n);
+  });
+  it("rejects a wrong discriminator and a short account", () => {
+    expect(decodeSaleAuth(saleAuthBytes({ disc: [1, 2, 3, 4, 5, 6, 7, 8] }))).toBeNull();
+    expect(decodeSaleAuth(saleAuthBytes({ size: 100 }))).toBeNull();
+  });
+  it("revoke ix: owner signs, the authorization is writable, data is the bare discriminator", () => {
+    const programId = Keypair.generate().publicKey;
+    const saleAuth = Keypair.generate().publicKey;
+    const ix = buildRevokePositionSaleIx({ programId, owner: ownerPk, saleAuth });
+    expect(ix.programId.equals(programId)).toBe(true);
+    expect(ix.keys).toHaveLength(2);
+    expect(ix.keys[0]).toMatchObject({ isSigner: true, isWritable: true });
+    expect(ix.keys[0]!.pubkey.equals(ownerPk)).toBe(true);
+    expect(ix.keys[1]).toMatchObject({ isSigner: false, isWritable: true });
+    expect(ix.keys[1]!.pubkey.equals(saleAuth)).toBe(true);
+    expect([...ix.data]).toEqual([...REVOKE_POSITION_SALE_DISCRIMINATOR]);
   });
 });
 

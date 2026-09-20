@@ -24,6 +24,8 @@ import {
   PublicKey,
   SystemInstruction,
   SystemProgram,
+  TransactionInstruction,
+  TransactionMessage,
   VersionedTransaction,
   type MessageV0,
 } from "@solana/web3.js";
@@ -43,6 +45,7 @@ import { CookieMcpError } from "./errors";
 import { rawToUi, uiToRaw } from "./format";
 import { fetchJson } from "./http";
 import { noRouteError } from "./launchpad";
+import { userPositionPda } from "./launchpad/positions";
 import { getConnection } from "./rpc";
 import { resolveMeta, type TokenMeta } from "./trade";
 import { ownPublicKey, requireSigner } from "./wallet";
@@ -65,7 +68,15 @@ const ixCoder = new anchorPkg.BorshInstructionCoder(limitOrderIdl as Idl);
 /** On-chain `Order.kind`. */
 export const ORDER_KIND_LIMIT = 0;
 export const ORDER_KIND_STOP = 1;
+export const ORDER_KIND_CURVE_BUY = 2;
+/** The kinds this server can PLACE: escrow orders the aggregator's `place-tx` builds. */
 export type LimitOrderKind = "limit" | "stop";
+/**
+ * Every kind the listing can return. `curve-buy` is an escrow order whose fill lands as MomoSwap
+ * curve shares (cancellable like any other); `curve-sell` is not an `Order` at all but a launchpad
+ * sale authorization the maker signed — nothing is escrowed and only the Cookiebox UI can revoke it.
+ */
+export type ListedOrderKind = LimitOrderKind | "curve-buy" | "curve-sell";
 
 /** Orders default to a week, as on the Trade page and on Jupiter. `0` = good-til-cancelled. */
 export const DEFAULT_EXPIRY_SECONDS = 7 * 24 * 3600;
@@ -269,12 +280,21 @@ function same(a: PublicKey, b: PublicKey): boolean {
  * Checks shared by place and cancel: known programs only, our wallet as fee payer, and every
  * System / Token / ATA instruction moving value only between our own accounts.
  */
-function assertHousekeepingIxs(ixs: DecodedIx[], owner: PublicKey, allowedTemps: PublicKey[]) {
+function assertHousekeepingIxs(
+  ixs: DecodedIx[],
+  owner: PublicKey,
+  allowedTemps: PublicKey[],
+  /** Exact instruction shapes outside `ALLOWED_PROGRAMS` this flow may carry (curve opt-in). */
+  extraAllowed: Array<(ix: DecodedIx) => boolean> = [],
+) {
   const wcookAta = getAssociatedTokenAddressSync(new PublicKey(COOK_MINT), owner, true);
   const isOurs = (k: PublicKey) => same(k, owner) || allowedTemps.some((t) => same(t, k));
   for (const ix of ixs) {
     const pid = ix.programId.toBase58();
-    if (!ALLOWED_PROGRAMS.has(pid)) throw refuse(`instruction for unexpected program ${pid}`);
+    if (!ALLOWED_PROGRAMS.has(pid)) {
+      if (extraAllowed.some((ok) => ok(ix))) continue;
+      throw refuse(`instruction for unexpected program ${pid}`);
+    }
     if (same(ix.programId, SystemProgram.programId)) {
       const legacy = {
         programId: ix.programId,
@@ -349,7 +369,12 @@ export interface ExpectedPlace {
   takingAmount: bigint;
   /** 0 for a plain limit. */
   triggerTakingAmount: bigint;
-  kind: LimitOrderKind;
+  kind: LimitOrderKind | "curve-buy";
+  /**
+   * `curve-buy` only: the MomoSwap pool pinned as the trailing `curve_pool` account, and the
+   * launchpad program that owns it. The payout account must then be OUR `UserPosition` PDA on it.
+   */
+  curve?: { pool: PublicKey; programId: PublicKey };
   expiredAt: number | null;
   /** Native COOK input paid by wrapping (`wrapSol`): the refund is pinned to our wallet. */
   refundNative: boolean;
@@ -389,8 +414,14 @@ export function assertPlaceTxTrustworthy(tx: VersionedTransaction, exp: Expected
   if (BigInt(a.trigger_taking_amount.toString()) !== exp.triggerTakingAmount) {
     throw refuse("stop trigger");
   }
-  const kind = exp.kind === "stop" ? ORDER_KIND_STOP : ORDER_KIND_LIMIT;
+  const kind =
+    exp.kind === "stop"
+      ? ORDER_KIND_STOP
+      : exp.kind === "curve-buy"
+        ? ORDER_KIND_CURVE_BUY
+        : ORDER_KIND_LIMIT;
   if (a.kind !== kind) throw refuse("order kind");
+  if ((exp.kind === "curve-buy") !== Boolean(exp.curve)) throw refuse("curve pool expectation");
   const expiredAt = a.expired_at == null ? null : a.expired_at.toNumber();
   if (expiredAt !== exp.expiredAt) throw refuse("expiry");
 
@@ -420,12 +451,55 @@ export function assertPlaceTxTrustworthy(tx: VersionedTransaction, exp: Expected
   const inAta = getAssociatedTokenAddressSync(exp.inputMint, exp.owner, true);
   const outAta = getAssociatedTokenAddressSync(exp.outputMint, exp.owner, true);
   if (!same(makerInput, inAta)) throw refuse("input account is not our token account");
-  if (!same(makerOutput, exp.payoutNative ? exp.owner : outAta)) throw refuse("payout account");
+  if (exp.curve) {
+    // A curve token has no ATA to pay into: the fill is counted on OUR position for the pinned pool.
+    if (!same(makerOutput, userPositionPda(exp.curve.pool, exp.owner, exp.curve.programId))) {
+      throw refuse("payout account is not our position on the curve pool");
+    }
+    const curvePool = ix.keys[11];
+    if (!curvePool || !same(curvePool, exp.curve.pool)) throw refuse("curve pool account");
+  } else if (!same(makerOutput, exp.payoutNative ? exp.owner : outAta)) {
+    throw refuse("payout account");
+  }
   if (a.refund_native !== exp.refundNative) throw refuse("refund flag");
 
   const presigned = otherSignersPresigned(tx, exp.owner);
   if (presigned.length !== 1 || !same(presigned[0]!, base)) throw refuse("unexpected extra signer");
-  assertHousekeepingIxs(ixs, exp.owner, []);
+  assertHousekeepingIxs(
+    ixs,
+    exp.owner,
+    [],
+    exp.curve ? [buyOptinIxMatcher(exp.owner, exp.curve.programId)] : [],
+  );
+}
+
+/** `sha256("global:enable_buy_for")[..8]` — pinned by a test. */
+export const ENABLE_BUY_FOR_DISCRIMINATOR = Uint8Array.from([
+  163, 207, 188, 100, 160, 95, 206, 193,
+]);
+
+/** `["buy_optin", owner]` on the launchpad — the maker's consent to be bought for by the keeper. */
+export function buyOptinPda(owner: PublicKey, programId: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("buy_optin"), owner.toBuffer()],
+    programId,
+  )[0];
+}
+
+/**
+ * The ONE launchpad instruction a curve-buy placement may carry: `enable_buy_for` for our own
+ * wallet — [owner (signer), our buy_optin PDA, system program], data = the bare discriminator.
+ */
+function buyOptinIxMatcher(owner: PublicKey, programId: PublicKey): (ix: DecodedIx) => boolean {
+  const optin = buyOptinPda(owner, programId);
+  return (ix) =>
+    same(ix.programId, programId) &&
+    ix.keys.length === 3 &&
+    same(ix.keys[0]!, owner) &&
+    same(ix.keys[1]!, optin) &&
+    same(ix.keys[2]!, SystemProgram.programId) &&
+    ix.data.length === 8 &&
+    ix.data.every((b, i) => b === ENABLE_BUY_FOR_DISCRIMINATOR[i]);
 }
 
 /** The cancel transaction, checked the same way: our order, refund to us, nothing else. */
@@ -478,14 +552,19 @@ export interface AggLimitOrder {
   oriTakingAmount: string;
   filledPct: number;
   price: number | null;
-  kind: LimitOrderKind;
+  kind: ListedOrderKind;
+  /** `curve-buy` / `curve-sell` only: the MomoSwap pool. */
+  curvePool?: string | null;
   triggerTakingAmount: string | null;
   floorPrice: number | null;
   expiredAt: number | null;
-  createdAt: number;
+  /** null for a `curve-sell` — a sale authorization records no creation time. */
+  createdAt: number | null;
   payoutNative: boolean;
   refundNative: boolean;
   waiting: boolean;
+  /** `curve-sell` only, always false: the shares stay spendable, so the order can go unfillable. */
+  escrowed?: boolean;
 }
 
 interface AggPlaceTx {
@@ -516,7 +595,7 @@ interface AggCancelTx {
 }
 
 /** Re-hint the aggregator's own failures so an agent knows whether to retry, fix inputs, or stop. */
-function apiError(e: unknown, action: string): CookieMcpError {
+export function apiError(e: unknown, action: string): CookieMcpError {
   const msg = e instanceof Error ? e.message : String(e);
   if (/disabled/i.test(msg)) {
     return new CookieMcpError(
@@ -570,7 +649,14 @@ export async function fetchLimitOrderFees(): Promise<LimitOrderFees | null> {
 
 export interface LimitOrderView {
   order: string;
-  kind: LimitOrderKind;
+  kind: ListedOrderKind;
+  /** `curve-buy` / `curve-sell`: the MomoSwap pool the order trades on. */
+  curvePool: string | null;
+  /**
+   * false only for a `curve-sell`: nothing is locked, the shares stay spendable, and the order
+   * silently becomes unfillable if they are sold elsewhere. It cannot be cancelled here.
+   */
+  escrowed: boolean;
   /** `open`, `filling` (a keeper fill is mid-flight), or `expired` (cancel to get the input back). */
   status: "open" | "filling" | "expired";
   input: { mint: string; symbol: string | null; remaining: string; original: string };
@@ -589,7 +675,8 @@ export interface LimitOrderView {
   filledPct: number;
   makerFeeBps: number;
   expiresAt: string | null;
-  createdAt: string;
+  /** null for a `curve-sell`. */
+  createdAt: string | null;
   /** A fill pays native COOK to the wallet rather than wCOOK to a token account. */
   payoutNative: boolean;
   /** A cancel/expiry refunds native COOK to the wallet; nothing to unwrap. */
@@ -607,6 +694,8 @@ export function formatLimitOrder(
   return {
     order: o.order,
     kind: o.kind,
+    curvePool: o.curvePool ?? null,
+    escrowed: o.escrowed ?? true,
     status: o.waiting ? "filling" : expired ? "expired" : "open",
     input: {
       mint: o.inputMint,
@@ -625,7 +714,7 @@ export function formatLimitOrder(
     filledPct: o.filledPct,
     makerFeeBps: o.makerFeeBps,
     expiresAt: o.expiredAt == null ? null : new Date(o.expiredAt * 1000).toISOString(),
-    createdAt: new Date(o.createdAt * 1000).toISOString(),
+    createdAt: o.createdAt == null ? null : new Date(o.createdAt * 1000).toISOString(),
     payoutNative: o.payoutNative,
     refundNative: o.refundNative,
   };
@@ -679,7 +768,7 @@ export async function getLimitOrders(args: { owner?: string }): Promise<{
 
 // --- Writes ---------------------------------------------------------------------------------------
 
-async function simulateSignSendConfirm(
+export async function simulateSignSendConfirm(
   tx: VersionedTransaction,
   signer: TxSigner,
   built: { blockhash: string; lastValidBlockHeight: number },
@@ -727,8 +816,13 @@ async function simulateSignSendConfirm(
 export interface PlaceLimitOrderResult {
   signature: string;
   explorerUrl: string;
+  /** The order address — for a `curve-sell`, the launchpad sale authorization. */
   order: string;
-  kind: LimitOrderKind;
+  kind: ListedOrderKind;
+  /** `curve-buy` / `curve-sell`: the MomoSwap pool. */
+  curvePool?: string;
+  /** false only for a `curve-sell`: nothing is locked, the shares stay spendable. */
+  escrowed?: boolean;
   input: { mint: string; symbol: string | null; amount: string };
   output: {
     mint: string;
@@ -952,9 +1046,142 @@ export interface CancelLimitOrderResult {
   signature: string;
   explorerUrl: string;
   order: string;
+  /**
+   * What the cancel returned to the wallet. For a `curve-sell` nothing was ever held: the amount is
+   * the shares that are no longer approved for sale, and they never left the position.
+   */
   refund: { mint: string; symbol: string | null; amount: string };
   /** COOK unwrapped back to the wallet inside the cancel (a wCOOK-refund order). */
   unwrappedCook: string;
+  /** `curve-sell` only: the launchpad sale authorization was revoked (no escrow, no refund). */
+  revoked?: true;
+}
+
+// --- Curve sells: a launchpad SaleAuthorization, revoked directly -----------------------------------
+//
+// A curve sell is not an `Order` in the escrow program: shares cannot be escrowed, so the "order" is
+// a `SaleAuthorization` the maker signed on the launchpad, and cancelling it is the launchpad's
+// `revoke_position_sale(owner, sale_auth)`. The aggregator's `cancel-tx` has no shape for it, so this
+// server builds the one instruction itself — from the account bytes in hand, not from the API row.
+
+/** `sha256("account:SaleAuthorization")[..8]` — pinned by a test. */
+export const SALE_AUTH_DISCRIMINATOR = Uint8Array.from([89, 133, 197, 147, 202, 192, 244, 166]);
+/** `sha256("global:revoke_position_sale")[..8]` — pinned by a test. */
+export const REVOKE_POSITION_SALE_DISCRIMINATOR = Uint8Array.from([
+  104, 153, 76, 236, 211, 155, 3, 134,
+]);
+/** Borsh layout after the discriminator: pool 8 · owner 40 · delegate 72 · payout 104 · … · bump 168. */
+export const SALE_AUTH_SIZE = 169;
+
+export interface SaleAuthView {
+  pool: PublicKey;
+  owner: PublicKey;
+  delegate: PublicKey;
+  remainingShares: bigint;
+}
+
+/** Decode a `SaleAuthorization`, or null when the bytes are not one. Pure — tested. */
+export function decodeSaleAuth(data: Uint8Array): SaleAuthView | null {
+  if (data.length < SALE_AUTH_SIZE) return null;
+  for (let i = 0; i < 8; i++) if (data[i] !== SALE_AUTH_DISCRIMINATOR[i]) return null;
+  const buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  return {
+    pool: new PublicKey(buf.subarray(8, 40)),
+    owner: new PublicKey(buf.subarray(40, 72)),
+    delegate: new PublicKey(buf.subarray(72, 104)),
+    remainingShares: buf.readBigUInt64LE(144),
+  };
+}
+
+/** `revoke_position_sale()`: owner signs, the authorization account is closed. Pure — tested. */
+export function buildRevokePositionSaleIx(args: {
+  programId: PublicKey;
+  owner: PublicKey;
+  saleAuth: PublicKey;
+}): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: args.programId,
+    keys: [
+      { pubkey: args.owner, isSigner: true, isWritable: true },
+      { pubkey: args.saleAuth, isSigner: false, isWritable: true },
+    ],
+    data: Buffer.from(REVOKE_POSITION_SALE_DISCRIMINATOR),
+  });
+}
+
+async function revokeCurveSell(
+  signer: TxSigner,
+  row: AggLimitOrder,
+): Promise<CancelLimitOrderResult> {
+  const owner = signer.publicKey;
+  const saleAuth = new PublicKey(row.order);
+  const conn = getConnection();
+  const info = await conn.getAccountInfo(saleAuth, "confirmed");
+  if (!info) {
+    throw new CookieMcpError(
+      "that curve sell no longer exists on chain",
+      "it was filled, revoked or expired since the listing — run get_limit_orders",
+    );
+  }
+  // Program-scoped facts come from the artifact, not from a constant: the account's owner must be
+  // the launchpad we know, and its bytes must decode as an authorization that belongs to us.
+  const launchpad = new PublicKey(PROGRAM_IDS.momoswapLaunchpad);
+  if (!info.owner.equals(launchpad)) {
+    throw new CookieMcpError(
+      `that account is owned by ${info.owner.toBase58()}, not the MomoSwap launchpad`,
+      "refusing to sign a revoke against an unknown program",
+    );
+  }
+  const auth = decodeSaleAuth(info.data);
+  if (!auth) {
+    throw new CookieMcpError(
+      "that account is not a launchpad sale authorization",
+      "pass the `order` of a `curve-sell` row from get_limit_orders",
+    );
+  }
+  if (!auth.owner.equals(owner)) {
+    throw new CookieMcpError(
+      "that curve sell belongs to another wallet",
+      "only the maker can revoke a sale authorization",
+    );
+  }
+  if (row.curvePool && !auth.pool.equals(new PublicKey(row.curvePool))) {
+    throw new CookieMcpError(
+      "the authorization's pool does not match the listing",
+      "refusing to sign; retry get_limit_orders and report this if it persists",
+    );
+  }
+
+  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
+  const message = new TransactionMessage({
+    payerKey: owner,
+    recentBlockhash: blockhash,
+    instructions: [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 50_000 }),
+      buildRevokePositionSaleIx({ programId: launchpad, owner, saleAuth }),
+    ],
+  }).compileToV0Message();
+  const tx = new VersionedTransaction(message);
+  const { signature } = await simulateSignSendConfirm(
+    tx,
+    signer,
+    { blockhash, lastValidBlockHeight },
+    "curve-sell revoke",
+    { saleAuth: saleAuth.toBase58(), pool: auth.pool.toBase58() },
+  );
+  const { input } = await resolveMeta(row.inputMint, row.outputMint);
+  return {
+    signature,
+    explorerUrl: explorerTxUrl(signature),
+    order: row.order,
+    refund: {
+      mint: row.inputMint,
+      symbol: input.sym,
+      amount: rawToUi(auth.remainingShares.toString(), input.dec),
+    },
+    unwrappedCook: "0",
+    revoked: true,
+  };
 }
 
 export async function cancelLimitOrder(args: {
@@ -984,6 +1211,7 @@ export async function cancelLimitOrder(args: {
       "it may be filled, cancelled or another wallet's — run get_limit_orders",
     );
   }
+  if (mine.kind === "curve-sell") return revokeCurveSell(signer, mine);
 
   let built: AggCancelTx;
   try {
