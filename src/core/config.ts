@@ -101,6 +101,7 @@ export const PROGRAM_IDS = {
   // and a keeper fills them through the same router as /trade. One deployment, not overridable —
   // the IDL's own `address` is checked against this at load.
   limitOrder: "L1M1tkE57jpgimzjs5S8HVsmwk4uwrWoDFuUvXpVniH",
+  dca: "DCAkvX8FW6zY3kSb8s41QbNk422BttFpoo1v53ywS4Js",
 } as const;
 
 /**

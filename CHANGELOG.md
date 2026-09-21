@@ -15,6 +15,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   permanent delegate, mint close authority, default account state, freeze authority), when the mint
   still needs a Cookiebox TokenBadge — instead of the program's opaque `UnsupportedTokenMint` after
   the first transaction.
+- **DCA schedules** on the standalone Cookiebox DCA escrow (`DCAkvX8…`), filled by the same keeper
+  through the same router `trade` uses: **`get_dca_schedules`** (no key; yours, or any address /
+  `.cook` name), **`open_dca`** and **`close_dca`**. A DCA is a stop-market order that fires on a
+  clock instead of a price: the whole budget is escrowed at open and each cycle the keeper may
+  release at most one slice and must pay the pinned account, so a stolen keeper key cannot
+  accelerate a schedule. Split the budget with `cycles` **or** `amountPerCycle` — the slice is
+  rounded up, so every result reports the cycle count the _program_ derives, not the one asked for.
+  `minPrice` / `maxPrice` are an optional per-cycle band on the output; a cycle outside it, or with
+  no route, is **skipped and never caught up**, so the band is checked against the router's
+  executable rate **for one slice** before opening and an unsatisfiable one is refused unless
+  `skipMarketCheck: true`. `startAt` must be in the future — the program clamps a past time to
+  "now", which would fire the first cycle immediately. Fee: the DCA program's own maker fee (10 bps,
+  3 on a stable pair), read live. Native COOK input is wrapped in the open and refunded as COOK by
+  `close_dca`, which returns the **unspent** remainder. `get_dca_schedules` reports `averagePrice`
+  (what the schedule has actually bought at) and flags `status: "overdue"`, which means a cycle was
+  _missed_, not merely late. Not available on Token-2022 mints or MomoSwap tokens still on their
+  bonding curve — both refused before anything is escrowed. The aggregator builds the open/close
+  transaction and this server decodes and checks it against the request (user, amounts, frequency,
+  band, start time, schedule PDA, pinned refund/payout accounts, allowed programs) and simulates it
+  before signing, exactly as for a limit order.
 - **MomoSwap curve orders in `get_limit_orders`.** Orders placed on cookiebox.app against a launchpad
   bonding curve are listed alongside limit / stop orders. `kind: "curve-buy"` is an ordinary escrow
   order whose fill lands as curve shares; `kind: "curve-sell"` is a launchpad sale authorization, not

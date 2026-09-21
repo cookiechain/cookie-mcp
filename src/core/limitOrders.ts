@@ -14,15 +14,10 @@
 // fee is paid by the filler on top of the maker's price and is 0 while the only filler is the
 // Cookiebox keeper.
 import anchorPkg, { type Idl } from "@coral-xyz/anchor";
-import {
-  ASSOCIATED_TOKEN_PROGRAM_ID,
-  TOKEN_PROGRAM_ID,
-  getAssociatedTokenAddressSync,
-} from "@solana/spl-token";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import {
   ComputeBudgetProgram,
   PublicKey,
-  SystemInstruction,
   SystemProgram,
   TransactionInstruction,
   TransactionMessage,
@@ -48,10 +43,21 @@ import { noRouteError } from "./launchpad";
 import { userPositionPda } from "./launchpad/positions";
 import { getConnection } from "./rpc";
 import { resolveMeta, type TokenMeta } from "./trade";
+import {
+  assertHousekeepingIxs,
+  decodeMessageIxs,
+  housekeepingPrograms,
+  otherSignersPresigned,
+  refuser,
+  same,
+  type DecodedIx,
+} from "./txVerify";
 import { ownPublicKey, requireSigner } from "./wallet";
 import type { TxSigner } from "./signer";
 
 export const LIMIT_ORDER_PROGRAM_ID = new PublicKey(PROGRAM_IDS.limitOrder);
+
+export { decodeMessageIxs, type DecodedIx };
 
 // The IDL ships its own `address`. A stale copy after a redeploy would make every PDA check here
 // pass against the wrong program — fail at import (the boot smoke catches it) instead.
@@ -222,143 +228,9 @@ export function fillsImmediately(kind: LimitOrderKind, priced: bigint, marketOut
 // --- Verifying the aggregator's build before we sign --------------------------------------------
 
 /** Programs a place/cancel transaction may invoke. Anything else is refused before signing. */
-export const ALLOWED_PROGRAMS: ReadonlySet<string> = new Set([
-  LIMIT_ORDER_PROGRAM_ID.toBase58(),
-  ComputeBudgetProgram.programId.toBase58(),
-  SystemProgram.programId.toBase58(),
-  TOKEN_PROGRAM_ID.toBase58(),
-  ASSOCIATED_TOKEN_PROGRAM_ID.toBase58(),
-]);
+export const ALLOWED_PROGRAMS: ReadonlySet<string> = housekeepingPrograms(LIMIT_ORDER_PROGRAM_ID);
 
-// SPL Token instruction tags this flow may legitimately contain.
-const TOKEN_IX_TRANSFER = 3;
-const TOKEN_IX_CLOSE_ACCOUNT = 9;
-const TOKEN_IX_SYNC_NATIVE = 17;
-const TOKEN_IX_INITIALIZE_ACCOUNT3 = 18;
-
-export interface DecodedIx {
-  programId: PublicKey;
-  keys: PublicKey[];
-  data: Buffer;
-}
-
-/**
- * Flatten a v0 message into plain instructions. Refuses lookup tables: the builds are compiled
- * inline (`fitsInline`), and a table would let the builder repoint accounts we cannot see.
- */
-export function decodeMessageIxs(tx: VersionedTransaction): DecodedIx[] {
-  const msg = tx.message as MessageV0;
-  if (msg.version !== 0) {
-    throw new CookieMcpError("unexpected legacy transaction from the aggregator", "retry");
-  }
-  if (msg.addressTableLookups.length > 0) {
-    throw new CookieMcpError(
-      "the limit-order build uses an address lookup table — refused before signing",
-      "the build should be inline; retry, or report this if it persists",
-    );
-  }
-  const keys = msg.staticAccountKeys;
-  return msg.compiledInstructions.map((ix) => ({
-    programId: keys[ix.programIdIndex]!,
-    keys: ix.accountKeyIndexes.map((i) => keys[i]!),
-    data: Buffer.from(ix.data),
-  }));
-}
-
-function refuse(what: string): CookieMcpError {
-  return new CookieMcpError(
-    `the aggregator's limit-order build did not match the request (${what}) — refused before signing`,
-    "nothing was signed or sent; retry, and report this if it persists",
-  );
-}
-
-function same(a: PublicKey, b: PublicKey): boolean {
-  return a.equals(b);
-}
-
-/**
- * Checks shared by place and cancel: known programs only, our wallet as fee payer, and every
- * System / Token / ATA instruction moving value only between our own accounts.
- */
-function assertHousekeepingIxs(
-  ixs: DecodedIx[],
-  owner: PublicKey,
-  allowedTemps: PublicKey[],
-  /** Exact instruction shapes outside `ALLOWED_PROGRAMS` this flow may carry (curve opt-in). */
-  extraAllowed: Array<(ix: DecodedIx) => boolean> = [],
-) {
-  const wcookAta = getAssociatedTokenAddressSync(new PublicKey(COOK_MINT), owner, true);
-  const isOurs = (k: PublicKey) => same(k, owner) || allowedTemps.some((t) => same(t, k));
-  for (const ix of ixs) {
-    const pid = ix.programId.toBase58();
-    if (!ALLOWED_PROGRAMS.has(pid)) {
-      if (extraAllowed.some((ok) => ok(ix))) continue;
-      throw refuse(`instruction for unexpected program ${pid}`);
-    }
-    if (same(ix.programId, SystemProgram.programId)) {
-      const legacy = {
-        programId: ix.programId,
-        data: ix.data,
-        keys: ix.keys.map((k) => ({ pubkey: k, isSigner: false, isWritable: true })),
-      };
-      const type = SystemInstruction.decodeInstructionType(legacy);
-      if (type === "Transfer") {
-        const t = SystemInstruction.decodeTransfer(legacy);
-        // The only lamport transfer a placement makes is the wrap into our own wCOOK ATA.
-        if (!same(t.fromPubkey, owner) || !same(t.toPubkey, wcookAta)) {
-          throw refuse("a lamport transfer not into our own wCOOK account");
-        }
-      } else if (type === "Create") {
-        const c = SystemInstruction.decodeCreateAccount(legacy);
-        // A partial unwrap on cancel funds a throwaway native token account we hold the key to.
-        if (!same(c.fromPubkey, owner) || !allowedTemps.some((t) => same(t, c.newAccountPubkey))) {
-          throw refuse("a system create-account for an unexpected account");
-        }
-      } else {
-        throw refuse(`system instruction ${type}`);
-      }
-    } else if (same(ix.programId, TOKEN_PROGRAM_ID)) {
-      const tag = ix.data[0];
-      if (tag === TOKEN_IX_SYNC_NATIVE || tag === TOKEN_IX_INITIALIZE_ACCOUNT3) continue;
-      if (tag === TOKEN_IX_TRANSFER) {
-        // [source, destination, authority]: only we may authorise a transfer, and only into an
-        // account of ours (the unwrap temp).
-        if (!same(ix.keys[2]!, owner) || !isOurs(ix.keys[1]!)) {
-          throw refuse("a token transfer to an account that is not ours");
-        }
-      } else if (tag === TOKEN_IX_CLOSE_ACCOUNT) {
-        // [account, destination, authority]: the rent/lamports must come back to us.
-        if (!same(ix.keys[1]!, owner) || !same(ix.keys[2]!, owner)) {
-          throw refuse("a token account close paying someone else");
-        }
-      } else {
-        throw refuse(`token instruction ${tag}`);
-      }
-    } else if (same(ix.programId, ASSOCIATED_TOKEN_PROGRAM_ID)) {
-      // [payer, ata, owner, mint, system, token]: an idempotent create for one of our own ATAs.
-      if (!same(ix.keys[0]!, owner) || !same(ix.keys[2]!, owner)) {
-        throw refuse("an associated-token-account create for another wallet");
-      }
-    }
-  }
-}
-
-/** Every signer slot the message requires must be either ours (we sign) or already pre-signed. */
-function otherSignersPresigned(tx: VersionedTransaction, owner: PublicKey): PublicKey[] {
-  const msg = tx.message as MessageV0;
-  const n = msg.header.numRequiredSignatures;
-  const presigned: PublicKey[] = [];
-  for (let i = 0; i < n; i++) {
-    const key = msg.staticAccountKeys[i]!;
-    if (same(key, owner)) continue;
-    const sig = tx.signatures[i];
-    if (!sig || sig.every((b) => b === 0)) {
-      throw refuse(`signer ${key.toBase58()} has not pre-signed`);
-    }
-    presigned.push(key);
-  }
-  return presigned;
-}
+const refuse = refuser("limit-order");
 
 export interface ExpectedPlace {
   owner: PublicKey;
@@ -389,7 +261,7 @@ export interface ExpectedPlace {
  * `CookieMcpError` (nothing signed) on any mismatch. Returns the decoded `initialize_order` args.
  */
 export function assertPlaceTxTrustworthy(tx: VersionedTransaction, exp: ExpectedPlace): void {
-  const ixs = decodeMessageIxs(tx);
+  const ixs = decodeMessageIxs(tx, "limit-order");
   const msg = tx.message as MessageV0;
   if (!same(msg.staticAccountKeys[0]!, exp.owner)) throw refuse("fee payer is not our wallet");
 
@@ -463,14 +335,13 @@ export function assertPlaceTxTrustworthy(tx: VersionedTransaction, exp: Expected
   }
   if (a.refund_native !== exp.refundNative) throw refuse("refund flag");
 
-  const presigned = otherSignersPresigned(tx, exp.owner);
+  const presigned = otherSignersPresigned(tx, exp.owner, refuse);
   if (presigned.length !== 1 || !same(presigned[0]!, base)) throw refuse("unexpected extra signer");
-  assertHousekeepingIxs(
-    ixs,
-    exp.owner,
-    [],
-    exp.curve ? [buyOptinIxMatcher(exp.owner, exp.curve.programId)] : [],
-  );
+  assertHousekeepingIxs(ixs, exp.owner, [], {
+    allowedPrograms: ALLOWED_PROGRAMS,
+    refuse,
+    extraAllowed: exp.curve ? [buyOptinIxMatcher(exp.owner, exp.curve.programId)] : [],
+  });
 }
 
 /** `sha256("global:enable_buy_for")[..8]` — pinned by a test. */
@@ -507,7 +378,7 @@ export function assertCancelTxTrustworthy(
   tx: VersionedTransaction,
   exp: { owner: PublicKey; order: PublicKey },
 ): void {
-  const ixs = decodeMessageIxs(tx);
+  const ixs = decodeMessageIxs(tx, "limit-order");
   const msg = tx.message as MessageV0;
   if (!same(msg.staticAccountKeys[0]!, exp.owner)) throw refuse("fee payer is not our wallet");
 
@@ -526,8 +397,8 @@ export function assertCancelTxTrustworthy(
   if (!same(reserve, reservePda(order))) throw refuse("reserve address");
 
   // A partial unwrap co-signs with a throwaway native account the API pre-signed for us.
-  const temps = otherSignersPresigned(tx, exp.owner);
-  assertHousekeepingIxs(ixs, exp.owner, temps);
+  const temps = otherSignersPresigned(tx, exp.owner, refuse);
+  assertHousekeepingIxs(ixs, exp.owner, temps, { allowedPrograms: ALLOWED_PROGRAMS, refuse });
 }
 
 // --- Aggregator API types -----------------------------------------------------------------------

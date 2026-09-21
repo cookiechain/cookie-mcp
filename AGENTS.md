@@ -17,6 +17,9 @@ src/
     errors.ts          #   CookieMcpError — the one error type surfaced to agents
     format.ts          #   rawToUi / uiToRaw / shortAddr — always go through these
     http.ts            #   fetchJson with retry policy
+    txVerify.ts        #   decode + refuse an aggregator-built tx before signing (shared by escrow flows)
+    limitOrders.ts     #   Cookiebox limit / stop orders (+ curveOrders.ts for curve pairs)
+    dca.ts             #   Cookiebox DCA schedules (separate program, same build-verify-sign shape)
     launchpad/         #   MomoSwap launchpad: api (HTTP client) + curve (quote math) + positions (PDAs)
                        #   + program (which deployment: PDA scope + error-code build)
     domains/           #   CookOven `.cook` names: names (rules + pricing) + program (ixs/PDAs/decode)

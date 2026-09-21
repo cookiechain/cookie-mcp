@@ -21,6 +21,7 @@ export * from "./core/transfer";
 export * from "./core/stake";
 export * from "./core/bridge";
 export * from "./core/limitOrders";
+export * from "./core/dca";
 export * from "./core/liquidity";
 export * from "./core/nft";
 // The `.cook` domain tools. Its `filterSortListings` / `toListingView` clash with the NFT ones, so the

@@ -243,6 +243,44 @@ verifier as an aggregator build, and both are simulated before signing.
 > pair with no route at all, unless `skipMarketCheck: true`. Prices go to the API as decimal
 > **strings**; a number that would print in exponent form is refused rather than rounded.
 
+**DCA schedules** ([Cookiebox](https://cookiebox.app/trade) DCA escrow, program `DCAkvX8…` — a
+separate program from the limit-order one, filled by the same keeper): `get_dca_schedules` lists a
+wallet's running schedules with no key (yours, or any address / `.cook` name); `open_dca` and
+`close_dca` need `COOKIE_PRIVATE_KEY`. A DCA is a stop-market order that fires on a **clock** instead
+of a price, N times: the **whole budget is escrowed at open**, and each cycle the keeper may release
+at most one `amountPerCycle` slice, swap it through the same router `trade` uses, and pay the
+proceeds into the account pinned at open. The program — not the keeper — owns the schedule, so a
+stolen keeper key cannot accelerate it.
+
+- Split the budget with **either** `cycles` **or** `amountPerCycle`. The slice is rounded **up**, so
+  the count the program derives (`ceil(amount / slice)`, max 1024) can be one lower than the one you
+  asked for; every result reports the derived number, never the typed one.
+- `cycleSeconds` is 60 … 31,536,000 (a minute to a year). `startAt` (unix **seconds**) delays the
+  first cycle; a past timestamp is refused rather than clamped, because the program's `max(now)`
+  would fire it immediately.
+- `minPrice` / `maxPrice` are an **optional** per-cycle band on the output, quoted per full slice.
+  `minPrice` is the protective one; `maxPrice` guards against an implausibly good fill on a
+  manipulated pool. A cycle outside the band — or with no route — is **skipped, never caught up**, so
+  the band is checked against the router's executable rate **for one slice** before opening and an
+  unsatisfiable one is refused unless `skipMarketCheck: true`. A band quoted off a mid price is a
+  band the keeper can never satisfy.
+- The only fee is the DCA program's own **maker fee** (10 bps, 3 on a stable pair), deducted from
+  each cycle's proceeds and read live from its `Fee` singleton. Native COOK input is wrapped inside
+  the open and refunded as COOK by `close_dca`.
+- `get_dca_schedules` reports `averagePrice` — what the schedule has actually bought at so far, the
+  one number a list of individual fills never gives — and flags `status: "overdue"`, which means a
+  cycle was **missed**: the program drops it instead of catching up, so it is a real loss, not a
+  delay.
+- **Not supported:** Token-2022 mints (the keeper signs every cycle with the classic token program)
+  and MomoSwap tokens still on their bonding curve (a cycle fills through the router, which has no
+  curve `buy_for` leg, unlike a curve _limit_ order). Both are refused before anything is escrowed.
+- `close_dca` returns the **unspent** remainder; whatever the schedule already bought is already in
+  the wallet. A schedule that spends its whole budget closes itself and stops being listed.
+
+The open/close transactions are built by the aggregator and verified here exactly as the limit-order
+ones are — user, amounts, frequency, the band, the start time, the schedule PDA against the signing
+`base`, the pinned refund/payout accounts, the five allowed programs — and simulated before signing.
+
 **Launchpad** (need `COOKIE_PRIVATE_KEY`, [MomoSwap](https://momoswap.fun)): `deploy_token` launches a
 token on a COOK bonding curve (a logo is **required** — pass `imageBase64` and it is pinned to IPFS, or
 set `noLogo: true` to launch without one; the metadata is immutable, so a logo cannot be added later.

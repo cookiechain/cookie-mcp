@@ -1,0 +1,826 @@
+{
+  "address": "DCAkvX8FW6zY3kSb8s41QbNk422BttFpoo1v53ywS4Js",
+  "metadata": {
+    "name": "dca",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Non-custodial dollar-cost-averaging schedules on Cookie Chain"
+  },
+  "instructions": [
+    {
+      "name": "close_dca",
+      "discriminator": [22, 7, 33, 98, 168, 183, 34, 243],
+      "accounts": [
+        {
+          "name": "dca",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [100, 99, 97]
+              },
+              {
+                "kind": "account",
+                "path": "dca.base",
+                "account": "Dca"
+              }
+            ]
+          }
+        },
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true,
+          "relations": ["dca"]
+        },
+        {
+          "name": "reserve",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [114, 101, 115, 101, 114, 118, 101]
+              },
+              {
+                "kind": "account",
+                "path": "dca"
+              }
+            ]
+          },
+          "relations": ["dca"]
+        },
+        {
+          "name": "user_input_account",
+          "docs": [
+            "GUARD 4 — pinned at open; a close cannot be redirected any more than a cycle can."
+          ],
+          "writable": true
+        },
+        {
+          "name": "input_mint",
+          "relations": ["dca"]
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "flash_fill_dca",
+      "discriminator": [92, 175, 186, 113, 118, 88, 110, 56],
+      "accounts": [
+        {
+          "name": "dca",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [100, 99, 97]
+              },
+              {
+                "kind": "account",
+                "path": "dca.base",
+                "account": "Dca"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reserve",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [114, 101, 115, 101, 114, 118, 101]
+              },
+              {
+                "kind": "account",
+                "path": "dca"
+              }
+            ]
+          },
+          "relations": ["dca"]
+        },
+        {
+          "name": "user",
+          "writable": true,
+          "relations": ["dca"]
+        },
+        {
+          "name": "user_input_account",
+          "docs": ["GUARD 7 — the donation sweep destination, pinned at open."],
+          "writable": true
+        },
+        {
+          "name": "keeper",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "user_output_account",
+          "docs": [
+            "GUARD 4 — pinned at open. A cycle pays *here*, never an account the keeper chooses."
+          ],
+          "writable": true
+        },
+        {
+          "name": "payout",
+          "docs": [
+            "Scratch account for a native payout; created, filled, closed inside this instruction."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 97, 121, 111, 117, 116]
+              },
+              {
+                "kind": "account",
+                "path": "dca"
+              }
+            ]
+          }
+        },
+        {
+          "name": "keeper_input_account",
+          "docs": [
+            "The keeper pays the user out of this account — the proceeds of the swap it just did."
+          ],
+          "writable": true
+        },
+        {
+          "name": "fee",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [102, 101, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program_fee_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "fee"
+              },
+              {
+                "kind": "account",
+                "path": "output_mint_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "output_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140, 151, 37, 143, 78, 36, 137, 241, 187, 61, 16, 41, 20, 142, 13, 131, 11, 90, 19,
+                153, 218, 255, 16, 132, 4, 142, 123, 216, 219, 233, 248, 89
+              ]
+            }
+          }
+        },
+        {
+          "name": "output_mint",
+          "relations": ["dca"]
+        },
+        {
+          "name": "output_mint_token_program"
+        },
+        {
+          "name": "input_mint"
+        },
+        {
+          "name": "input_mint_token_program"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "max_taking_amount",
+          "type": "u64"
+        },
+        {
+          "name": "pay_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "init_fee",
+      "discriminator": [13, 9, 211, 107, 62, 172, 224, 67],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "address": "HGSGbiM3tMvbX8cxitEgzbQv53M4rFcsE1gn7fvrHrkN"
+        },
+        {
+          "name": "fee",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [102, 101, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "maker_fee",
+          "type": "u64"
+        },
+        {
+          "name": "maker_stable_fee",
+          "type": "u64"
+        },
+        {
+          "name": "taker_fee",
+          "type": "u64"
+        },
+        {
+          "name": "taker_stable_fee",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "open_dca",
+      "discriminator": [36, 65, 185, 54, 1, 210, 100, 163],
+      "accounts": [
+        {
+          "name": "base",
+          "docs": [
+            "A throwaway keypair supplied by the client; it seeds the DCA PDA, so a user can have",
+            "unlimited concurrent schedules with no nonce counter to race on."
+          ],
+          "signer": true
+        },
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "dca",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [100, 99, 97]
+              },
+              {
+                "kind": "account",
+                "path": "base"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reserve",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [114, 101, 115, 101, 114, 118, 101]
+              },
+              {
+                "kind": "account",
+                "path": "dca"
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_input_account",
+          "writable": true
+        },
+        {
+          "name": "user_output_account",
+          "docs": [
+            "Pinned onto the schedule — every cycle pays here and nowhere else. Either a token",
+            "account for `output_mint`, or the user's own wallet when `output_mint` is native."
+          ]
+        },
+        {
+          "name": "input_mint"
+        },
+        {
+          "name": "output_mint"
+        },
+        {
+          "name": "input_mint_token_program"
+        },
+        {
+          "name": "output_mint_token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "in_deposited",
+          "type": "u64"
+        },
+        {
+          "name": "in_amount_per_cycle",
+          "type": "u64"
+        },
+        {
+          "name": "cycle_frequency",
+          "type": "i64"
+        },
+        {
+          "name": "min_out_amount",
+          "type": "u64"
+        },
+        {
+          "name": "max_out_amount",
+          "type": "u64"
+        },
+        {
+          "name": "start_at",
+          "type": "i64"
+        },
+        {
+          "name": "refund_native",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "pre_flash_fill_dca",
+      "discriminator": [97, 33, 42, 182, 218, 17, 31, 164],
+      "accounts": [
+        {
+          "name": "dca",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [100, 99, 97]
+              },
+              {
+                "kind": "account",
+                "path": "dca.base",
+                "account": "Dca"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reserve",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [114, 101, 115, 101, 114, 118, 101]
+              },
+              {
+                "kind": "account",
+                "path": "dca"
+              }
+            ]
+          },
+          "relations": ["dca"]
+        },
+        {
+          "name": "keeper",
+          "signer": true
+        },
+        {
+          "name": "keeper_output_account",
+          "writable": true
+        },
+        {
+          "name": "input_mint",
+          "relations": ["dca"]
+        },
+        {
+          "name": "input_mint_token_program"
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "update_fee",
+      "discriminator": [232, 253, 195, 247, 148, 212, 73, 222],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "address": "HGSGbiM3tMvbX8cxitEgzbQv53M4rFcsE1gn7fvrHrkN"
+        },
+        {
+          "name": "fee",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [102, 101, 101]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "maker_fee",
+          "type": "u64"
+        },
+        {
+          "name": "maker_stable_fee",
+          "type": "u64"
+        },
+        {
+          "name": "taker_fee",
+          "type": "u64"
+        },
+        {
+          "name": "taker_stable_fee",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "withdraw_fee",
+      "discriminator": [14, 122, 231, 218, 31, 238, 223, 150],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "address": "HGSGbiM3tMvbX8cxitEgzbQv53M4rFcsE1gn7fvrHrkN"
+        },
+        {
+          "name": "fee",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [102, 101, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program_fee_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "fee"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140, 151, 37, 143, 78, 36, 137, 241, 187, 61, 16, 41, 20, 142, 13, 131, 11, 90, 19,
+                153, 218, 255, 16, 132, 4, 142, 123, 216, 219, 233, 248, 89
+              ]
+            }
+          }
+        },
+        {
+          "name": "admin_token_account",
+          "writable": true
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Dca",
+      "discriminator": [82, 93, 90, 127, 40, 101, 145, 154]
+    },
+    {
+      "name": "Fee",
+      "discriminator": [24, 55, 150, 250, 168, 27, 101, 178]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "ZeroAmount",
+      "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6001,
+      "name": "SameMint",
+      "msg": "Input and output mint must differ"
+    },
+    {
+      "code": 6002,
+      "name": "CycleNotDue",
+      "msg": "This DCA cycle is not due yet"
+    },
+    {
+      "code": 6003,
+      "name": "InvalidCycleFrequency",
+      "msg": "Cycle frequency is outside the permitted range"
+    },
+    {
+      "code": 6004,
+      "name": "InvalidCycleCount",
+      "msg": "Schedule has too many cycles, or a per-cycle amount larger than the deposit"
+    },
+    {
+      "code": 6005,
+      "name": "OutsideBand",
+      "msg": "Payout is outside the schedule's per-cycle band"
+    },
+    {
+      "code": 6006,
+      "name": "CycleInProgress",
+      "msg": "Schedule has a cycle in progress"
+    },
+    {
+      "code": 6007,
+      "name": "NoCycleInProgress",
+      "msg": "Schedule has no cycle in progress"
+    },
+    {
+      "code": 6008,
+      "name": "AccountNotPinned",
+      "msg": "Token account does not match the account pinned on the schedule"
+    },
+    {
+      "code": 6009,
+      "name": "UnsupportedMintExtension",
+      "msg": "Mint carries a transfer fee, transfer hook or permanent delegate and is not supported"
+    },
+    {
+      "code": 6010,
+      "name": "FeeTooHigh",
+      "msg": "Fee exceeds the maximum permitted"
+    },
+    {
+      "code": 6011,
+      "name": "Unauthorized",
+      "msg": "Only the admin may perform this action"
+    },
+    {
+      "code": 6012,
+      "name": "AmountExceedsPerCycle",
+      "msg": "Slice exceeds the schedule's per-cycle amount"
+    },
+    {
+      "code": 6013,
+      "name": "MathOverflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6014,
+      "name": "CpiNotAllowed",
+      "msg": "pre_flash_fill_dca must be a top-level instruction, not a CPI"
+    },
+    {
+      "code": 6015,
+      "name": "MissingFlashFill",
+      "msg": "No matching flash_fill_dca found later in this transaction"
+    },
+    {
+      "code": 6016,
+      "name": "ExceedsMaxTakingAmount",
+      "msg": "Payout plus fee exceeds max_taking_amount"
+    },
+    {
+      "code": 6017,
+      "name": "InvalidOutputAccount",
+      "msg": "user_output_account must be a token account for output_mint, or the user's own wallet when output_mint is the native mint"
+    },
+    {
+      "code": 6018,
+      "name": "InvalidRefundAccount",
+      "msg": "refund_native is only allowed when input_mint is the native mint"
+    },
+    {
+      "code": 6019,
+      "name": "UnauthorizedTaker",
+      "msg": "Cycles may only be run by the authorised keeper"
+    }
+  ],
+  "types": [
+    {
+      "name": "Dca",
+      "docs": [
+        "A dollar-cost-averaging schedule. See cookiebox `docs/DCA_ORDERS.md`.",
+        "",
+        "A DCA is a stop-market order that fires on a clock instead of on a price, N times: the same",
+        "flash-fill sandwich settles it, but what authorises a cycle is `next_cycle_at` (the time",
+        "gate) and `in_amount_per_cycle` (the slice cap) rather than a resting price."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "input_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "output_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "waiting",
+            "docs": [
+              "A cycle is mid-flight: input released, proceeds not yet settled. The reentrancy guard —",
+              "two releases against one settlement would drain the reserve."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "in_deposited",
+            "docs": [
+              "Total input escrowed at open. Never changes; the remainder is `in_deposited - in_used`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "in_used",
+            "docs": [
+              "Cumulative input actually spent. With `out_received`, the average fill price."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "out_received",
+            "docs": ["Cumulative output delivered. Display only; no invariant reads it."],
+            "type": "u64"
+          },
+          {
+            "name": "in_amount_per_cycle",
+            "docs": [
+              "THE SLICE CAP. A cycle releases `min(in_amount_per_cycle, remaining)`, computed by the",
+              "program and never passed by the keeper (GUARD D2)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "cycle_frequency",
+            "docs": ["Seconds between cycles, bounded by MIN/MAX_CYCLE_FREQUENCY at open."],
+            "type": "i64"
+          },
+          {
+            "name": "next_cycle_at",
+            "docs": [
+              "THE TIME GATE. A cycle before this instant is refused (GUARD D1). Advanced exactly once",
+              "per settled cycle, in `flash_fill_dca` (GUARD D3)."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "borrow_in_amount",
+            "docs": ["Set by `pre_flash_fill_dca`, consumed by `flash_fill_dca`."],
+            "type": "u64"
+          },
+          {
+            "name": "min_out_amount",
+            "docs": [
+              "Optional per-cycle band, in output units for one full `in_amount_per_cycle`; `0` =",
+              "unset. **Both bounds constrain the OUTPUT**, so `min_out_amount` is the protective one",
+              "in either direction — \"don't sell below X\" and \"don't buy above X\" are both a floor on",
+              "what comes back. `max_out_amount` refuses a cycle whose output is implausibly good: a",
+              "manipulated-pool guard, not a price ceiling (GUARD D4)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "max_out_amount",
+            "type": "u64"
+          },
+          {
+            "name": "user_input_account",
+            "docs": ["PINNED at open — a close refunds only here."],
+            "type": "pubkey"
+          },
+          {
+            "name": "user_output_account",
+            "docs": ["PINNED at open — a cycle pays only here."],
+            "type": "pubkey"
+          },
+          {
+            "name": "reserve",
+            "type": "pubkey"
+          },
+          {
+            "name": "base",
+            "docs": [
+              "The PDA seed — a throwaway keypair the client generates and signs with, rather than a",
+              "nonce counter, so concurrent schedules never race on a read-then-write."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Fee",
+      "docs": [
+        "Global fee configuration — a singleton at `[\"fee\"]` that is *also* the token authority",
+        "over every `program_fee_account`.",
+        "",
+        "The fee deliberately does not live on the `Dca`: keeping it here means it is",
+        "retunable by the admin with no program upgrade and no account migration."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "maker_fee",
+            "docs": [
+              "Deducted from what the user receives on a cycle (Jupiter's platform fee): the user is",
+              "paid `pay_amount - maker_fee`, the vault gets the difference. This is the fee that is",
+              "real revenue — cycles are keeper-only, so a taker fee is our own keeper paying us,",
+              "pocket to pocket."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "maker_stable_fee",
+            "type": "u64"
+          },
+          {
+            "name": "taker_fee",
+            "docs": [
+              "Charged to the keeper on top of the payout, and counted against `max_taking_amount`.",
+              "Zero at launch: there is no third-party taker to charge."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "taker_stable_fee",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}

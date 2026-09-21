@@ -30,6 +30,14 @@ import {
   type LimitOrderKind,
 } from "../core/limitOrders";
 import { placeOrder } from "../core/curveOrders";
+import {
+  MAX_CYCLE_FREQUENCY,
+  MAX_CYCLES,
+  MIN_CYCLE_FREQUENCY,
+  closeDca,
+  getDcaSchedules,
+  openDca,
+} from "../core/dca";
 import { getStakeInfo, stake, unstake } from "../core/stake";
 import {
   createPool,
@@ -576,6 +584,167 @@ export function createServer(): McpServer {
       },
     },
     tool(async (a: { order: string; unwrapSol?: boolean }) => cancelLimitOrder(a)),
+  );
+
+  registerTool(
+    "get_dca_schedules",
+    {
+      title: "Running DCA schedules",
+      description:
+        "DCA schedules running in the Cookiebox DCA escrow for a wallet (yours by default, or " +
+        "`owner` = any address or .cook name). Read straight from the chain via the Cookiebox " +
+        "aggregator — no key needed. A DCA buys a fixed slice of the budget on a clock: the whole " +
+        "budget is escrowed at open and a keeper releases one slice per cycle. Each schedule shows " +
+        "the budget, what is spent and left, the slice, how many cycles the PROGRAM derives, the " +
+        "average price bought at so far (`averagePrice` — what a list of individual fills never " +
+        "tells you), the optional per-cycle price band and when the next cycle is due. " +
+        "`status: 'overdue'` means a cycle was MISSED: the program drops it rather than catching " +
+        "it up, so it is a real loss, not a delay.",
+      inputSchema: {
+        owner: z
+          .string()
+          .min(3)
+          .max(64)
+          .optional()
+          .describe("wallet address or .cook name; defaults to the configured wallet"),
+      },
+    },
+    tool(async (a: { owner?: string }) => getDcaSchedules(a)),
+  );
+
+  registerTool(
+    "open_dca",
+    {
+      title: "Open a DCA schedule",
+      description:
+        "Dollar-cost average into a token: the WHOLE budget is escrowed in a program-owned reserve " +
+        "now, and the Cookiebox keeper releases one slice every `cycleSeconds` and swaps it through " +
+        "the same router `trade` uses, paying the proceeds minus the maker fee (10 bps, 3 on a " +
+        "stable pair — read live) into your pinned account. Requires COOKIE_PRIVATE_KEY. Split the " +
+        "budget with EITHER `cycles` (the slice is rounded UP, which can retire the budget a cycle " +
+        "early — the result reports the count the program actually derives) OR `amountPerCycle`. " +
+        "The program, not the keeper, owns the schedule, so a stolen keeper key cannot accelerate " +
+        "it. `minPrice` / `maxPrice` are an OPTIONAL per-cycle band on the output; a cycle outside " +
+        "it — or with no route — is SKIPPED, never caught up, so a band quoted against a mid price " +
+        "silently stalls the schedule (the executable rate for one slice is checked here and an " +
+        "unsatisfiable band is refused unless `skipMarketCheck`). Native COOK input is wrapped " +
+        "inside the same transaction and refunded as COOK on close. Not available on Token-2022 " +
+        "mints or MomoSwap tokens still on their bonding curve (a cycle cannot buy on a curve). " +
+        "Before signing, the built transaction is decoded and checked against the request (user, " +
+        "amounts, frequency, band, start time, pinned accounts, programs) and simulated. Returns " +
+        "the `dca` address for get_dca_schedules / close_dca.",
+      inputSchema: {
+        inputMint: z
+          .string()
+          .min(32)
+          .max(44)
+          .describe("token to spend (COOK/native mint for COOK)"),
+        outputMint: z.string().min(32).max(44).describe("token to buy"),
+        amount: z
+          .union([z.number().positive(), z.string()])
+          .describe("the WHOLE budget in UI units of the input token — all of it is escrowed now"),
+        cycles: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_CYCLES)
+          .optional()
+          .describe(
+            `split the budget into this many cycles (slice rounded UP, so the real count can be one lower; max ${MAX_CYCLES}). Pass this OR amountPerCycle`,
+          ),
+        amountPerCycle: z
+          .union([z.number().positive(), z.string()])
+          .optional()
+          .describe(
+            "UI amount of the input token to spend per cycle, at most `amount`. Pass this OR cycles",
+          ),
+        cycleSeconds: z
+          .number()
+          .int()
+          .min(MIN_CYCLE_FREQUENCY)
+          .max(MAX_CYCLE_FREQUENCY)
+          .describe(
+            `seconds between cycles (${MIN_CYCLE_FREQUENCY}–${MAX_CYCLE_FREQUENCY}); e.g. 3600 hourly, 86400 daily, 604800 weekly`,
+          ),
+        minPrice: z
+          .union([z.string(), z.number().positive()])
+          .optional()
+          .describe(
+            "optional floor on the rate ONE cycle may fill at, output per input in human units (a decimal STRING for tiny prices). A cycle below it is skipped and never caught up",
+          ),
+        maxPrice: z
+          .union([z.string(), z.number().positive()])
+          .optional()
+          .describe(
+            "optional ceiling on the rate one cycle may fill at — guards against an implausibly good fill on a manipulated pool. A cycle above it is skipped",
+          ),
+        startAt: z
+          .number()
+          .int()
+          .optional()
+          .describe(
+            "unix SECONDS for the first cycle; omit to start now. Must be in the future (the program clamps a past time to 'now', which would fire immediately)",
+          ),
+        wrapSol: z
+          .boolean()
+          .optional()
+          .describe(
+            "default true. When the input is COOK: wrap the lamport shortfall for the whole budget into wCOOK in the same tx and refund native COOK on close. false = pay from an existing wCOOK balance",
+          ),
+        unwrapSol: z
+          .boolean()
+          .optional()
+          .describe(
+            "default true. When the output is COOK: each cycle pays native COOK to the wallet. false = receive wCOOK in the token account",
+          ),
+        skipMarketCheck: z
+          .boolean()
+          .optional()
+          .describe(
+            "default false. Open even if no route exists yet or the band cannot be met at the current rate (every cycle would be skipped)",
+          ),
+      },
+    },
+    tool(
+      async (a: {
+        inputMint: string;
+        outputMint: string;
+        amount: string | number;
+        cycles?: number;
+        amountPerCycle?: string | number;
+        cycleSeconds: number;
+        minPrice?: string | number;
+        maxPrice?: string | number;
+        startAt?: number;
+        wrapSol?: boolean;
+        unwrapSol?: boolean;
+        skipMarketCheck?: boolean;
+      }) => openDca(a),
+    ),
+  );
+
+  registerTool(
+    "close_dca",
+    {
+      title: "Close a DCA schedule",
+      description:
+        "Stop one of your DCA schedules and get the UNSPENT remainder of the budget back; what the " +
+        "schedule already bought is already in your wallet. Requires COOKIE_PRIVATE_KEY; only the " +
+        "owner can close. The refund lands in the account pinned at open (recreated first if it was " +
+        "closed); a schedule funded with native COOK is refunded as COOK, a wCOOK-funded one is " +
+        "unwrapped in the same tx unless `unwrapSol: false`. A schedule that has spent its whole " +
+        "budget closes itself and refunds its rent, so it will no longer be listed. The built " +
+        "transaction is decoded and checked (your schedule, refund to you, known programs only) and " +
+        "simulated before signing.",
+      inputSchema: {
+        dca: z.string().min(32).max(44).describe("the `dca` address from get_dca_schedules"),
+        unwrapSol: z
+          .boolean()
+          .optional()
+          .describe("default true. false = leave a wCOOK refund wrapped in the token account"),
+      },
+    },
+    tool(async (a: { dca: string; unwrapSol?: boolean }) => closeDca(a)),
   );
 
   registerTool(
