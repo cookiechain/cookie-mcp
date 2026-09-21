@@ -109,7 +109,7 @@ async function main() {
       triggerTakingAmount: trigger,
       kind: b.kind,
       expiredAt,
-      refundNative: true, // COOK input, wrapSol default ⇒ the program pins our wallet for the refund
+      refundNative: true, // COOK input, wrapCook default ⇒ the program pins our wallet for the refund
       payoutNative: false,
       order: new PublicKey(built.order),
     });

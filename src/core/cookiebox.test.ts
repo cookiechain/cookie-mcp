@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 
-import { assertAggNativeFlagsHonoured, routeFromAggQuote, type AggQuote } from "./cookiebox";
+import {
+  assertAggNativeFlagsHonoured,
+  nativeFlagsBody,
+  withNativeFlags,
+  routeFromAggQuote,
+  type AggQuote,
+} from "./cookiebox";
 
 const COOK = "So11111111111111111111111111111111111111112";
 const MON = "6H7xnYfBFeEU8S8mhrZRkFNS5vEegRqEwv7h42WbntCL";
@@ -112,6 +118,57 @@ describe("assertAggNativeFlagsHonoured", () => {
     expect(() =>
       assertAggNativeFlagsHonoured({ unwrapSol: false }, { wrapSol: true, unwrapSol: false }),
     ).not.toThrow();
+  });
+
+  it("reads the canonical wrapCook/unwrapCook echo, and the alias from an older agg", () => {
+    expect(() =>
+      assertAggNativeFlagsHonoured({ unwrapSol: false }, { wrapCook: true, unwrapCook: false }),
+    ).not.toThrow();
+    expect(() =>
+      assertAggNativeFlagsHonoured({ unwrapSol: false }, { unwrapSol: false }),
+    ).not.toThrow();
+    // Canonical wins over the alias when a build echoes both.
+    expect(() =>
+      assertAggNativeFlagsHonoured({ unwrapSol: false }, { unwrapCook: true, unwrapSol: false }),
+    ).toThrow(/did not honour/);
+  });
+});
+
+describe("withNativeFlags — the tools' COOK params and their SOL aliases", () => {
+  it("takes the COOK names and drops both spellings from the args", () => {
+    expect(withNativeFlags({ order: "x", unwrapCook: false })).toEqual({
+      order: "x",
+      unwrapSol: false,
+    });
+  });
+
+  it("still takes the deprecated SOL names", () => {
+    expect(withNativeFlags({ wrapSol: false, unwrapSol: true })).toEqual({
+      wrapSol: false,
+      unwrapSol: true,
+    });
+  });
+
+  it("leaves an unset flag unset, so the server's default applies", () => {
+    expect(withNativeFlags({ amount: 1 })).toEqual({ amount: 1 });
+  });
+
+  it("accepts both names when they agree, refuses them when they don't", () => {
+    expect(withNativeFlags({ wrapCook: false, wrapSol: false })).toEqual({ wrapSol: false });
+    expect(() => withNativeFlags({ wrapCook: false, wrapSol: true })).toThrow(
+      /wrapCook: false and wrapSol: true contradict/,
+    );
+  });
+});
+
+describe("nativeFlagsBody", () => {
+  it("sends the COOK names only, and omits what the caller omitted", () => {
+    expect(nativeFlagsBody({})).toEqual({});
+    expect(nativeFlagsBody({ wrapSol: false })).toEqual({ wrapCook: false });
+    expect(nativeFlagsBody({ wrapSol: true, unwrapSol: false })).toEqual({
+      wrapCook: true,
+      unwrapCook: false,
+    });
   });
 });
 

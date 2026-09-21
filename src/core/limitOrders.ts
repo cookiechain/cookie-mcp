@@ -34,7 +34,7 @@ import {
   explorerTxUrl,
 } from "./config";
 import { unconfirmedError } from "./confirm";
-import { quoteAgg } from "./cookiebox";
+import { nativeFlagsBody, quoteAgg } from "./cookiebox";
 import { resolveWallet } from "./domains";
 import { CookieMcpError } from "./errors";
 import { rawToUi, uiToRaw } from "./format";
@@ -831,8 +831,7 @@ export async function placeLimitOrder(args: {
         kind,
         ...(expiredAt == null ? {} : { expiredAt }),
         ...(floorPrice == null ? {} : { floorPrice }),
-        ...(args.wrapSol === undefined ? {} : { wrapSol: args.wrapSol }),
-        ...(args.unwrapSol === undefined ? {} : { unwrapSol: args.unwrapSol }),
+        ...nativeFlagsBody(args),
       }),
       timeoutMs: BUILD_TX_TIMEOUT_MS,
     });
@@ -1091,7 +1090,7 @@ export async function cancelLimitOrder(args: {
       body: JSON.stringify({
         owner: owner.toBase58(),
         order: args.order,
-        ...(args.unwrapSol === undefined ? {} : { unwrapSol: args.unwrapSol }),
+        ...nativeFlagsBody(args),
       }),
       timeoutMs: BUILD_TX_TIMEOUT_MS,
     });

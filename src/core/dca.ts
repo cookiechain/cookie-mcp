@@ -28,7 +28,7 @@ import {
   PROGRAM_IDS,
   explorerTxUrl,
 } from "./config";
-import { quoteAgg } from "./cookiebox";
+import { nativeFlagsBody, quoteAgg } from "./cookiebox";
 import { resolveWallet } from "./domains";
 import { CookieMcpError } from "./errors";
 import { rawToUi, uiToRaw } from "./format";
@@ -689,8 +689,7 @@ export async function openDca(args: {
         ...(minOut > 0n ? { minOut: minOut.toString() } : {}),
         ...(maxOut > 0n ? { maxOut: maxOut.toString() } : {}),
         ...(startAt ? { startAt } : {}),
-        ...(args.wrapSol === undefined ? {} : { wrapSol: args.wrapSol }),
-        ...(args.unwrapSol === undefined ? {} : { unwrapSol: args.unwrapSol }),
+        ...nativeFlagsBody(args),
       }),
       timeoutMs: BUILD_TX_TIMEOUT_MS,
     });
@@ -805,7 +804,7 @@ export async function closeDca(args: {
       body: JSON.stringify({
         owner: owner.toBase58(),
         dca: args.dca,
-        ...(args.unwrapSol === undefined ? {} : { unwrapSol: args.unwrapSol }),
+        ...nativeFlagsBody(args),
       }),
       timeoutMs: BUILD_TX_TIMEOUT_MS,
     });

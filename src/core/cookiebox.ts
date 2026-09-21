@@ -44,7 +44,13 @@ export interface AggSwapTx {
   blockhash: string;
   lastValidBlockHeight: number;
   route: AggQuote;
-  /** Echo of the native-side flags the server built with (absent on builds that predate them). */
+  /**
+   * Echo of the native-side flags the server built with (absent on builds that predate them).
+   * `wrapCook`/`unwrapCook` are the canonical names; the `*Sol` pair is the agg's deprecated alias,
+   * still echoed, and the only thing an older deployment sends.
+   */
+  wrapCook?: boolean;
+  unwrapCook?: boolean;
   wrapSol?: boolean;
   unwrapSol?: boolean;
 }
@@ -55,10 +61,63 @@ export interface AggSwapTx {
  * `wrapSol: false` pays a native input straight from our wCOOK ATA; `unwrapSol: false` delivers a
  * native output to it as wCOOK. COOK and wCOOK are the same mint, so this is the ONLY way to say
  * which one you mean.
+ *
+ * The field names are the SOL-flavoured ones this package has always used; on the wire they go out
+ * under the agg's canonical COOK names via `nativeFlagsBody`.
  */
 export interface AggNativeFlags {
   wrapSol?: boolean;
   unwrapSol?: boolean;
+}
+
+/**
+ * The request-body fragment for the native-side flags. The agg's canonical spelling is
+ * `wrapCook`/`unwrapCook` — this chain's native token is COOK, and `wrapSol`/`unwrapSol` are
+ * inherited Solana/Jupiter vocabulary that the server still accepts as a deprecated alias. We send
+ * ONLY the COOK names: sending both is a 400 the moment they disagree, and there is nothing to gain
+ * from sending a name we would have to keep in sync.
+ *
+ * An omitted flag stays omitted, so the server applies its own default rather than ours.
+ */
+export function nativeFlagsBody(flags: AggNativeFlags): Record<string, boolean> {
+  return {
+    ...(flags.wrapSol === undefined ? {} : { wrapCook: flags.wrapSol }),
+    ...(flags.unwrapSol === undefined ? {} : { unwrapCook: flags.unwrapSol }),
+  };
+}
+
+/**
+ * The MCP tools take the native-side flags under their COOK names and still accept the older
+ * SOL-named ones, which is what every published version of this package documented. Normalises
+ * both into the internal `AggNativeFlags` shape.
+ *
+ * A caller that sends both names for one side with *different* values gets a refusal rather than a
+ * silent winner — an agent that disagrees with itself about wrap/unwrap is asking for a
+ * transaction neither spelling describes. Same rule the aggregator applies server-side.
+ */
+export type NativeFlagArgs = {
+  wrapCook?: boolean;
+  unwrapCook?: boolean;
+  wrapSol?: boolean;
+  unwrapSol?: boolean;
+};
+
+export function resolveNativeFlags(a: NativeFlagArgs): AggNativeFlags {
+  const pick = (cook: boolean | undefined, sol: boolean | undefined, side: string) => {
+    if (cook !== undefined && sol !== undefined && cook !== sol) {
+      throw new CookieMcpError(
+        `${side}Cook: ${cook} and ${side}Sol: ${sol} contradict each other`,
+        `send ${side}Cook only (${side}Sol is the deprecated name for the same flag)`,
+      );
+    }
+    return cook ?? sol;
+  };
+  const wrapSol = pick(a.wrapCook, a.wrapSol, "wrap");
+  const unwrapSol = pick(a.unwrapCook, a.unwrapSol, "unwrap");
+  return {
+    ...(wrapSol === undefined ? {} : { wrapSol }),
+    ...(unwrapSol === undefined ? {} : { unwrapSol }),
+  };
 }
 
 /**
@@ -68,14 +127,17 @@ export interface AggNativeFlags {
  */
 export function assertAggNativeFlagsHonoured(
   requested: AggNativeFlags,
-  echoed: AggNativeFlags,
+  echoed: AggNativeFlags & { wrapCook?: boolean; unwrapCook?: boolean },
 ): void {
   const wrapSol = requested.wrapSol ?? true;
   const unwrapSol = requested.unwrapSol ?? true;
   if (wrapSol && unwrapSol) return;
-  if ((echoed.wrapSol ?? true) !== wrapSol || (echoed.unwrapSol ?? true) !== unwrapSol) {
+  // Prefer the canonical echo; fall back to the deprecated alias, which is all an older agg sends.
+  const echoedWrap = echoed.wrapCook ?? echoed.wrapSol ?? true;
+  const echoedUnwrap = echoed.unwrapCook ?? echoed.unwrapSol ?? true;
+  if (echoedWrap !== wrapSol || echoedUnwrap !== unwrapSol) {
     throw new CookieMcpError(
-      "the Cookiebox aggregator did not honour wrapSol/unwrapSol (build predates them)",
+      "the Cookiebox aggregator did not honour wrapCook/unwrapCook (build predates them)",
       "omit the flags to swap plain COOK, or retry once agg.cookiebox.app is redeployed",
     );
   }
@@ -165,11 +227,23 @@ export async function buildAggSwapTx(
     owner: string;
   } & AggNativeFlags,
 ): Promise<AggSwapTx> {
+  const { wrapSol, unwrapSol, ...rest } = args;
   const built = await fetchJson<AggSwapTx>(`${COOKIEBOX_AGG_API_URL}/swap-tx`, {
     method: "POST",
-    body: JSON.stringify(args),
+    body: JSON.stringify({ ...rest, ...nativeFlagsBody({ wrapSol, unwrapSol }) }),
     timeoutMs: SWAP_TX_TIMEOUT_MS,
   });
   assertAggNativeFlagsHonoured(args, built);
   return built;
+}
+
+/**
+ * A tool's arguments with both flag spellings collapsed into the single internal pair — the four
+ * incoming keys are dropped so nothing downstream can read the alias by accident.
+ */
+export function withNativeFlags<T extends NativeFlagArgs>(
+  a: T,
+): Omit<T, keyof NativeFlagArgs> & AggNativeFlags {
+  const { wrapCook: _wc, unwrapCook: _uc, wrapSol: _ws, unwrapSol: _us, ...rest } = a;
+  return { ...rest, ...resolveNativeFlags(a) };
 }

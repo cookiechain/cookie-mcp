@@ -14,6 +14,7 @@ import { submitSignedTransaction } from "../core/submit";
 
 import { DEFAULT_SLIPPAGE_BPS } from "../core/config";
 import { CookieMcpError, toToolError } from "../core/errors";
+import { withNativeFlags } from "../core/cookiebox";
 import { getChainHealth } from "../core/health";
 import { getPools } from "../core/pools";
 import { getTokenInfo, searchTokens } from "../core/token";
@@ -382,8 +383,8 @@ export function createServer(): McpServer {
         "36ZrtQoab5MhhySaP1YSTwUahSk6GRVUTtZ6cuVfm9e1 — unrelated Solana pairs are refused. The SAME " +
         "COOKIE_PRIVATE_KEY signs on both chains, and that path requires SOLANA_RPC_URL to point at a " +
         "dedicated RPC (the public endpoint is refused). On Solana So1111..112 is wSOL, NOT COOK. " +
-        "COOK and wCOOK (wrapped, SPL) share the native mint: pass `wrapSol: false` to pay from a " +
-        "wCOOK balance, `unwrapSol: false` to receive wCOOK (cookiebox aggregator only).",
+        "COOK and wCOOK (wrapped, SPL) share the native mint: pass `wrapCook: false` to pay from a " +
+        "wCOOK balance, `unwrapCook: false` to receive wCOOK (cookiebox aggregator only).",
       inputSchema: {
         inputMint: z
           .string()
@@ -413,18 +414,26 @@ export function createServer(): McpServer {
           .describe(
             'which chain to swap on; defaults to cookie (Cookie Chain). "solana" buys/sells COOK on Solana mainnet via Jupiter (a COOK leg is required) and REQUIRES SOLANA_RPC_URL to be set to a dedicated RPC',
           ),
-        wrapSol: z
+        wrapCook: z
           .boolean()
           .optional()
           .describe(
             "default true. false = the input is wCOOK: pay from the wallet's wrapped-COOK token account instead of wrapping native COOK. Cookiebox aggregator only",
           ),
-        unwrapSol: z
+        unwrapCook: z
           .boolean()
           .optional()
           .describe(
             "default true. false = receive wCOOK: leave a native-COOK output in the wallet's wrapped-COOK token account instead of unwrapping it. Cookiebox aggregator only",
           ),
+        wrapSol: z
+          .boolean()
+          .optional()
+          .describe("DEPRECATED alias of `wrapCook` — same flag, kept for older callers"),
+        unwrapSol: z
+          .boolean()
+          .optional()
+          .describe("DEPRECATED alias of `unwrapCook` — same flag, kept for older callers"),
       },
     },
     tool(
@@ -435,9 +444,11 @@ export function createServer(): McpServer {
         slippageBps?: number;
         aggregator?: "cookiebox" | "cookiescan";
         chain?: "cookie" | "solana";
+        wrapCook?: boolean;
+        unwrapCook?: boolean;
         wrapSol?: boolean;
         unwrapSol?: boolean;
-      }) => trade(a),
+      }) => trade(withNativeFlags(a)),
     ),
   );
 
@@ -526,18 +537,26 @@ export function createServer(): McpServer {
           .describe(
             "stop only: override the on-chain safety floor (default 50% below the trigger). Must be at or below the trigger. Not what you receive — a cap on a compromised keeper",
           ),
-        wrapSol: z
+        wrapCook: z
           .boolean()
           .optional()
           .describe(
             "default true. When the input is COOK: wrap the lamport shortfall into wCOOK in the same tx and refund native COOK on cancel/expiry. false = pay from an existing wCOOK balance and be refunded wCOOK",
           ),
-        unwrapSol: z
+        unwrapCook: z
           .boolean()
           .optional()
           .describe(
             "default true. When the output is COOK: a fill pays native COOK to the wallet. false = receive wCOOK in the token account",
           ),
+        wrapSol: z
+          .boolean()
+          .optional()
+          .describe("DEPRECATED alias of `wrapCook` — same flag, kept for older callers"),
+        unwrapSol: z
+          .boolean()
+          .optional()
+          .describe("DEPRECATED alias of `unwrapCook` — same flag, kept for older callers"),
         skipMarketCheck: z
           .boolean()
           .optional()
@@ -555,10 +574,12 @@ export function createServer(): McpServer {
         kind?: LimitOrderKind;
         expiresInSeconds?: number;
         floorPrice?: string | number;
+        wrapCook?: boolean;
+        unwrapCook?: boolean;
         wrapSol?: boolean;
         unwrapSol?: boolean;
         skipMarketCheck?: boolean;
-      }) => placeOrder(a),
+      }) => placeOrder(withNativeFlags(a)),
     ),
   );
 
@@ -570,20 +591,26 @@ export function createServer(): McpServer {
         "Cancel one of your open limit / stop orders and get the remaining input back. Requires " +
         "COOKIE_PRIVATE_KEY; only the maker can cancel. The refund lands in the order's pinned input " +
         "account (recreated first if it was closed); a native-COOK order is refunded as COOK, a " +
-        "wCOOK-funded one is unwrapped in the same tx unless `unwrapSol: false`. Also how an EXPIRED " +
+        "wCOOK-funded one is unwrapped in the same tx unless `unwrapCook: false`. Also how an EXPIRED " +
         "order's input is recovered. A `curve-sell` (a launchpad sale authorization, nothing escrowed) " +
         "is revoked directly on the launchpad instead — the shares never left the position, so the " +
         "result has `revoked: true` and no refund moves. The built transaction is decoded and checked " +
         "(your order, refund to you, known programs only) and simulated before signing.",
       inputSchema: {
         order: z.string().min(32).max(44).describe("the `order` address from get_limit_orders"),
-        unwrapSol: z
+        unwrapCook: z
           .boolean()
           .optional()
           .describe("default true. false = leave a wCOOK refund wrapped in the token account"),
+        unwrapSol: z
+          .boolean()
+          .optional()
+          .describe("DEPRECATED alias of `unwrapCook` — same flag, kept for older callers"),
       },
     },
-    tool(async (a: { order: string; unwrapSol?: boolean }) => cancelLimitOrder(a)),
+    tool(async (a: { order: string; unwrapCook?: boolean; unwrapSol?: boolean }) =>
+      cancelLimitOrder(withNativeFlags(a)),
+    ),
   );
 
   registerTool(
@@ -685,18 +712,26 @@ export function createServer(): McpServer {
           .describe(
             "unix SECONDS for the first cycle; omit to start now. Must be in the future (the program clamps a past time to 'now', which would fire immediately)",
           ),
-        wrapSol: z
+        wrapCook: z
           .boolean()
           .optional()
           .describe(
             "default true. When the input is COOK: wrap the lamport shortfall for the whole budget into wCOOK in the same tx and refund native COOK on close. false = pay from an existing wCOOK balance",
           ),
-        unwrapSol: z
+        unwrapCook: z
           .boolean()
           .optional()
           .describe(
             "default true. When the output is COOK: each cycle pays native COOK to the wallet. false = receive wCOOK in the token account",
           ),
+        wrapSol: z
+          .boolean()
+          .optional()
+          .describe("DEPRECATED alias of `wrapCook` — same flag, kept for older callers"),
+        unwrapSol: z
+          .boolean()
+          .optional()
+          .describe("DEPRECATED alias of `unwrapCook` — same flag, kept for older callers"),
         skipMarketCheck: z
           .boolean()
           .optional()
@@ -716,10 +751,12 @@ export function createServer(): McpServer {
         minPrice?: string | number;
         maxPrice?: string | number;
         startAt?: number;
+        wrapCook?: boolean;
+        unwrapCook?: boolean;
         wrapSol?: boolean;
         unwrapSol?: boolean;
         skipMarketCheck?: boolean;
-      }) => openDca(a),
+      }) => openDca(withNativeFlags(a)),
     ),
   );
 
@@ -732,19 +769,25 @@ export function createServer(): McpServer {
         "schedule already bought is already in your wallet. Requires COOKIE_PRIVATE_KEY; only the " +
         "owner can close. The refund lands in the account pinned at open (recreated first if it was " +
         "closed); a schedule funded with native COOK is refunded as COOK, a wCOOK-funded one is " +
-        "unwrapped in the same tx unless `unwrapSol: false`. A schedule that has spent its whole " +
+        "unwrapped in the same tx unless `unwrapCook: false`. A schedule that has spent its whole " +
         "budget closes itself and refunds its rent, so it will no longer be listed. The built " +
         "transaction is decoded and checked (your schedule, refund to you, known programs only) and " +
         "simulated before signing.",
       inputSchema: {
         dca: z.string().min(32).max(44).describe("the `dca` address from get_dca_schedules"),
-        unwrapSol: z
+        unwrapCook: z
           .boolean()
           .optional()
           .describe("default true. false = leave a wCOOK refund wrapped in the token account"),
+        unwrapSol: z
+          .boolean()
+          .optional()
+          .describe("DEPRECATED alias of `unwrapCook` — same flag, kept for older callers"),
       },
     },
-    tool(async (a: { dca: string; unwrapSol?: boolean }) => closeDca(a)),
+    tool(async (a: { dca: string; unwrapCook?: boolean; unwrapSol?: boolean }) =>
+      closeDca(withNativeFlags(a)),
+    ),
   );
 
   registerTool(

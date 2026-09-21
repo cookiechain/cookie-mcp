@@ -118,7 +118,7 @@ async function main() {
     minOut,
     maxOut: 0n,
     startAt,
-    refundNative: true, // COOK input, wrapSol default ⇒ the program pins our wallet for the refund
+    refundNative: true, // COOK input, wrapCook default ⇒ the program pins our wallet for the refund
     payoutNative: false,
     dca: new PublicKey(built.dca),
   };

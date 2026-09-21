@@ -87,6 +87,17 @@ blockhash, lastValidBlockHeight, ... }` instead of signing. The user's own walle
 
 ### Changed
 
+- The native-side flags now go to the Cookiebox aggregator under its canonical COOK names,
+  `wrapCook`/`unwrapCook`, instead of the SOL-flavoured `wrapSol`/`unwrapSol` (this chain's native
+  token is COOK; the SOL spelling was inherited Solana/Jupiter vocabulary). The agg still accepts
+  the old names as a deprecated alias, and we still read either name from its echo, so this works
+  against both old and new deployments.
+- **The MCP tool parameters follow the same rename.** `trade`, `place_limit_order`,
+  `cancel_limit_order`, `open_dca` and `close_dca` now take `wrapCook`/`unwrapCook`. The old
+  `wrapSol`/`unwrapSol` parameters are still accepted on every one of those tools and are marked
+  DEPRECATED in the schema, so nothing an agent already knows how to call breaks. Passing both
+  names for the same side with different values is refused rather than silently resolved.
+
 - All signing goes through one `TxSigner` seam (`LocalKeypairSigner` is the default and behaves exactly
   as before). BAMM liquidity ops now simulate before sending and confirm through the shared
   "sent but unconfirmed — do not retry blindly" path instead of the Raydium SDK's own send.
