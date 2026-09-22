@@ -710,7 +710,13 @@ export interface PlaceLimitOrderResult {
   makerFeeBps: number;
   /** The router's executable rate at placement, and how far the order sits from it. */
   market: { rate: number; pctFromMarket: number | null } | null;
+  /** What was SIGNED. On a curve sell that is the ask or the sale's end, whichever comes first. */
   expiresAt: string | null;
+  /**
+   * Curve sell only: when the launch's sale closes. `sell_authorized` refuses past it whatever the
+   * authorization says, so it is the real deadline and `expiresAt` is never later.
+   */
+  saleEndsAt?: string | null;
   payoutNative: boolean;
   refundNative: boolean;
   /** Native COOK wrapped into wCOOK inside the placement, in COOK. */
@@ -931,8 +937,10 @@ export interface CancelLimitOrderResult {
 //
 // A curve sell is not an `Order` in the escrow program: shares cannot be escrowed, so the "order" is
 // a `SaleAuthorization` the maker signed on the launchpad, and cancelling it is the launchpad's
-// `revoke_position_sale(owner, sale_auth)`. The aggregator's `cancel-tx` has no shape for it, so this
-// server builds the one instruction itself — from the account bytes in hand, not from the API row.
+// `revoke_position_sale(owner, sale_auth)`. This server builds the one instruction itself — from the
+// account bytes in hand, not from the API row. (The aggregator's `cancel-tx` gained the same shape
+// on 2026-09-22 and routes an authorization address to a revoke; building it here keeps the bytes
+// we sign derived from what we read.)
 
 /** `sha256("account:SaleAuthorization")[..8]` — pinned by a test. */
 export const SALE_AUTH_DISCRIMINATOR = Uint8Array.from([89, 133, 197, 147, 202, 192, 244, 166]);

@@ -1,9 +1,11 @@
 // Limit orders on MomoSwap bonding-curve tokens — the part the aggregator does not build.
 //
-// `POST /limit-orders/place-tx` only knows escrow orders between SPL tokens, and a curve token is
-// not one: before graduation a holding is `UserPosition.shares` on the launchpad. Cookiebox's Trade
-// page builds these two shapes itself, and so do we — from the same primitives, checked against
-// the accounts in hand rather than trusted:
+// Before graduation a holding is `UserPosition.shares` on the launchpad, not an SPL balance, so
+// these two shapes are their own thing. Cookiebox's Trade page builds them itself, and so do we —
+// from the same primitives, checked against the accounts in hand rather than trusted. (Since
+// 2026-09-22 `POST /limit-orders/place-tx` also builds them, via `kind: "curve-buy"|"curve-sell"`
+// and a `curvePool`; we keep building locally because the pre-sign verifier below already covers
+// these shapes, and a local build is one less party between the user's intent and their signature.)
 //
 //   BUY   COOK → shares.  An ordinary escrow order of kind `ORDER_KIND_CURVE_BUY` whose payout
 //         account is our `UserPosition` PDA on the pinned pool. The keeper buys the shares owed
@@ -249,10 +251,24 @@ export function curveSideFor(
   return null;
 }
 
-/** A sale authorization must expire, and within the launchpad's 30-day cap. */
+/**
+ * When a curve sell authorization really stops being fillable.
+ *
+ * Three constants meet here and only one binds. `approve_position_sale` caps the expiry at 30 days
+ * (`MAX_SALE_AUTH_SECONDS`) and **never reads the pool**; `sell_authorized` refuses once
+ * `now > pool.end_ts`; and a launch runs at most **7 days** (`MAX_DURATION_SECS`). So the 30-day cap
+ * can never bind, and an expiry past the sale's end mints an authorization that looks alive in
+ * `get_limit_orders` — future expiry, shares in hand — and can never fill, with its rent locked
+ * until the maker revokes it. The default of one week is already past the end of most live sales.
+ *
+ * Hence `saleEndTs` clamps the result. It also removes a boundary: asking for exactly 30 days is
+ * validated against THIS clock and enforced against the validator's, and fails on the drift with
+ * `InvalidSaleAuthDuration`.
+ */
 export function saleExpiryFromSeconds(
   expiresInSeconds: number | undefined,
   now = Math.floor(Date.now() / 1000),
+  saleEndTs?: number,
 ): number {
   const s = expiresInSeconds ?? DEFAULT_EXPIRY_SECONDS;
   if (!Number.isInteger(s) || s <= 0) {
@@ -267,7 +283,8 @@ export function saleExpiryFromSeconds(
       `the launchpad caps a sale authorization at ${MAX_SALE_AUTH_SECONDS} seconds`,
     );
   }
-  return now + s;
+  const asked = now + s;
+  return saleEndTs && saleEndTs > 0 ? Math.min(asked, saleEndTs) : asked;
 }
 
 /**
@@ -604,7 +621,11 @@ async function placeCurveSell(
       "price rounds to zero COOK for this amount",
       "raise the price or the amount",
     );
-  const expiryTs = saleExpiryFromSeconds(args.expiresInSeconds);
+  const expiryTs = saleExpiryFromSeconds(
+    args.expiresInSeconds,
+    Math.floor(Date.now() / 1000),
+    curve.pool.endTs,
+  );
   if (args.unwrapSol === true) {
     throw new CookieMcpError(
       "a curve sell pays wCOOK to your token account; the launchpad cannot unwrap inside the fill",
@@ -716,10 +737,12 @@ async function placeCurveSell(
     price,
     makerFeeBps: 0,
     market,
+    /** What was signed: the ask, or the sale's end when that comes first. */
     expiresAt: new Date(expiryTs * 1000).toISOString(),
+    saleEndsAt: curve.pool.endTs ? new Date(curve.pool.endTs * 1000).toISOString() : null,
     payoutNative: false,
     refundNative: false,
     wrappedCook: "0",
-    note: "nothing is escrowed: this authorizes the Cookiebox keeper to sell up to these shares at or above your price until the expiry, paying wCOOK to your token account (partial fills possible, pro-rated floor). The shares stay spendable — selling them with launchpad_sell makes the order unfillable. Revoke any time with cancel_limit_order.",
+    note: "nothing is escrowed: this authorizes the Cookiebox keeper to sell up to these shares at or above your price until the expiry, paying wCOOK to your token account (partial fills possible, pro-rated floor). The shares stay spendable — selling them with launchpad_sell makes the order unfillable. The order also ends with the SALE: no fill is possible once the launch closes, whatever expiry was asked for, so expiresAt is never past saleEndsAt. Revoke any time with cancel_limit_order.",
   };
 }

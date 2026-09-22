@@ -230,9 +230,13 @@ ordinary escrow order whose payout is your launchpad position, filled by the kee
 free one-time `enable_buy_for` opt-in is added to the first order when your wallet lacks it, and the
 pool's `minBuy` / per-wallet cap are checked so an unfillable order is refused up front. Token → COOK
 becomes a `curve-sell`: an `approve_position_sale` for the Cookiebox keeper at your floor, paying
-wCOOK to your token account, one per pool, expiring within 30 days. The aggregator has no builder for
-either, so this server assembles them itself; the buy is then run through the same instruction-level
-verifier as an aggregator build, and both are simulated before signing.
+wCOOK to your token account, one per pool. Its expiry is clamped to the **sale's own end**: the
+launchpad caps an authorization at 30 days and never reads the pool, but no fill is possible once the
+launch closes, and a launch runs at most 7 days — so `expiresAt` is never past `saleEndsAt`, and the
+one-week default would otherwise mint an order that shows a future expiry and can never fill. This
+server assembles both shapes itself (the aggregator has built them since 2026-09-22, but a local
+build keeps the signed bytes derived from what we read); the buy is then run through the same
+instruction-level verifier as an aggregator build, and both are simulated before signing.
 
 > ⚠️ **The aggregator builds the transaction; this server verifies it before signing.** Every
 > instruction is decoded against the program IDL and checked — fee payer, maker, amounts, kind,

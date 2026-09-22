@@ -94,6 +94,24 @@ describe("saleExpiryFromSeconds", () => {
     expect(() => saleExpiryFromSeconds(MAX_SALE_AUTH_SECONDS + 1)).toThrow(/30 days/);
     expect(() => saleExpiryFromSeconds(1.5)).toThrow(CookieMcpError);
   });
+
+  /**
+   * The cap that binds is the SALE's end, not the launchpad's 30-day authorization cap.
+   * `approve_position_sale` never reads the pool, but `sell_authorized` refuses past `end_ts` — and
+   * a launch runs at most 7 days, so the default of one week is already past the end of most live
+   * sales. Unclamped, this mints an order that shows a future expiry and can never fill.
+   */
+  it("never outlives the sale it sells into", () => {
+    const now = 1_000_000;
+    const endsIn2h = now + 2 * 3600;
+    expect(saleExpiryFromSeconds(undefined, now, endsIn2h)).toBe(endsIn2h);
+    expect(saleExpiryFromSeconds(MAX_SALE_AUTH_SECONDS, now, endsIn2h)).toBe(endsIn2h);
+    // A shorter ask still stands — the clamp is a ceiling, not a default.
+    expect(saleExpiryFromSeconds(600, now, endsIn2h)).toBe(now + 600);
+    // No pool end known (an older row): behave exactly as before rather than inventing one.
+    expect(saleExpiryFromSeconds(600, now, 0)).toBe(now + 600);
+    expect(saleExpiryFromSeconds(600, now, undefined)).toBe(now + 600);
+  });
 });
 
 describe("assertCurveBuyWithinPoolLimits", () => {
