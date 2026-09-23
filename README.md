@@ -32,7 +32,7 @@ It is a community project for the whole Cookie Chain ecosystem.
 - [Tools](#tools)
 - [Hosted / wallet-signed mode](#hosted--wallet-signed-mode) — for web apps and other integrators
 - [Safety](#safety)
-- [Development](#development)
+- [Development](#development) — [Release](#release)
 
 ## What it can do
 
@@ -489,6 +489,40 @@ yarn build   # bundle to dist/ (CLI, `cookie-mcp/server` factory, `cookie-mcp` l
 
 To point an agent at a local checkout instead of the published package, set the command to
 `npx tsx /ABS/PATH/cookie-mcp/src/mcp/server.ts`. `--http [port]` serves Streamable HTTP instead.
+
+### Release
+
+A release is an npm publish plus a re-publish of the same version to the
+[MCP Registry](https://registry.modelcontextprotocol.io); third-party directories (mcpservers.org
+and friends) mirror the registry entry, so the registry step is what actually updates them. Keep npm
+`latest` current with `main` — the directories scrape GitHub, and a lagging npm gives people a
+README that promises tools the installed server does not have.
+
+1. **Bump the version in three places**, all to the same string: `package.json` `version`, and
+   `server.json` both top-level `version` and `packages[0].version`. The registry rejects a mismatch,
+   and `mcpName` in `package.json` must stay `io.github.cookiechain/cookie-mcp` (the registry checks
+   the published tarball for it).
+2. **CHANGELOG:** rename the `[Unreleased]` heading to
+   `# [X.Y.Z](https://github.com/cookiechain/cookie-mcp/releases/tag/vX.Y.Z)` with a dated line
+   under it, then open a fresh `# [Unreleased]` above it for the next cycle.
+3. **Gate:** `yarn test` — the same lint / format / typecheck / unit / smoke run as CI. Every new tool
+   must be listed in `EXPECTED_TOOLS` in `scripts/smoke.ts` (the smoke only reports _missing_ names,
+   so a tool you forgot to add there passes silently) and in the [Tools](#tools) list above.
+4. **Check the tarball:** `npm pack --dry-run`. It must contain only `dist/**`, `README.md`,
+   `LICENSE` and `package.json` — no `src/`, `.env`, key material or absolute paths.
+   `prepublishOnly` runs `yarn build` (tsup) so `dist/` is always rebuilt from the tagged source.
+5. **Commit, tag, release:** commit as `Release X.Y.Z`, tag `vX.Y.Z`, `git push --tags`, and create
+   the GitHub release from the tag with the CHANGELOG section as its body (the CHANGELOG links point
+   at that release page).
+6. **Publish to npm:** `npm publish`, then verify with `npm view cookie-mcp version` and a pinned
+   boot from a clean directory: `npx -y cookie-mcp@X.Y.Z` must start and register every tool.
+   > An `E404 … PUT …/cookie-mcp … could not be found or you do not have permission` from
+   > `npm publish` is almost never a missing package — npm reports an unauthenticated publish as 404. Run `npm whoami`; if it fails, `npm login` and publish again.
+7. **Publish to the MCP Registry:** `brew install mcp-publisher`, then from the repo root
+   `mcp-publisher login github && mcp-publisher publish`. The `io.github.cookiechain/*` namespace
+   requires you to be an **owner** of the GitHub org. If the device-flow login still falls back to
+   your personal namespace with a 403, the org restricts OAuth apps — log in with a classic PAT
+   that has `read:org` instead: `MCP_GITHUB_TOKEN=<pat> mcp-publisher login github`.
 
 ## License
 

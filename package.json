@@ -1,6 +1,6 @@
 {
   "name": "cookie-mcp",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "mcpName": "io.github.cookiechain/cookie-mcp",
   "description": "MCP server + library for Cookie Chain — read market data, swap, launch tokens, and manage liquidity from any AI agent. Signs locally or hands verified transactions to the user's own wallet.",
   "license": "MIT",
