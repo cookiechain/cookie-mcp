@@ -24,7 +24,10 @@ import {
   buildCurveBuyPlaceIx,
   buildEnableBuyForIx,
   curveSideFor,
+  fetchSaleAuthFeeBps,
   poolAuthorityPda,
+  readSaleAuthFeeBps,
+  SALE_AUTH_FEE_BPS_OFFSET,
   saleAuthPda,
   saleExpiryFromSeconds,
 } from "./curveOrders";
@@ -350,5 +353,46 @@ describe("curve-buy placement passes assertPlaceTxTrustworthy — and tampering 
     expect(() =>
       assertPlaceTxTrustworthy(compile([cu, placeIx({ expiredAt: null })]), expectation()),
     ).toThrow(/expiry/);
+  });
+});
+
+describe("the launchpad's curve-sell fee (anchor-launchpad-momoswap#70)", () => {
+  /** The live `Config` is allocated at `Config::SPACE` = 337 bytes. */
+  const CONFIG_SPACE = 337;
+
+  it("sits right after pending_authority, as a little-endian u16", () => {
+    // disc 8 + 6 pubkeys + creation fee 8 + 5 bps + graduation target 8 + 2 bps + vest secs 8
+    // + decimals 1 + 4 supplies/reserves + paused + bump + graduation_fee 8 + pending_authority 32
+    expect(8 + 32 * 6 + 8 + 2 * 5 + 8 + 2 * 2 + 8 + 1 + 8 * 4 + 1 + 1 + 8 + 32).toBe(
+      SALE_AUTH_FEE_BPS_OFFSET,
+    );
+    const data = new Uint8Array(CONFIG_SPACE).fill(0xff);
+    data[SALE_AUTH_FEE_BPS_OFFSET] = 20;
+    data[SALE_AUTH_FEE_BPS_OFFSET + 1] = 0;
+    expect(readSaleAuthFeeBps(data)).toBe(20);
+  });
+
+  it("reads a pre-#70 Config (zeroed padding) and a short account as no fee", () => {
+    expect(readSaleAuthFeeBps(new Uint8Array(CONFIG_SPACE))).toBe(0);
+    expect(readSaleAuthFeeBps(new Uint8Array(SALE_AUTH_FEE_BPS_OFFSET + 1))).toBe(0);
+  });
+
+  it("reads the Config of the pool's OWN launchpad, and refuses a missing one", async () => {
+    const programId = new PublicKey(PROGRAM_IDS.momoswapLaunchpad);
+    const config = PublicKey.findProgramAddressSync([Buffer.from("config")], programId)[0];
+    const data = new Uint8Array(CONFIG_SPACE);
+    data[SALE_AUTH_FEE_BPS_OFFSET] = 20;
+    const asked: string[] = [];
+    const conn = {
+      getAccountInfo: async (k: PublicKey) => {
+        asked.push(k.toBase58());
+        return k.equals(config) ? { data } : null;
+      },
+    } as never;
+    await expect(fetchSaleAuthFeeBps(conn, programId)).resolves.toBe(20);
+    expect(asked).toEqual([config.toBase58()]);
+    await expect(fetchSaleAuthFeeBps(conn, Keypair.generate().publicKey)).rejects.toBeInstanceOf(
+      CookieMcpError,
+    );
   });
 });

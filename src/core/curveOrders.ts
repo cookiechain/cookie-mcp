@@ -15,9 +15,11 @@
 //         it rides along on the first order when missing.
 //   SELL  shares → COOK.  Nothing can be escrowed, so the order IS a launchpad `SaleAuthorization`
 //         we sign: the keeper (`sell_authorized`) may sell up to `shares` at or above our floor,
-//         paying our pinned wCOOK account, until the expiry. The shares stay spendable — selling
-//         them elsewhere silently makes the order unfillable. Cancelling is `revoke_position_sale`
-//         (see `cancelLimitOrder`).
+//         paying our curve-sell VAULT (`curveSellVault.ts`), until the expiry; the limit-order
+//         program's `settle_curve_sell` then takes the maker fee and pays the rest to our wCOOK
+//         account. The shares stay spendable — selling them elsewhere silently makes the order
+//         unfillable. Cancelling is `revoke_position_sale` + `settle_curve_sell(close)` (see
+//         `cancelLimitOrder`).
 //
 // Both paths reuse the plain flow's price maths, market check and signing seam, and the buy is run
 // through the very verifier the aggregator builds are — our own transaction gets no free pass.
@@ -43,6 +45,7 @@ import {
 import limitOrderIdl from "../idl/limit_order.json" with { type: "json" };
 import { COOK_MINT, DEFAULT_SLIPPAGE_BPS, PROGRAM_IDS, explorerTxUrl } from "./config";
 import { quoteAgg } from "./cookiebox";
+import { buildCreateCurveSellVaultIx, curveSellVault } from "./curveSellVault";
 import { CookieMcpError } from "./errors";
 import { rawToUi, uiToRaw } from "./format";
 import { fetchPoolByMint, fetchPosition, type LaunchpadPool } from "./launchpad/api";
@@ -95,6 +98,36 @@ const CURVE_PLACE_COMPUTE_UNITS = 200_000;
 const ixCoder = new anchorPkg.BorshInstructionCoder(limitOrderIdl as Idl);
 
 // --- PDAs (golden-tested against cookiebox's derivations) ------------------------------------------
+
+/**
+ * `Config.sale_auth_fee_bps` — the limit-order fee the launchpad's `sell_authorized` takes from a
+ * curve sell's proceeds, ON TOP of the authorization's floor: the program checks the floor on what
+ * the maker receives after it (anchor-launchpad-momoswap#70). A u16 appended into Config's padding
+ * right after `pending_authority`, which ends at byte 313; zeroed padding reads 0 = no fee, which is
+ * also what a launchpad without #70 honestly means.
+ */
+export const SALE_AUTH_FEE_BPS_OFFSET = 313;
+
+export function readSaleAuthFeeBps(data: Uint8Array): number {
+  if (data.length < SALE_AUTH_FEE_BPS_OFFSET + 2) return 0;
+  return data[SALE_AUTH_FEE_BPS_OFFSET]! | (data[SALE_AUTH_FEE_BPS_OFFSET + 1]! << 8);
+}
+
+/** Read off THIS pool's launchpad — the one whose `sell_authorized` will charge it. */
+export async function fetchSaleAuthFeeBps(
+  conn: ReturnType<typeof getConnection>,
+  programId: PublicKey,
+): Promise<number> {
+  const config = PublicKey.findProgramAddressSync([Buffer.from("config")], programId)[0];
+  const info = await conn.getAccountInfo(config, "confirmed");
+  if (!info) {
+    throw new CookieMcpError(
+      `launchpad config ${config.toBase58()} not found`,
+      "the pool's launchpad program is not initialised on this RPC — check COOKIE_RPC_URL",
+    );
+  }
+  return readSaleAuthFeeBps(info.data);
+}
 
 export function saleAuthPda(
   pool: PublicKey,
@@ -615,8 +648,8 @@ async function placeCurveSell(
   const { input, output } = await resolveMeta(args.inputMint, args.outputMint);
   const shares = parseAmount(args.amount, input.dec, `${curve.pool.symbol} shares`);
   const price = normalizePrice(args.price);
-  const minPaymentOut = takingAmountForPrice(shares, price, input.dec, output.dec);
-  if (!minPaymentOut)
+  const priced = takingAmountForPrice(shares, price, input.dec, output.dec);
+  if (!priced)
     throw new CookieMcpError(
       "price rounds to zero COOK for this amount",
       "raise the price or the amount",
@@ -633,10 +666,18 @@ async function placeCurveSell(
     );
   }
 
-  const [position] = await Promise.all([
+  const [position, fees] = await Promise.all([
     fetchPosition(curve.pool.pubkey, owner.toBase58()).catch(() => null),
+    fetchLimitOrderFees(),
     verifyPoolOwnedByLaunchpad(pool, curve.programId),
   ]);
+  // The floor is the price itself: the launchpad checks it on what reaches the VAULT, and the
+  // limit-order program's `settle_curve_sell` takes the maker fee after that, on the way to our
+  // wCOOK account — the same shape as a plain order's `taking_amount`. Priced at P, the order fills
+  // once the curve pays P and nets P minus the fee. (The launchpad's own `sale_auth_fee_bps` is
+  // MomoSwap's, stays at 0 and is not pinned here.) A missing schedule only affects the report.
+  const minPaymentOut = priced;
+  const feeBps = fees?.makerFeeBps ?? 0;
   const heldShares = BigInt(position?.shares ?? "0");
   if (heldShares <= 0n) {
     throw new CookieMcpError(
@@ -664,25 +705,26 @@ async function placeCurveSell(
         args.inputMint,
         args.outputMint,
         shares,
-        minPaymentOut,
+        priced,
         input.dec,
         output.dec,
         output.sym,
         owner,
       );
 
-  // The payout is pinned to OUR wCOOK account; the launchpad refuses a pool vault and the keeper
-  // cannot redirect it. `approve_position_sale` requires it to exist, hence the idempotent create.
-  const payout = getAssociatedTokenAddressSync(paymentMint, owner, true, TOKEN_PROGRAM_ID);
+  // The payout is pinned to our curve-sell VAULT: the limit-order program's wCOOK ATA for
+  // `["curve_sell", pool, owner]`, which only that program can pay out — the maker fee to its fee
+  // vault, the rest to our own wCOOK ATA. The keeper cannot redirect it, and it refuses any other
+  // payout. `approve_position_sale` requires the account to exist, hence the idempotent create.
+  if (!paymentMint.equals(new PublicKey(COOK_MINT)))
+    throw new CookieMcpError(
+      `this curve is paid in ${paymentMint.toBase58()}, not COOK`,
+      "the curve-sell vault is wCOOK only; sell on the curve directly instead",
+    );
+  const payout = curveSellVault(pool, owner);
   const ixs = [
     ComputeBudgetProgram.setComputeUnitLimit({ units: CURVE_PLACE_COMPUTE_UNITS }),
-    createAssociatedTokenAccountIdempotentInstruction(
-      owner,
-      payout,
-      owner,
-      paymentMint,
-      TOKEN_PROGRAM_ID,
-    ),
+    buildCreateCurveSellVaultIx(owner, pool, owner),
     buildApprovePositionSaleIx({
       programId: curve.programId,
       owner,
@@ -730,12 +772,13 @@ async function placeCurveSell(
     output: {
       mint: args.outputMint,
       symbol: output.sym,
-      atPrice: rawToUi(minPaymentOut, output.dec),
-      // No maker fee: the launchpad pays the pinned account directly, our program is not in the path.
-      netAfterFee: rawToUi(minPaymentOut, output.dec),
+      atPrice: rawToUi(priced, output.dec),
+      // What reaches our wCOOK account at the floor, after `settle_curve_sell` takes the maker fee.
+      netAfterFee: rawToUi(makerNetOut(priced, feeBps), output.dec),
     },
     price,
-    makerFeeBps: 0,
+    // The limit-order program's maker fee, taken from the vault on every fill.
+    makerFeeBps: feeBps,
     market,
     /** What was signed: the ask, or the sale's end when that comes first. */
     expiresAt: new Date(expiryTs * 1000).toISOString(),
@@ -743,6 +786,6 @@ async function placeCurveSell(
     payoutNative: false,
     refundNative: false,
     wrappedCook: "0",
-    note: "nothing is escrowed: this authorizes the Cookiebox keeper to sell up to these shares at or above your price until the expiry, paying wCOOK to your token account (partial fills possible, pro-rated floor). The shares stay spendable — selling them with launchpad_sell makes the order unfillable. The order also ends with the SALE: no fill is possible once the launch closes, whatever expiry was asked for, so expiresAt is never past saleEndsAt. Revoke any time with cancel_limit_order.",
+    note: "nothing is escrowed: this authorizes the Cookiebox keeper to sell up to these shares at or above your price until the expiry; each fill pays your curve-sell vault and the limit-order program settles it to your wCOOK token account minus the maker fee (partial fills possible, pro-rated floor). The shares stay spendable — selling them with launchpad_sell makes the order unfillable. The order also ends with the SALE: no fill is possible once the launch closes, whatever expiry was asked for, so expiresAt is never past saleEndsAt. Revoke any time with cancel_limit_order.",
   };
 }

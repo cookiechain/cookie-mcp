@@ -14,7 +14,11 @@
 // fee is paid by the filler on top of the maker's price and is 0 while the only filler is the
 // Cookiebox keeper.
 import anchorPkg, { type Idl } from "@coral-xyz/anchor";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import {
+  TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountIdempotentInstruction,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 import {
   ComputeBudgetProgram,
   PublicKey,
@@ -33,6 +37,7 @@ import {
   PROGRAM_IDS,
   explorerTxUrl,
 } from "./config";
+import { buildSettleCurveSellIx, isCurveSellVaultPayout, makerWcookAta } from "./curveSellVault";
 import { unconfirmedError } from "./confirm";
 import { nativeFlagsBody, quoteAgg } from "./cookiebox";
 import { resolveWallet } from "./domains";
@@ -80,7 +85,7 @@ export type LimitOrderKind = "limit" | "stop";
 /**
  * Every kind the listing can return. `curve-buy` is an escrow order whose fill lands as MomoSwap
  * curve shares (cancellable like any other); `curve-sell` is not an `Order` at all but a launchpad
- * sale authorization the maker signed — nothing is escrowed and only the Cookiebox UI can revoke it.
+ * sale authorization the maker signed — nothing is escrowed; revoking it also closes its vault.
  */
 export type ListedOrderKind = LimitOrderKind | "curve-buy" | "curve-sell";
 
@@ -408,6 +413,11 @@ export interface LimitOrderFees {
   makerStableFeeBps: number;
   takerFeeBps: number;
   takerStableFeeBps: number;
+  /**
+   * The launchpad's fee on a curve SELL (anchor-launchpad-momoswap#70), charged on top of the
+   * authorization's floor. Only an agg with cookiebox#7 reports it.
+   */
+  curveSellFeeBps?: number;
 }
 
 export interface AggLimitOrder {
@@ -955,6 +965,8 @@ export interface SaleAuthView {
   pool: PublicKey;
   owner: PublicKey;
   delegate: PublicKey;
+  /** Where fills pay: the curve-sell vault (fee-paying), or the maker's ATA on a legacy order. */
+  payoutAccount: PublicKey;
   remainingShares: bigint;
 }
 
@@ -967,6 +979,7 @@ export function decodeSaleAuth(data: Uint8Array): SaleAuthView | null {
     pool: new PublicKey(buf.subarray(8, 40)),
     owner: new PublicKey(buf.subarray(40, 72)),
     delegate: new PublicKey(buf.subarray(72, 104)),
+    payoutAccount: new PublicKey(buf.subarray(104, 136)),
     remainingShares: buf.readBigUInt64LE(144),
   };
 }
@@ -1030,14 +1043,34 @@ async function revokeCurveSell(
     );
   }
 
+  const instructions = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 100_000 }),
+    buildRevokePositionSaleIx({ programId: launchpad, owner, saleAuth }),
+  ];
+  // A vault-paid order also closes its vault (`settle_curve_sell(close = true)`, maker only):
+  // anything a keeper left unsettled is paid out first, maker fee included, then the rent comes
+  // back. Only while the vault still exists — the program cannot deserialize a missing one — and
+  // our wCOOK ATA is recreated idempotently first because the settlement pays nowhere else.
+  if (
+    isCurveSellVaultPayout(auth) &&
+    (await conn.getAccountInfo(auth.payoutAccount, "confirmed")) != null
+  ) {
+    instructions.push(
+      createAssociatedTokenAccountIdempotentInstruction(
+        owner,
+        makerWcookAta(owner),
+        owner,
+        new PublicKey(COOK_MINT),
+        TOKEN_PROGRAM_ID,
+      ),
+      buildSettleCurveSellIx({ payer: owner, maker: owner, pool: auth.pool, close: true }),
+    );
+  }
   const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
   const message = new TransactionMessage({
     payerKey: owner,
     recentBlockhash: blockhash,
-    instructions: [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 50_000 }),
-      buildRevokePositionSaleIx({ programId: launchpad, owner, saleAuth }),
-    ],
+    instructions,
   }).compileToV0Message();
   const tx = new VersionedTransaction(message);
   const { signature } = await simulateSignSendConfirm(

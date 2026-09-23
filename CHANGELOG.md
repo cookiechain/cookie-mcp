@@ -43,14 +43,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **`cancel_limit_order` revokes a curve sell.** The aggregator has no cancel transaction for a sale
   authorization, so the server builds the launchpad's `revoke_position_sale` itself after reading the
   authorization from chain and checking it is launchpad-owned, has the right discriminator and names
-  your wallet as owner. The result carries `revoked: true`; no refund moves because nothing was held.
+  your wallet as owner. While the order's curve-sell vault still exists it also runs the limit-order
+  program's `settle_curve_sell(close)`, which pays out anything left (minus the maker fee) and returns
+  the vault's rent. The result carries `revoked: true`; no refund moves because nothing was held.
 - **`place_limit_order` places curve orders.** For the direct COOK pair of a MomoSwap token still on
   its bonding curve (detected from the mints, plain `limit` only): COOK → token is a `curve-buy`, an
   escrow order paid out into your launchpad position, with the one-time `enable_buy_for` opt-in
   added when missing and the pool's minimum-buy / per-wallet cap checked first; token → COOK is a
-  `curve-sell`, a sale authorization for the Cookiebox keeper at your floor that pays wCOOK to your
-  token account, one per pool, expiring within 30 days. Built locally and simulated; the buy goes
-  through the same verifier as an aggregator build. The result carries `curvePool` and `escrowed`.
+  `curve-sell`, a sale authorization for the Cookiebox keeper at your floor, one per pool, expiring
+  within 30 days, paying your **curve-sell vault** — the limit-order program's wCOOK account for that
+  pool and wallet, created in the same transaction. Each fill pays the vault and the program's
+  `settle_curve_sell` passes it on to your wCOOK token account minus the limit-order maker fee
+  (`makerFeeBps`, read live; `netAfterFee` is what you receive at the floor). The floor is the price
+  itself, so priced at P the order fills once the curve pays P and you net P minus the fee, like a
+  plain order. Built locally and simulated; the buy goes through the same verifier as an aggregator
+  build. The result carries `curvePool` and `escrowed`.
 
 ### Fixed
 

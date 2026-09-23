@@ -216,12 +216,14 @@ describe("curve-sell revoke", () => {
   const pool = Keypair.generate().publicKey;
   const ownerPk = Keypair.generate().publicKey;
   const delegate = Keypair.generate().publicKey;
+  const payout = Keypair.generate().publicKey;
   const saleAuthBytes = (over: { disc?: number[]; size?: number } = {}) => {
     const b = Buffer.alloc(SALE_AUTH_SIZE);
     Buffer.from(over.disc ?? SALE_AUTH_DISCRIMINATOR).copy(b, 0);
     pool.toBuffer().copy(b, 8);
     ownerPk.toBuffer().copy(b, 40);
     delegate.toBuffer().copy(b, 72);
+    payout.toBuffer().copy(b, 104);
     b.writeBigUInt64LE(22_580_000_000n, 136); // approved
     b.writeBigUInt64LE(12_340_000_000n, 144); // remaining
     return over.size === undefined ? b : b.subarray(0, over.size);
@@ -231,11 +233,12 @@ describe("curve-sell revoke", () => {
     expect([...SALE_AUTH_DISCRIMINATOR]).toEqual(sighash("account:SaleAuthorization"));
     expect([...REVOKE_POSITION_SALE_DISCRIMINATOR]).toEqual(sighash("global:revoke_position_sale"));
   });
-  it("decodes pool, owner, delegate and the remaining shares", () => {
+  it("decodes pool, owner, delegate, payout and the remaining shares", () => {
     const a = decodeSaleAuth(saleAuthBytes())!;
     expect(a.pool.equals(pool)).toBe(true);
     expect(a.owner.equals(ownerPk)).toBe(true);
     expect(a.delegate.equals(delegate)).toBe(true);
+    expect(a.payoutAccount.equals(payout)).toBe(true);
     expect(a.remainingShares).toBe(12_340_000_000n);
   });
   it("rejects a wrong discriminator and a short account", () => {

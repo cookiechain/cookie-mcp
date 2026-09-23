@@ -221,16 +221,24 @@ MomoSwap **curve orders** placed on cookiebox.app show up in `get_limit_orders` 
 other); a `curve-sell` is a launchpad sale authorization, not an escrow — `escrowed: false`, the
 shares stay spendable and `createdAt` is null. `cancel_limit_order` revokes it: the aggregator has no
 `cancel-tx` for it, so this server builds the launchpad's `revoke_position_sale` itself after reading
-the authorization from chain (launchpad-owned, right discriminator, your wallet as owner). The result
-says `revoked: true`; nothing is refunded because nothing was held.
+the authorization from chain (launchpad-owned, right discriminator, your wallet as owner), followed by
+the limit-order program's `settle_curve_sell(close)` when the order pays a curve-sell vault that still
+exists. The result says `revoked: true`; nothing is refunded because nothing was held.
 
 `place_limit_order` places curve orders too, for the **direct COOK pair** of a token still on its
 curve (detected from the mints; `limit` only, no stops). COOK → token becomes a `curve-buy`: an
 ordinary escrow order whose payout is your launchpad position, filled by the keeper's `buy_for`; the
 free one-time `enable_buy_for` opt-in is added to the first order when your wallet lacks it, and the
 pool's `minBuy` / per-wallet cap are checked so an unfillable order is refused up front. Token → COOK
-becomes a `curve-sell`: an `approve_position_sale` for the Cookiebox keeper at your floor, paying
-wCOOK to your token account, one per pool. Its expiry is clamped to the **sale's own end**: the
+becomes a `curve-sell`: an `approve_position_sale` for the Cookiebox keeper at your floor, one per
+pool, paying your **curve-sell vault** — the limit-order program's wCOOK account for this pool and
+wallet, created in the same transaction. Each fill pays the vault and the program's
+`settle_curve_sell` passes it on to your wCOOK token account minus the limit-order maker fee
+(`makerFeeBps`, read live; `netAfterFee` is what you receive at the floor). The floor is the price
+itself: priced at P, the order fills once the curve pays P and you receive P minus the fee, like a
+plain order. The keeper refuses an authorization that pays anything but the vault, so there is no
+fee-free shape to place. `cancel_limit_order` revokes the authorization and, while the vault still
+exists, settles and closes it too, returning both rents. Its expiry is clamped to the **sale's own end**: the
 launchpad caps an authorization at 30 days and never reads the pool, but no fill is possible once the
 launch closes, and a launch runs at most 7 days — so `expiresAt` is never past `saleEndsAt`, and the
 one-week default would otherwise mint an order that shows a future expiry and can never fill. This
