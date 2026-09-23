@@ -53,8 +53,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `curve-sell`, a sale authorization for the Cookiebox keeper at your floor, one per pool, expiring
   within 30 days, paying your **curve-sell vault** — the limit-order program's wCOOK account for that
   pool and wallet, created in the same transaction. Each fill pays the vault and the program's
-  `settle_curve_sell` passes it on to your wCOOK token account minus the limit-order maker fee
-  (`makerFeeBps`, read live; `netAfterFee` is what you receive at the floor). The floor is the price
+  `settle_curve_sell` passes it on to your wallet as native COOK minus the limit-order maker fee
+  (`makerFeeBps`, read live; `netAfterFee` is what you receive at the floor; `payoutNative: true`).
+  The floor is the price
   itself, so priced at P the order fills once the curve pays P and you net P minus the fee, like a
   plain order. Built locally and simulated; the buy goes through the same verifier as an aggregator
   build. The result carries `curvePool` and `escrowed`.

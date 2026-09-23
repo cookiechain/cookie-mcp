@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
+import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import limitOrderIdl from "../idl/limit_order.json" with { type: "json" };
 import { COOK_MINT, PROGRAM_IDS } from "./config";
 import {
@@ -9,10 +13,10 @@ import {
   buildCreateCurveSellVaultIx,
   buildSettleCurveSellIx,
   curveSellAuthorityPda,
+  curveSellPayoutPda,
   curveSellVault,
   isCurveSellVaultPayout,
   limitOrderFeePda,
-  makerWcookAta,
 } from "./curveSellVault";
 
 const LIMIT_ORDER = new PublicKey(PROGRAM_IDS.limitOrder);
@@ -43,7 +47,14 @@ describe("the curve-sell vault (limit-order settle_curve_sell)", () => {
     expect(
       curveSellVault(pool, maker).equals(curveSellVault(Keypair.generate().publicKey, maker)),
     ).toBe(false);
-    expect(makerWcookAta(maker).equals(curveSellVault(pool, maker))).toBe(false);
+    expect(
+      curveSellPayoutPda(curveSellVault(pool, maker)).equals(
+        PublicKey.findProgramAddressSync(
+          [Buffer.from("payout"), curveSellVault(pool, maker).toBuffer()],
+          LIMIT_ORDER,
+        )[0],
+      ),
+    ).toBe(true);
   });
 
   it("creates the vault as an idempotent ATA create paid by whoever places", () => {
@@ -61,9 +72,8 @@ describe("the curve-sell vault (limit-order settle_curve_sell)", () => {
     expect(
       isCurveSellVaultPayout({ pool, owner: maker, payoutAccount: curveSellVault(pool, maker) }),
     ).toBe(true);
-    expect(
-      isCurveSellVaultPayout({ pool, owner: maker, payoutAccount: makerWcookAta(maker) }),
-    ).toBe(false);
+    const makerAta = getAssociatedTokenAddressSync(new PublicKey(COOK_MINT), maker, true);
+    expect(isCurveSellVaultPayout({ pool, owner: maker, payoutAccount: makerAta })).toBe(false);
   });
 
   it("encodes settle_curve_sell exactly as the vendored IDL describes it", () => {
@@ -90,7 +100,13 @@ describe("the curve-sell vault (limit-order settle_curve_sell)", () => {
     expect(at("pool").equals(pool)).toBe(true);
     expect(at("authority").equals(curveSellAuthorityPda(pool, maker))).toBe(true);
     expect(at("vault").equals(curveSellVault(pool, maker))).toBe(true);
-    expect(at("maker_output_account").equals(makerWcookAta(maker))).toBe(true);
+    expect(at("payout").equals(curveSellPayoutPda(at("vault")))).toBe(true);
+    // Native payout: no token account of the maker's anywhere in the list.
+    expect(
+      ix.keys.some((k) =>
+        k.pubkey.equals(getAssociatedTokenAddressSync(new PublicKey(COOK_MINT), maker, true)),
+      ),
+    ).toBe(false);
     expect(at("fee").equals(limitOrderFeePda())).toBe(true);
     // The fee vault for wCOOK on Cookie Chain — the one the program insists already exists.
     expect(at("program_fee_account").toBase58()).toBe(
@@ -98,5 +114,6 @@ describe("the curve-sell vault (limit-order settle_curve_sell)", () => {
     );
     expect(at("mint").toBase58()).toBe(COOK_MINT);
     expect(at("token_program").equals(TOKEN_PROGRAM_ID)).toBe(true);
+    expect(at("system_program").equals(SystemProgram.programId)).toBe(true);
   });
 });

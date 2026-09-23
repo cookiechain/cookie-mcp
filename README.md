@@ -233,8 +233,9 @@ pool's `minBuy` / per-wallet cap are checked so an unfillable order is refused u
 becomes a `curve-sell`: an `approve_position_sale` for the Cookiebox keeper at your floor, one per
 pool, paying your **curve-sell vault** — the limit-order program's wCOOK account for this pool and
 wallet, created in the same transaction. Each fill pays the vault and the program's
-`settle_curve_sell` passes it on to your wCOOK token account minus the limit-order maker fee
-(`makerFeeBps`, read live; `netAfterFee` is what you receive at the floor). The floor is the price
+`settle_curve_sell` passes it on to your wallet as **native COOK** minus the limit-order maker fee
+(`makerFeeBps`, read live; `netAfterFee` is what you receive at the floor; `payoutNative: true`,
+no token account needed). The floor is the price
 itself: priced at P, the order fills once the curve pays P and you receive P minus the fee, like a
 plain order. The keeper refuses an authorization that pays anything but the vault, so there is no
 fee-free shape to place. `cancel_limit_order` revokes the authorization and, while the vault still

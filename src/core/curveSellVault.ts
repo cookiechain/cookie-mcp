@@ -3,7 +3,9 @@
 // `sell_authorized` pays whatever account the authorization pinned, and the limit-order program
 // never sees the sale. So the authorization pins a vault the program owns — the wCOOK associated
 // account of PDA `["curve_sell", pool, maker]` — and the program's `settle_curve_sell` pays it out:
-// `Fee.maker_fee` to the fee vault, the rest to the maker's own wCOOK ATA (fibanachos/limit-order#2).
+// `Fee.maker_fee` to the fee vault, the rest to the maker's WALLET as native COOK, unwrapped through
+// a scratch `["payout", vault]` account the program creates and closes inside the instruction
+// (fibanachos/limit-order#2). The maker needs no token account.
 // The floor therefore applies to what reaches the vault, BEFORE the fee, exactly like a plain
 // order's `taking_amount`: priced at P, the order fills once the curve pays P and the maker nets
 // P minus the fee. The keeper refuses an authorization signed after the switch that pins anything
@@ -17,7 +19,7 @@ import {
   createAssociatedTokenAccountIdempotentInstruction,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import { PublicKey, TransactionInstruction } from "@solana/web3.js";
+import { PublicKey, SystemProgram, TransactionInstruction } from "@solana/web3.js";
 import { COOK_MINT, PROGRAM_IDS } from "./config";
 
 // Read from config here rather than `limitOrders.ts` so that module can import this one.
@@ -40,15 +42,12 @@ export function curveSellAuthorityPda(pool: PublicKey, maker: PublicKey): Public
   )[0];
 }
 
-/** Where a settlement pays the maker: their wCOOK ATA, which the program derives the same way. */
-export function makerWcookAta(maker: PublicKey): PublicKey {
-  return getAssociatedTokenAddressSync(
-    WCOOK,
-    maker,
-    true,
-    TOKEN_PROGRAM_ID,
-    ASSOCIATED_TOKEN_PROGRAM_ID,
-  );
+/** The scratch wrapped account a settlement unwraps the maker's share through; one per vault. */
+export function curveSellPayoutPda(vault: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("payout"), vault.toBuffer()],
+    LIMIT_ORDER_PROGRAM_ID,
+  )[0];
 }
 
 /** The account a curve sell's authorization pins as its payout. */
@@ -89,7 +88,9 @@ export function isCurveSellVaultPayout(args: {
 /**
  * `settle_curve_sell(close)`. `close = false` is permissionless (the keeper appends it to a fill);
  * `close = true` is the maker's cancel tail after `revoke_position_sale`: settles what is left and
- * closes the vault, rent to the maker. The program refuses a close from anyone else.
+ * closes the vault, rent to the maker. The program refuses a close from anyone else. The maker's
+ * share arrives as lamports in the wallet; the settler fronts the scratch account's rent and gets
+ * it back in the same instruction.
  */
 export function buildSettleCurveSellIx(args: {
   payer: PublicKey;
@@ -102,6 +103,7 @@ export function buildSettleCurveSellIx(args: {
   data.set(SETTLE_CURVE_SELL_DISCRIMINATOR, 0);
   data[8] = args.close ? 1 : 0;
   const fee = limitOrderFeePda();
+  const vault = curveSellVault(pool, maker);
   return new TransactionInstruction({
     programId: LIMIT_ORDER_PROGRAM_ID,
     keys: [
@@ -109,8 +111,9 @@ export function buildSettleCurveSellIx(args: {
       { pubkey: maker, isSigner: false, isWritable: true },
       { pubkey: pool, isSigner: false, isWritable: false },
       { pubkey: curveSellAuthorityPda(pool, maker), isSigner: false, isWritable: false },
-      { pubkey: curveSellVault(pool, maker), isSigner: false, isWritable: true },
-      { pubkey: makerWcookAta(maker), isSigner: false, isWritable: true },
+      { pubkey: WCOOK, isSigner: false, isWritable: false },
+      { pubkey: vault, isSigner: false, isWritable: true },
+      { pubkey: curveSellPayoutPda(vault), isSigner: false, isWritable: true },
       { pubkey: fee, isSigner: false, isWritable: false },
       {
         pubkey: getAssociatedTokenAddressSync(
@@ -123,8 +126,8 @@ export function buildSettleCurveSellIx(args: {
         isSigner: false,
         isWritable: true,
       },
-      { pubkey: WCOOK, isSigner: false, isWritable: false },
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data,
   });

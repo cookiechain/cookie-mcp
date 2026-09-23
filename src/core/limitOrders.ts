@@ -14,11 +14,7 @@
 // fee is paid by the filler on top of the maker's price and is 0 while the only filler is the
 // Cookiebox keeper.
 import anchorPkg, { type Idl } from "@coral-xyz/anchor";
-import {
-  TOKEN_PROGRAM_ID,
-  createAssociatedTokenAccountIdempotentInstruction,
-  getAssociatedTokenAddressSync,
-} from "@solana/spl-token";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import {
   ComputeBudgetProgram,
   PublicKey,
@@ -37,7 +33,7 @@ import {
   PROGRAM_IDS,
   explorerTxUrl,
 } from "./config";
-import { buildSettleCurveSellIx, isCurveSellVaultPayout, makerWcookAta } from "./curveSellVault";
+import { buildSettleCurveSellIx, isCurveSellVaultPayout } from "./curveSellVault";
 import { unconfirmedError } from "./confirm";
 import { nativeFlagsBody, quoteAgg } from "./cookiebox";
 import { resolveWallet } from "./domains";
@@ -1043,26 +1039,22 @@ async function revokeCurveSell(
     );
   }
 
+  // `settle_curve_sell(close)` alone burns ~76k CU (measured in LiteSVM: five CPIs to create,
+  // fill and close the scratch wrapped account, plus the vault close); 100k left a revoke + settle
+  // a few thousand short. 200k is the per-instruction default anyway.
   const instructions = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: 100_000 }),
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
     buildRevokePositionSaleIx({ programId: launchpad, owner, saleAuth }),
   ];
   // A vault-paid order also closes its vault (`settle_curve_sell(close = true)`, maker only):
-  // anything a keeper left unsettled is paid out first, maker fee included, then the rent comes
-  // back. Only while the vault still exists — the program cannot deserialize a missing one — and
-  // our wCOOK ATA is recreated idempotently first because the settlement pays nowhere else.
+  // anything a keeper left unsettled is paid out first — maker fee included, the rest as native
+  // COOK to this wallet — then the rent comes back. Only while the vault still exists: the program
+  // cannot deserialize a missing one.
   if (
     isCurveSellVaultPayout(auth) &&
     (await conn.getAccountInfo(auth.payoutAccount, "confirmed")) != null
   ) {
     instructions.push(
-      createAssociatedTokenAccountIdempotentInstruction(
-        owner,
-        makerWcookAta(owner),
-        owner,
-        new PublicKey(COOK_MINT),
-        TOKEN_PROGRAM_ID,
-      ),
       buildSettleCurveSellIx({ payer: owner, maker: owner, pool: auth.pool, close: true }),
     );
   }

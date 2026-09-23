@@ -16,8 +16,8 @@
 //   SELL  shares → COOK.  Nothing can be escrowed, so the order IS a launchpad `SaleAuthorization`
 //         we sign: the keeper (`sell_authorized`) may sell up to `shares` at or above our floor,
 //         paying our curve-sell VAULT (`curveSellVault.ts`), until the expiry; the limit-order
-//         program's `settle_curve_sell` then takes the maker fee and pays the rest to our wCOOK
-//         account. The shares stay spendable — selling them elsewhere silently makes the order
+//         program's `settle_curve_sell` then takes the maker fee and pays the rest to our wallet
+//         as native COOK. The shares stay spendable — selling them elsewhere silently makes the order
 //         unfillable. Cancelling is `revoke_position_sale` + `settle_curve_sell(close)` (see
 //         `cancelLimitOrder`).
 //
@@ -659,12 +659,7 @@ async function placeCurveSell(
     Math.floor(Date.now() / 1000),
     curve.pool.endTs,
   );
-  if (args.unwrapSol === true) {
-    throw new CookieMcpError(
-      "a curve sell pays wCOOK to your token account; the launchpad cannot unwrap inside the fill",
-      "omit unwrapSol — use trade to unwrap later if you want native COOK",
-    );
-  }
+  // `unwrapSol` needs no handling: the settlement always pays the maker in native COOK.
 
   const [position, fees] = await Promise.all([
     fetchPosition(curve.pool.pubkey, owner.toBase58()).catch(() => null),
@@ -673,7 +668,7 @@ async function placeCurveSell(
   ]);
   // The floor is the price itself: the launchpad checks it on what reaches the VAULT, and the
   // limit-order program's `settle_curve_sell` takes the maker fee after that, on the way to our
-  // wCOOK account — the same shape as a plain order's `taking_amount`. Priced at P, the order fills
+  // wallet as native COOK — the same shape as a plain order's `taking_amount`. Priced at P, the order fills
   // once the curve pays P and nets P minus the fee. (The launchpad's own `sale_auth_fee_bps` is
   // MomoSwap's, stays at 0 and is not pinned here.) A missing schedule only affects the report.
   const minPaymentOut = priced;
@@ -714,7 +709,7 @@ async function placeCurveSell(
 
   // The payout is pinned to our curve-sell VAULT: the limit-order program's wCOOK ATA for
   // `["curve_sell", pool, owner]`, which only that program can pay out — the maker fee to its fee
-  // vault, the rest to our own wCOOK ATA. The keeper cannot redirect it, and it refuses any other
+  // vault, the rest to our wallet as native COOK. The keeper cannot redirect it, and it refuses any other
   // payout. `approve_position_sale` requires the account to exist, hence the idempotent create.
   if (!paymentMint.equals(new PublicKey(COOK_MINT)))
     throw new CookieMcpError(
@@ -773,7 +768,7 @@ async function placeCurveSell(
       mint: args.outputMint,
       symbol: output.sym,
       atPrice: rawToUi(priced, output.dec),
-      // What reaches our wCOOK account at the floor, after `settle_curve_sell` takes the maker fee.
+      // What reaches our wallet (native COOK) at the floor, after `settle_curve_sell` takes the fee.
       netAfterFee: rawToUi(makerNetOut(priced, feeBps), output.dec),
     },
     price,
@@ -783,9 +778,9 @@ async function placeCurveSell(
     /** What was signed: the ask, or the sale's end when that comes first. */
     expiresAt: new Date(expiryTs * 1000).toISOString(),
     saleEndsAt: curve.pool.endTs ? new Date(curve.pool.endTs * 1000).toISOString() : null,
-    payoutNative: false,
+    payoutNative: true,
     refundNative: false,
     wrappedCook: "0",
-    note: "nothing is escrowed: this authorizes the Cookiebox keeper to sell up to these shares at or above your price until the expiry; each fill pays your curve-sell vault and the limit-order program settles it to your wCOOK token account minus the maker fee (partial fills possible, pro-rated floor). The shares stay spendable — selling them with launchpad_sell makes the order unfillable. The order also ends with the SALE: no fill is possible once the launch closes, whatever expiry was asked for, so expiresAt is never past saleEndsAt. Revoke any time with cancel_limit_order.",
+    note: "nothing is escrowed: this authorizes the Cookiebox keeper to sell up to these shares at or above your price until the expiry; each fill pays your curve-sell vault and the limit-order program settles it to your wallet as native COOK minus the maker fee (partial fills possible, pro-rated floor). The shares stay spendable — selling them with launchpad_sell makes the order unfillable. The order also ends with the SALE: no fill is possible once the launch closes, whatever expiry was asked for, so expiresAt is never past saleEndsAt. Revoke any time with cancel_limit_order.",
   };
 }

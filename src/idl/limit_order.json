@@ -770,13 +770,16 @@
           "name": "payer",
           "docs": [
             "Anyone may settle: the keeper does in the fill transaction, and the maker — or anyone",
-            "else — can settle a balance a keeper left behind. Only `close` is the maker's."
+            "else — can settle a balance a keeper left behind. Only `close` is the maker's. `mut`",
+            "because it is the transaction's fee payer in every client, and on `close` it is also the",
+            "maker receiving the rent — nothing here debits it."
           ],
           "writable": true,
           "signer": true
         },
         {
           "name": "maker",
+          "docs": ["`close`."],
           "writable": true
         },
         {
@@ -800,6 +803,14 @@
               }
             ]
           }
+        },
+        {
+          "name": "mint",
+          "docs": [
+            "Wrapped native only: the payout is unwrapped on the way to the maker. Checked before the",
+            "accounts derived from it, so a wrong mint fails here and not on a derivation."
+          ],
+          "address": "So11111111111111111111111111111111111111112"
         },
         {
           "name": "vault",
@@ -829,33 +840,23 @@
           }
         },
         {
-          "name": "maker_output_account",
+          "name": "payout",
           "docs": [
-            "The maker's own associated account — by derivation, so no caller can redirect it."
+            "within this instruction (see `flash_fill::pay_native`). Seeded by the vault so two vaults",
+            "can never share one."
           ],
           "writable": true,
           "pda": {
             "seeds": [
               {
-                "kind": "account",
-                "path": "maker"
+                "kind": "const",
+                "value": [112, 97, 121, 111, 117, 116]
               },
               {
                 "kind": "account",
-                "path": "token_program"
-              },
-              {
-                "kind": "account",
-                "path": "mint"
+                "path": "vault"
               }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140, 151, 37, 143, 78, 36, 137, 241, 187, 61, 16, 41, 20, 142, 13, 131, 11, 90, 19,
-                153, 218, 255, 16, 132, 4, 142, 123, 216, 219, 233, 248, 89
-              ]
-            }
+            ]
           }
         },
         {
@@ -901,10 +902,11 @@
           }
         },
         {
-          "name": "mint"
+          "name": "token_program"
         },
         {
-          "name": "token_program"
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": [
