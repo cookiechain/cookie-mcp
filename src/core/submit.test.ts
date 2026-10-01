@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   Keypair,
   SystemProgram,
@@ -8,7 +8,16 @@ import {
 } from "@solana/web3.js";
 import bs58 from "bs58";
 
+import { BAKED_BAZAAR_API_URL } from "./config";
 import { assertFullySigned, submitSignedTransaction } from "./submit";
+
+// A stand-in RPC for the send + confirm half; everything else in this file never reaches it.
+const rpc = vi.hoisted(() => ({
+  sendRawTransaction: vi.fn(async () => "SIG"),
+  confirmTransaction: vi.fn(async () => ({ value: { err: null } })),
+  getLatestBlockhash: vi.fn(async () => ({ blockhash: "x", lastValidBlockHeight: 1 })),
+}));
+vi.mock("./rpc", () => ({ getConnection: () => rpc, getSolanaConnection: () => rpc }));
 
 const a = Keypair.generate();
 const b = Keypair.generate();
@@ -60,5 +69,70 @@ describe("submitSignedTransaction input validation", () => {
     await expect(submitSignedTransaction({ signedTransactionBase64: base64 })).rejects.toThrow(
       /missing signatures/,
     );
+  });
+});
+
+describe("submitSignedTransaction and the marketplace indexer", () => {
+  const bazaarLog = { type: "offer" as const, nftMint: b.publicKey.toBase58(), price: "5" };
+
+  function signedBase64(): string {
+    const tx = new Transaction({
+      feePayer: a.publicKey,
+      blockhash: BLOCKHASH,
+      lastValidBlockHeight: 1,
+    }).add(SystemProgram.transfer({ fromPubkey: a.publicKey, toPubkey: b.publicKey, lamports: 1 }));
+    tx.sign(a);
+    return tx.serialize().toString("base64");
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    rpc.confirmTransaction.mockClear();
+  });
+
+  it("reports bazaarLog with the signature once the transaction confirms", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await submitSignedTransaction({
+      signedTransactionBase64: signedBase64(),
+      what: "NFT",
+      bazaarLog,
+    });
+    expect(res.confirmed).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`${BAKED_BAZAAR_API_URL}/log-transaction`);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({ signature: "SIG", ...bazaarLog });
+  });
+
+  it("reports nothing when the transaction does not confirm", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetchMock);
+    rpc.confirmTransaction.mockRejectedValueOnce(new Error("block height exceeded"));
+    await expect(
+      submitSignedTransaction({ signedTransactionBase64: signedBase64(), what: "NFT", bazaarLog }),
+    ).rejects.toThrow(/could not be confirmed/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports nothing for a transaction sent on another route", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await submitSignedTransaction({
+      signedTransactionBase64: signedBase64(),
+      submit: { via: "solana-rpc" },
+      what: "NFT",
+      bazaarLog,
+    });
+    expect(res.confirmed).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports nothing without a bazaarLog", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetchMock);
+    await submitSignedTransaction({ signedTransactionBase64: signedBase64(), what: "stake" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -21,7 +21,7 @@ import { rawToUi, uiToRaw, shortAddr } from "../format";
 import { getConnection } from "../rpc";
 import { requireSigner, ownPublicKey } from "../wallet";
 import { signSendConfirm } from "../liquidity/send";
-import type { TxSigner } from "../signer";
+import type { BazaarLog, TxSigner } from "../signer";
 import {
   AH_SELLER_FEE_BPS,
   escrowPaymentAccount,
@@ -386,9 +386,7 @@ export async function listNft(args: {
 
   const sellerTokenAccount = nftTokenAccount(mint, seller);
   const sell = buildSellIx({ seller, sellerTokenAccount, nftMint: mint, price: priceLamports });
-  const signature = await sendNftTx(conn, [sell], signer);
-  await logTransaction({
-    signature,
+  const signature = await sendNftTx(conn, [sell], signer, {
     type: "list",
     nftMint: args.mint,
     price: priceLamports.toString(),
@@ -424,8 +422,10 @@ export async function cancelListing(args: { mint: string }): Promise<NftTxResult
     price: BigInt(listing.price),
     side: "sell",
   });
-  const signature = await sendNftTx(conn, [cancel], signer);
-  await logTransaction({ signature, type: "cancel-listing", nftMint: args.mint });
+  const signature = await sendNftTx(conn, [cancel], signer, {
+    type: "cancel-listing",
+    nftMint: args.mint,
+  });
   return {
     signature,
     action: "cancel_listing",
@@ -482,8 +482,11 @@ export async function buyNft(args: {
     }),
   );
 
-  const signature = await sendNftTx(conn, ixs, signer);
-  await logTransaction({ signature, type: "buy", nftMint: args.mint, price: price.toString() });
+  const signature = await sendNftTx(conn, ixs, signer, {
+    type: "buy",
+    nftMint: args.mint,
+    price: price.toString(),
+  });
   return {
     signature,
     action: "buy",
@@ -520,8 +523,11 @@ export async function makeOffer(args: {
   if (fund) ixs.push(fund);
   ixs.push(buildPublicBuyIx({ buyer, nftMint: mint, price }));
 
-  const signature = await sendNftTx(conn, ixs, signer);
-  await logTransaction({ signature, type: "offer", nftMint: args.mint, price: price.toString() });
+  const signature = await sendNftTx(conn, ixs, signer, {
+    type: "offer",
+    nftMint: args.mint,
+    price: price.toString(),
+  });
   return {
     signature,
     action: "make_offer",
@@ -557,8 +563,10 @@ export async function cancelOffer(args: { mint: string }): Promise<NftTxResult> 
     side: "publicBuy",
   });
   const withdraw = buildWithdrawIx({ wallet: buyer, amount: price });
-  const signature = await sendNftTx(conn, [cancel, withdraw], signer);
-  await logTransaction({ signature, type: "cancel-offer", nftMint: args.mint });
+  const signature = await sendNftTx(conn, [cancel, withdraw], signer, {
+    type: "cancel-offer",
+    nftMint: args.mint,
+  });
   return {
     signature,
     action: "cancel_offer",
@@ -615,9 +623,7 @@ export async function acceptOffer(args: { mint: string; buyer?: string }): Promi
       buyerSide: "publicBuy",
     }),
   ];
-  const signature = await sendNftTx(conn, ixs, signer);
-  await logTransaction({
-    signature,
+  const signature = await sendNftTx(conn, ixs, signer, {
     type: "accept-offer",
     nftMint: args.mint,
     price: price.toString(),
@@ -658,12 +664,18 @@ async function requireActiveListing(mint: string): Promise<BazaarListing> {
   return listing;
 }
 
+/**
+ * Simulate, sign, send, confirm, then tell the indexer. With an external signer the flow stops at the
+ * signing step, so `log` travels in `needs_signature` and `submit_signed_tx` reports it instead.
+ */
 async function sendNftTx(
   conn: Connection,
   ixs: TransactionInstruction[],
   signer: TxSigner,
-  what = "NFT",
+  log: BazaarLog,
 ): Promise<string> {
   const tx = new Transaction().add(...ixs);
-  return signSendConfirm(conn, tx, signer, [], what);
+  const signature = await signSendConfirm(conn, tx, signer, [], "NFT", { bazaarLog: log });
+  await logTransaction({ signature, ...log });
+  return signature;
 }

@@ -158,7 +158,8 @@ export function createServer(): McpServer {
         "co-signatures would break; it was simulated and its effect on the wallet checked against " +
         "the request, but the user should still review it in their wallet), then call this with the " +
         "signed bytes and the " +
-        "same `submit`, `blockhash`, `lastValidBlockHeight` and `what` fields. It sends on the named " +
+        "same `submit`, `blockhash`, `lastValidBlockHeight` and `what` fields (and `bazaarLog`, when " +
+        "present, so the NFT marketplace indexes the trade). It sends on the named " +
         "route, confirms, and returns the signature. If the original result said `step: " +
         "'intermediate'`, call the original tool again afterwards to continue. Refuses bytes that " +
         "still lack a signature. Never builds or alters transactions.",
@@ -180,6 +181,23 @@ export function createServer(): McpServer {
           .optional()
           .describe("`lastValidBlockHeight` from needs_signature"),
         what: z.string().optional().describe("`what` from needs_signature (names the action)"),
+        bazaarLog: z
+          .object({
+            type: z.enum([
+              "list",
+              "cancel-listing",
+              "buy",
+              "offer",
+              "cancel-offer",
+              "accept-offer",
+            ]),
+            nftMint: z.string(),
+            price: z.string().optional(),
+          })
+          .optional()
+          .describe(
+            "`bazaarLog` from needs_signature (NFT tools only): reported to Baked Bazaar once confirmed",
+          ),
       },
     },
     tool(async (a: Parameters<typeof submitSignedTransaction>[0]) => submitSignedTransaction(a)),

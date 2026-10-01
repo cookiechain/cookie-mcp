@@ -25,6 +25,18 @@ export type SubmitRoute =
   /** Candy Shop's own `/submit-tx` + `/confirm-tx` (Cookiescan-aggregator swaps). */
   | { via: "candyshop"; pools: string[] };
 
+/**
+ * What the Baked Bazaar indexer is told about a confirmed marketplace transaction, besides its
+ * signature. Defined here, not in the NFT module, because it rides the signer protocol
+ * (`needs_signature` → `submit_signed_tx`) and this file must not depend on a venue.
+ */
+export interface BazaarLog {
+  type: "list" | "cancel-listing" | "buy" | "offer" | "cancel-offer" | "accept-offer";
+  nftMint: string;
+  /** COOK lamports, decimal string. */
+  price?: string;
+}
+
 /** What a flow tells the signer about the transaction it is about to sign. */
 export interface SignContext {
   /** The action in the agent's words: "trade", "stake", "launch", "domain purchase". */
@@ -41,6 +53,11 @@ export interface SignContext {
   step?: "final" | "intermediate";
   /** Agent-facing description of what the transaction does, echoed back in `needs_signature`. */
   summary?: Record<string, unknown>;
+  /**
+   * A Baked Bazaar trade: what to report to its indexer once the transaction confirms. A local signer
+   * reports it itself; an external one echoes it so `submit_signed_tx` can report it instead.
+   */
+  bazaarLog?: BazaarLog;
 }
 
 export type AnyTransaction = Transaction | VersionedTransaction;
@@ -121,6 +138,8 @@ export type NeedsSignature =
       submit: SubmitRoute;
       step: "final" | "intermediate";
       summary?: Record<string, unknown>;
+      /** Pass back to `submit_signed_tx` unchanged; it tells the marketplace indexer after confirming. */
+      bazaarLog?: BazaarLog;
       next: string;
     }
   | {
@@ -177,12 +196,15 @@ export class ExternalSigner implements TxSigner {
       submit: ctx.submit,
       step,
       ...(ctx.summary ? { summary: ctx.summary } : {}),
+      ...(ctx.bazaarLog ? { bazaarLog: ctx.bazaarLog } : {}),
       next:
         `sign transactionBase64 with wallet ${this.publicKey.toBase58()} (do not modify it — any ` +
         `co-signatures would break; it was simulated, and its effect on this wallet checked against ` +
         `the request, which is what \`summary\` describes — let the wallet show the user what it ` +
         `does before they approve), then call submit_signed_tx with the signed ` +
-        `bytes and the same submit/blockhash/lastValidBlockHeight fields` +
+        `bytes and the same submit/blockhash/lastValidBlockHeight` +
+        (ctx.bazaarLog ? `/bazaarLog` : ``) +
+        ` fields` +
         (step === "intermediate"
           ? `. This is a prerequisite step: once it confirms, call the same tool again with the same ` +
             `arguments to continue.`

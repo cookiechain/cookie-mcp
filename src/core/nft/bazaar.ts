@@ -5,6 +5,7 @@
 // it promptly (best-effort).
 import { BAKED_BAZAAR_API_URL } from "../config";
 import { fetchJson } from "../http";
+import type { BazaarLog } from "../signer";
 
 export interface BazaarCreator {
   address: string;
@@ -118,7 +119,7 @@ export async function fetchCollectionStats(symbol: string): Promise<BazaarCollec
 
 // Best-effort: tell the indexer about a signed+confirmed tx so listings/offers update without waiting
 // for its own tx scan. Never throws — indexing lag must not fail a successful on-chain action.
-export async function logTransaction(payload: Record<string, unknown>): Promise<void> {
+export async function logTransaction(payload: { signature: string } & BazaarLog): Promise<void> {
   try {
     await fetchJson(`${base()}/log-transaction`, {
       method: "POST",

@@ -138,6 +138,19 @@ describe("ExternalSigner", () => {
     expect(() => assertFullySigned(back)).not.toThrow();
   });
 
+  it("echoes a marketplace bazaarLog and asks for it back", async () => {
+    const bazaarLog = {
+      type: "offer" as const,
+      nftMint: cosigner.publicKey.toBase58(),
+      price: "5",
+    };
+    const err = await signer.signTransaction(legacyTx(), { ...ctx, bazaarLog }).catch((e) => e);
+    const p = (err as SignatureRequired).payload;
+    if (p.kind !== "transaction") throw new Error("expected a transaction payload");
+    expect(p.bazaarLog).toEqual(bazaarLog);
+    expect(p.next).toMatch(/lastValidBlockHeight\/bazaarLog fields/);
+  });
+
   it("stops a v0 flow the same way", async () => {
     const tx = v0Tx();
     const err = await signWithCosigners(signer, tx, [cosigner], {

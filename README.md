@@ -484,6 +484,9 @@ COOKIE_MCP_ALLOWED_HOSTS=mcp.example.com COOKIE_MCP_CORS_ORIGIN=https://app.exam
   the exact text; call `deploy_token` again with `loginSignature: { message, signature }`. In
   external mode the session is not cached server-side (the wallet header proves nothing), so every
   launch asks for its own login signature.
+- The NFT tools add `bazaarLog`. Pass it back to `submit_signed_tx` and, once the transaction
+  confirms, it tells Baked Bazaar's indexer about the trade (a local signer does this itself), so the
+  listing or offer shows up without waiting for the indexer's own scan.
 - Blockhashes expire in about a minute. If the wallet prompt is slow, `submit_signed_tx` reports the
   timeout with the signature and a "do not retry blindly" hint; re-run the tool for fresh bytes.
 - The HTTP server is stateless (one fresh server per POST) and answers `/healthz`. A loopback bind

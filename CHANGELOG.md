@@ -51,6 +51,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - The library failed to bundle for edge runtimes and browsers (Cloudflare Workers, Vercel Edge):
   Anchor was default-imported, and its browser build — picked under the `workerd` / `browser`
   conditions — has no default export and no `Wallet`. It is now imported by name.
+- NFT trades signed externally were never reported to Baked Bazaar's indexer: the report ran after
+  the send, and in external mode the flow stops before it. The NFT tools now put a `bazaarLog` in
+  `needs_signature`, and `submit_signed_tx` accepts it back and reports the trade once it confirms.
 
 ### Security
 
