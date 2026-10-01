@@ -567,7 +567,8 @@ commit and tag and prints the push command, because it never pushes `main` itsel
 re-run the same command to create the GitHub release and publish to npm and the registry. Finished
 steps are detected and skipped, so a failed run resumes with the same command. `--dry-run` runs the
 preflight, gate and tarball check without changing anything, and `--yes` skips the confirmation
-before publishing.
+before publishing. It refuses to start without `MCP_GITHUB_TOKEN`, a classic PAT with `read:org`
+(see step 7); `read -s MCP_GITHUB_TOKEN && export MCP_GITHUB_TOKEN` keeps it out of shell history.
 
 1. **Bump the version in four places**, all to the same string: `package.json` `version`,
    `src/version.ts` (the version the MCP handshake reports), and `server.json` both top-level

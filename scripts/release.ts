@@ -13,6 +13,11 @@
  *   7. npm publish, then `npm view` + a pinned `npx -y cookie-mcp@X.Y.Z` boot from an empty dir
  *   8. MCP Registry publish, then confirm the registry serves the version
  *
+ * Requires MCP_GITHUB_TOKEN: a classic GitHub PAT with `read:org` from an owner of the cookiechain
+ * org. `mcp-publisher login github`'s device flow can't see an org that restricts OAuth apps, so it
+ * only grants `io.github.<user>/*` and the publish 403s. Set it without leaving it in history:
+ *   read -s MCP_GITHUB_TOKEN && export MCP_GITHUB_TOKEN
+ *
  * Re-running with the same explicit version resumes: every step checks whether it already happened
  * (version already bumped, tag exists, origin has it, release exists, npm/registry have it) and
  * skips it. `--dry-run` runs the preflight, gate and tarball check on the current tree and changes
@@ -276,6 +281,11 @@ function checkTarball(version: string) {
 function commitAndTag(version: string) {
   step("Commit + tag (local)");
   const tag = `v${version}`;
+  // Tagged and in HEAD's history: the release commit is done, even with commits stacked on top.
+  const tagCommit = probe("git", ["rev-parse", `${tag}^{commit}`]);
+  if (tagCommit && probe("git", ["merge-base", "--is-ancestor", tagCommit, "HEAD"]) !== null) {
+    return skip(`${tag} (${tagCommit.slice(0, 7)}) is already in HEAD's history`);
+  }
   if (capture("git", ["log", "-1", "--format=%s"]) === `Release ${version}`) {
     skip("HEAD is already the release commit");
   } else {
@@ -320,9 +330,10 @@ async function npmPublish(version: string) {
   if (npmHas(version)) skip(`${PKG}@${version} is already on npm`);
   else run("npm", ["publish"]);
 
-  // The registry can take a moment to serve a fresh version.
+  // npm says a fresh version "may take a few minutes to become available"; over a minute is normal.
   for (let i = 0; !npmHas(version); i++) {
-    if (i >= 12) fail(`npm view ${PKG}@${version} still empty after a minute`);
+    if (i >= 60) fail(`npm view ${PKG}@${version} still empty after 5 minutes`);
+    if (i % 6 === 0) console.log("  … waiting for npm to serve the new version");
     await new Promise((r) => setTimeout(r, 5_000));
   }
   ok(`npm view ${PKG}@${version} → ${version}`);
@@ -332,13 +343,14 @@ async function npmPublish(version: string) {
 async function registryPublish(version: string) {
   step("MCP Registry");
   if (await registryHas(version)) return skip(`${MCP_NAME}@${version} is already listed`);
+  // Logs in with MCP_GITHUB_TOKEN (checked at startup) — the PAT, not a stale device-flow login.
+  run("mcp-publisher", ["login", "github"]);
   const publish = spawnSync("mcp-publisher", ["publish"], { stdio: "inherit" });
   if (publish.status !== 0) {
-    // Expired login, or the device flow fell back to the personal namespace. MCP_GITHUB_TOKEN (a
-    // classic PAT with read:org) gets past an org that restricts OAuth apps.
-    console.log("  publish failed — logging in again, then retrying once");
-    run("mcp-publisher", ["login", "github"]);
-    run("mcp-publisher", ["publish"]);
+    fail(
+      "registry publish failed — a 403 for the org namespace means MCP_GITHUB_TOKEN is not a " +
+        `classic PAT with \`read:org\` from an owner of the ${MCP_NAME.split("/")[0]} org`,
+    );
   }
   if (!(await registryHas(version))) fail(`registry does not serve ${version} after publishing`);
   ok(`${MCP_NAME}@${version} is live on the MCP Registry`);
@@ -347,6 +359,12 @@ async function registryPublish(version: string) {
 // ── main ───────────────────────────────────────────────────────────────────────────────────────
 
 async function main() {
+  if (!process.env.MCP_GITHUB_TOKEN) {
+    fail(
+      "MCP_GITHUB_TOKEN is not set — the MCP Registry publish needs a classic GitHub PAT with " +
+        "`read:org`. Run `read -s MCP_GITHUB_TOKEN && export MCP_GITHUB_TOKEN`, then re-run",
+    );
+  }
   const version = resolveVersion();
   preflight(version);
   bumpVersion(version);
