@@ -4,6 +4,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 # Unreleased
 
+# [0.8.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.8.0)
+
+_October 1, 2026_
+
 ### Added
 
 - **Client identity on every outbound request.** Venue API and RPC calls now carry
