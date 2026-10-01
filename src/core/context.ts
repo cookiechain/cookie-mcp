@@ -19,6 +19,8 @@ export interface ProvidedSignature {
 export interface RequestContext {
   /** Wallet (base58) the external signer acts for. From the `x-cookie-wallet` header over HTTP. */
   wallet?: string;
+  /** App id the caller named for this request (`x-cookie-app` over HTTP); see clientIdentity.ts. */
+  app?: string;
   /** Message signatures supplied with the request, matched by exact message text. */
   providedSignatures?: ProvidedSignature[];
   /**

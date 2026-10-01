@@ -3,6 +3,7 @@
 import { Connection } from "@solana/web3.js";
 
 import { COOKIE_RPC_URL, SOLANA_RPC_URL, HTTP_TIMEOUT_MS } from "./config";
+import { clientHeaders } from "./clientIdentity";
 import { CookieMcpError } from "./errors";
 
 export interface RpcReq {
@@ -22,7 +23,7 @@ async function rpcBatchOnce(reqs: RpcReq[], timeoutMs: number): Promise<Map<stri
   try {
     const res = await fetch(COOKIE_RPC_URL, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { ...clientHeaders(), "content-type": "application/json" },
       body: JSON.stringify(reqs.map((r) => ({ jsonrpc: "2.0", ...r }))),
       signal: controller.signal,
     });
@@ -72,7 +73,11 @@ export async function rpcBatch(
 let _conn: Connection | null = null;
 
 export function getConnection(): Connection {
-  if (!_conn) _conn = new Connection(COOKIE_RPC_URL, "confirmed");
+  if (!_conn)
+    _conn = new Connection(COOKIE_RPC_URL, {
+      commitment: "confirmed",
+      httpHeaders: clientHeaders(),
+    });
   return _conn;
 }
 
@@ -88,6 +93,7 @@ export function getSolanaConnection(): Connection {
     _solConn = new Connection(SOLANA_RPC_URL, {
       commitment: "confirmed",
       disableRetryOnRateLimit: true,
+      httpHeaders: clientHeaders(),
     });
   return _solConn;
 }

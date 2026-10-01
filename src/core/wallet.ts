@@ -13,6 +13,7 @@ import path from "node:path";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 
+import { clientIdentity } from "./clientIdentity";
 import { COOKIE_RPC_URL, redactUrl } from "./config";
 import { requestContext } from "./context";
 import { CookieMcpError } from "./errors";
@@ -142,6 +143,8 @@ export function walletInfo(): {
   readOnly: boolean;
   signer: SignerMode;
   rpcUrl: string;
+  /** What the venues see this process as (`User-Agent`); see clientIdentity.ts. */
+  client: string;
 } {
   const wallet = ownPublicKey();
   return {
@@ -149,6 +152,7 @@ export function walletInfo(): {
     readOnly: wallet === null,
     signer: signerMode(),
     rpcUrl: redactUrl(COOKIE_RPC_URL),
+    client: clientIdentity().userAgent,
   };
 }
 

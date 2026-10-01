@@ -4,6 +4,7 @@
 // without ever holding a key. See README § "Embedding / hosted mode".
 export * from "./core/signer";
 export * from "./core/context";
+export * from "./core/clientIdentity";
 export * from "./core/submit";
 export * from "./core/wallet";
 export * from "./core/errors";

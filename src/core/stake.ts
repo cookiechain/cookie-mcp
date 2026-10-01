@@ -26,6 +26,7 @@ import {
 import { COOK_DECIMALS, COOK_SYMBOL, explorerTxUrl, explorerAddressUrl } from "./config";
 import { confirmSent } from "./confirm";
 import { CookieMcpError } from "./errors";
+import { clientHeaders } from "./clientIdentity";
 import { getConnection } from "./rpc";
 import { requireSigner } from "./wallet";
 import { signWithCosigners, type TxSigner } from "./signer";
@@ -144,7 +145,10 @@ async function fetchStakePool(conn: Connection): Promise<StakePoolState> {
 // APY from the public hourly rate-history (JSONL) — best-effort; null if unreachable.
 async function estimateApy(): Promise<number | null> {
   try {
-    const res = await fetch(RATE_HISTORY_URL, { signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) });
+    const res = await fetch(RATE_HISTORY_URL, {
+      headers: clientHeaders(),
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    });
     if (!res.ok) return null;
     const lines = (await res.text())
       .split("\n")

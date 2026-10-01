@@ -176,6 +176,36 @@ describe("handleHttpRequest", () => {
     expect(body.result?.tools?.length).toBeGreaterThan(0);
   });
 
+  it("scopes an x-cookie-app header to that request's venue identity", async () => {
+    const call = (headers: Record<string, string>) =>
+      fetch(`http://127.0.0.1:${port}/mcp`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          authorization: "Bearer s3cret",
+          ...headers,
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "get_wallet", arguments: {} },
+        }),
+      });
+    const client = async (headers: Record<string, string>) => {
+      const res = await call(headers);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { result: { content: { text: string }[] } };
+      return (JSON.parse(body.result.content[0]!.text) as { client: string }).client;
+    };
+    expect(await client({ "x-cookie-app": "cookie-chat/2.1" })).toMatch(
+      /; app=cookie-chat\/2.1\)$/,
+    );
+    expect(await client({})).not.toMatch(/app=/);
+    expect(await client({ "x-cookie-app": "not a token" })).not.toMatch(/app=/);
+  });
+
   it("refuses a rebinding Host before any MCP server is created", async () => {
     const before = serversCreated;
     // `fetch` drops a caller-set Host (a forbidden header), so forge it with a raw request.

@@ -31,7 +31,7 @@ It is a community project for the whole Cookie Chain ecosystem.
 - [Configuration](#configuration)
 - [Tools](#tools)
 - [Hosted / wallet-signed mode](#hosted--wallet-signed-mode) — for web apps and other integrators
-- [Safety](#safety)
+- [Client identity](#client-identity) · [Safety](#safety)
 - [Development](#development) — [Release](#release)
 
 ## What it can do
@@ -187,6 +187,7 @@ it never turns a name straight into a trade.
 | `COOKIE_IMAGE_DIR`                         | home directory                        | The only folder `deploy_token.imagePath` may read from (stdio only; refused over HTTP).           |
 | `COOKIE_SLIPPAGE_BPS`                      | `500`                                 | Default slippage (bps).                                                                           |
 | `COOKIE_REFERRER`                          | `mcp treasury`                        | Referral wallet (MomoSwap only).                                                                  |
+| `COOKIE_APP_ID`                            | —                                     | Name of your app, sent to the venues in `User-Agent` (see [Client identity](#client-identity)).   |
 | `SOLANA_RPC_URL`                           | `https://api.mainnet-beta.solana.com` | Solana RPC.                                                                                       |
 | `JUPITER_API_KEY`                          | —                                     | Optional; else keyless Jupiter at 0.5 req/s.                                                      |
 
@@ -449,6 +450,8 @@ COOKIE_MCP_ALLOWED_HOSTS=mcp.example.com COOKIE_MCP_CORS_ORIGIN=https://app.exam
 
 - Every request names the wallet it acts for with an `x-cookie-wallet: <base58>` header (or set
   `COOKIE_WALLET_ADDRESS` for a single-wallet deployment). Reads work as before.
+- A request may also name the app it comes from with `x-cookie-app: <id>`; it overrides
+  `COOKIE_APP_ID` for that request (see [Client identity](#client-identity)).
 - Every money-moving tool runs **all** of its checks — instruction decoding, spend refusals, the
   simulation and its balance check — and then, instead of signing, returns a normal (non-error)
   result:
@@ -534,6 +537,18 @@ The library also bundles for edge runtimes (Cloudflare Workers, Vercel Edge). On
 date `2025-04-01`, or the `nodejs_compat_populate_process_env` flag before that. `deploy_token`'s
 `imageUrl` fetch goes over `node:https`, which Workers provide from compatibility date `2025-08-15`
 (or `enable_nodejs_http_modules`); on an older date pass `imageBase64` instead.
+
+## Client identity
+
+Every request cookie-mcp makes to a venue API or the RPC carries a `User-Agent` such as
+`cookie-mcp/0.7.0 (stdio; local; app=cookie-chat/2.1)` — the version, the transport (`stdio`, `http`
+or `library` when embedded), the signer mode, and the app id if one is set — plus the same string in
+`X-Cookie-Client` (outside a browser, where a custom header would force a CORS preflight). Set
+`COOKIE_APP_ID` (or send `x-cookie-app` per request over HTTP) to name your app: a token of up to 64
+characters from `A-Z a-z 0-9 . _ : / @ + -`, anything else is dropped. Venue operators can then
+attribute traffic to cookie-mcp, to a version, and to your integration. `get_wallet` shows the exact
+string this process sends. This is not telemetry: no extra request is made and no wallet data is
+added — only requests that were going out anyway now say who they come from.
 
 ## Safety
 

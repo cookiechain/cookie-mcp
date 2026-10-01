@@ -23,6 +23,7 @@ import http from "node:http";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
+import { APP_HEADER } from "../core/clientIdentity";
 import { runWithRequestContext } from "../core/context";
 import { VERSION } from "../version";
 
@@ -252,6 +253,7 @@ export async function handleHttpRequest(
   }
 
   const wallet = headerValue(req, WALLET_HEADER)?.trim();
+  const app = headerValue(req, APP_HEADER)?.trim();
   const server = createServer();
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless
@@ -262,7 +264,8 @@ export async function handleHttpRequest(
     void server.close();
   });
   try {
-    await runWithRequestContext({ remote: true, ...(wallet ? { wallet } : {}) }, async () => {
+    const ctx = { remote: true, ...(wallet ? { wallet } : {}), ...(app ? { app } : {}) };
+    await runWithRequestContext(ctx, async () => {
       await server.connect(transport);
       await transport.handleRequest(req, res, parsedBody);
     });

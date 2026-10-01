@@ -97,6 +97,7 @@ describe("getSigner — external mode", () => {
       readOnly: false,
       signer: "external",
       rpcUrl: redactUrl(COOKIE_RPC_URL),
+      client: expect.stringMatching(/^cookie-mcp\/\d+\.\d+\.\d+ \(library; (local|external)\)$/),
     });
   });
 
@@ -131,6 +132,7 @@ describe("walletInfo", () => {
       readOnly: false,
       signer: "local",
       rpcUrl: redactUrl(COOKIE_RPC_URL),
+      client: expect.stringMatching(/^cookie-mcp\/\d+\.\d+\.\d+ \(library; (local|external)\)$/),
     });
     expect(JSON.stringify(info)).not.toContain(secret);
   });
@@ -142,6 +144,7 @@ describe("walletInfo", () => {
       readOnly: true,
       signer: "local",
       rpcUrl: redactUrl(COOKIE_RPC_URL),
+      client: expect.stringMatching(/^cookie-mcp\/\d+\.\d+\.\d+ \(library; (local|external)\)$/),
     });
   });
 

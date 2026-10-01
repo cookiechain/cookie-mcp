@@ -69,6 +69,10 @@ export const COOKIE_REFERRER =
     ? DEFAULT_COOKIE_REFERRER
     : process.env.COOKIE_REFERRER.trim();
 
+// Optional name an integrator gives its app, sent to the venues in `User-Agent` / `X-Cookie-Client`
+// (see clientIdentity.ts). Over HTTP a per-request `x-cookie-app` header overrides it. Unset = no app.
+export const COOKIE_APP_ID = process.env.COOKIE_APP_ID?.trim() || undefined;
+
 // CookOven (book.cookoven.xyz) — the `.cook` name service dApp. It is a pure client-side app: it
 // builds every instruction against the `cookie_domains` program on our own RPC, with no backend of
 // its own, so cookie-mcp hand-encodes the same instructions rather than calling an API.

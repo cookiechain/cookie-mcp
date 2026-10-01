@@ -4,6 +4,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 # Unreleased
 
+### Added
+
+- **Client identity on every outbound request.** Venue API and RPC calls now carry
+  `User-Agent: cookie-mcp/<version> (<transport>; <signer>[; app=<id>])` and the same string in
+  `X-Cookie-Client` (outside a browser). `COOKIE_APP_ID` names the integration; over HTTP an
+  `x-cookie-app` request header overrides it per request. `get_wallet` reports the string as `client`.
+  Lets a venue operator attribute traffic to cookie-mcp, a version, and a named app. Not telemetry:
+  no extra request, no wallet data.
+
 # [0.7.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.7.0)
 
 _October 1, 2026_

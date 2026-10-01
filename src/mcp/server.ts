@@ -5,6 +5,7 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 import { createServer } from "./createServer";
+import { setClientTransport } from "../core/clientIdentity";
 import { isLoopbackHost, resolveHttpSecurity, serveHttp } from "./http";
 import { ownPublicKey, signerMode } from "../core/wallet";
 import { VERSION } from "../version";
@@ -55,7 +56,8 @@ function parseArgs(argv: string[]): { http: boolean; port: number; host: string;
           "  cookie-mcp --host <addr>   bind address for --http (default 127.0.0.1)",
           "",
           "Env: COOKIE_PRIVATE_KEY (local signer), COOKIE_SIGNER=external (+ COOKIE_WALLET_ADDRESS or",
-          "the x-cookie-wallet request header), COOKIE_RPC_URL, COOKIE_MCP_HTTP_PORT/HOST/PATH.",
+          "the x-cookie-wallet request header), COOKIE_RPC_URL, COOKIE_MCP_HTTP_PORT/HOST/PATH,",
+          "COOKIE_APP_ID (name your app to the venues; over HTTP the x-cookie-app header per request).",
           "HTTP gates: COOKIE_MCP_HTTP_TOKEN (bearer token), COOKIE_MCP_ALLOWED_HOSTS (Host allow-list),",
           "COOKIE_MCP_CORS_ORIGIN (browser origins allowed; default * without a key, none with one).",
         ].join("\n"),
@@ -71,6 +73,7 @@ function parseArgs(argv: string[]): { http: boolean; port: number; host: string;
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  setClientTransport(opts.http ? "http" : "stdio");
   if (opts.http) {
     const sec = resolveHttpSecurity(opts);
     // A hosted server that also holds a spending key lets anyone who reaches the port spend from it —

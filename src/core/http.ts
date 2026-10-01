@@ -2,6 +2,7 @@
 // POST calls (swap-tx, submit-tx) are never retried: a retry could double-submit. 4xx is never
 // retried (won't self-heal); timeouts, network errors, and 429/5xx are transient.
 import { HTTP_TIMEOUT_MS } from "./config";
+import { clientHeaders } from "./clientIdentity";
 import { CookieMcpError } from "./errors";
 
 class TransientError extends Error {}
@@ -21,6 +22,7 @@ async function attempt<T>(
     const res = await fetch(url, {
       ...init,
       headers: {
+        ...clientHeaders(),
         Accept: "application/json",
         ...(init?.body ? { "Content-Type": "application/json" } : {}),
         ...init?.headers,
