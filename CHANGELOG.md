@@ -4,6 +4,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 # Unreleased
 
+# [0.7.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.7.0)
+
+_October 1, 2026_
+
 ### Added
 
 - **Bridge SOL, and any token the bridge adds later.** `bridge` takes `token` (a symbol or either
