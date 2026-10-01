@@ -126,6 +126,7 @@
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run --passWithNoTests",
     "smoke": "tsx scripts/smoke.ts",
+    "release": "tsx scripts/release.ts",
     "test": "yarn lint && yarn format:check && yarn typecheck && yarn test:unit && yarn smoke",
     "prepublishOnly": "yarn build"
   },

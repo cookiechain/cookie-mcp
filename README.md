@@ -562,8 +562,16 @@ and friends) mirror the registry entry, so the registry step is what actually up
 `latest` current with `main` — the directories scrape GitHub, and a lagging npm gives people a
 README that promises tools the installed server does not have.
 
-1. **Bump the version in three places**, all to the same string: `package.json` `version`, and
-   `server.json` both top-level `version` and `packages[0].version`. The registry rejects a mismatch,
+`yarn release <X.Y.Z | patch | minor | major>` runs every step below. It stops after the local
+commit and tag and prints the push command, because it never pushes `main` itself. After you push,
+re-run the same command to create the GitHub release and publish to npm and the registry. Finished
+steps are detected and skipped, so a failed run resumes with the same command. `--dry-run` runs the
+preflight, gate and tarball check without changing anything, and `--yes` skips the confirmation
+before publishing.
+
+1. **Bump the version in four places**, all to the same string: `package.json` `version`,
+   `src/version.ts` (the version the MCP handshake reports), and `server.json` both top-level
+   `version` and `packages[0].version`. The registry rejects a mismatch,
    and `mcpName` in `package.json` must stay `io.github.cookiechain/cookie-mcp` (the registry checks
    the published tarball for it).
 2. **CHANGELOG:** rename the `[Unreleased]` heading to
