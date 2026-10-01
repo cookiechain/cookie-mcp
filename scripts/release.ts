@@ -7,8 +7,8 @@
  *   2. CHANGELOG: `# Unreleased` → `# [X.Y.Z](…/releases/tag/vX.Y.Z)` + date, fresh `# Unreleased`
  *   3. gate: `mcp-publisher validate`, `yarn test`, strict smoke (EXPECTED_TOOLS + README in sync)
  *   4. build + tarball check (only dist/**, README.md, LICENSE, package.json; no absolute paths)
- *   5. commit `Release X.Y.Z` and tag `vX.Y.Z` locally — then STOP and print the push command.
- *      The script never pushes the protected branch; you push, then re-run the same command.
+ *   5. commit `Release X.Y.Z` and tag `vX.Y.Z`, show the notes, confirm once, then push the commit
+ *      and the tag to origin/main atomically
  *   6. GitHub release from the CHANGELOG section
  *   7. npm publish, then `npm view` + a pinned `npx -y cookie-mcp@X.Y.Z` boot from an empty dir
  *   8. MCP Registry publish, then confirm the registry serves the version
@@ -21,7 +21,7 @@
  * Re-running with the same explicit version resumes: every step checks whether it already happened
  * (version already bumped, tag exists, origin has it, release exists, npm/registry have it) and
  * skips it. `--dry-run` runs the preflight, gate and tarball check on the current tree and changes
- * nothing. Nothing is published until you confirm (or pass `--yes`).
+ * nothing. Nothing leaves the machine until you confirm (or pass `--yes`).
  */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -300,6 +300,25 @@ function commitAndTag(version: string) {
   else run("git", ["tag", tag]);
 }
 
+function pushRelease(version: string) {
+  step(`Push to origin/${BRANCH}`);
+  if (originHasRelease(version)) return skip(`origin/${BRANCH} already has v${version}`);
+  const tag = `v${version}`;
+  const tagCommit = capture("git", ["rev-parse", `${tag}^{commit}`]);
+  // One atomic push of the tagged commit + the tag: either both land or neither does. The branch
+  // ref is pushed by name so an upstream pointing elsewhere can never redirect it.
+  run("git", [
+    "push",
+    "--atomic",
+    "origin",
+    `${tagCommit}:refs/heads/${BRANCH}`,
+    `refs/tags/${tag}`,
+  ]);
+  run("git", ["fetch", "--quiet", "origin", BRANCH]);
+  if (!originHasRelease(version)) fail(`origin/${BRANCH} does not contain ${tag} after the push`);
+  ok(`origin/${BRANCH} is at ${tagCommit.slice(0, 7)} (${tag})`);
+}
+
 function githubRelease(version: string) {
   step("GitHub release");
   const tag = `v${version}`;
@@ -337,7 +356,23 @@ async function npmPublish(version: string) {
     await new Promise((r) => setTimeout(r, 5_000));
   }
   ok(`npm view ${PKG}@${version} → ${version}`);
-  run("npx", ["tsx", "scripts/smoke.ts", "--pkg", `${PKG}@${version}`]);
+
+  // `npm view` and `npx` can read different replicas of the packument for a few minutes after a
+  // publish: view already lists the version while npx still fails with ETARGET. Only that failure
+  // is retried — a server that boots and misbehaves fails the release on the first try.
+  const args = ["tsx", "scripts/smoke.ts", "--pkg", `${PKG}@${version}`];
+  for (let i = 0; ; i++) {
+    console.log(`  $ npx ${args.join(" ")}`);
+    const r = spawnSync("npx", args, { encoding: "utf8" });
+    const output = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+    process.stdout.write(output);
+    if (r.status === 0) return;
+    const notServedYet = /ETARGET|notarget|No matching version found/.test(output);
+    if (!notServedYet) fail(`\`npx ${args.join(" ")}\` exited with ${r.status ?? r.signal}`);
+    if (i >= 20) fail(`npx still cannot resolve ${PKG}@${version} after 5 more minutes`);
+    console.log("  … npx does not see the version yet, retrying in 15s");
+    await new Promise((res) => setTimeout(res, 15_000));
+  }
 }
 
 async function registryPublish(version: string) {
@@ -379,22 +414,12 @@ async function main() {
 
   commitAndTag(version);
 
-  if (!originHasRelease(version)) {
-    console.log("\n  Release notes:\n");
-    console.log(
-      releaseNotes(readFileSync("CHANGELOG.md", "utf8"), version).replace(/^/gm, "    │ "),
-    );
-    console.log(
-      `\n⏸  Committed and tagged locally. Review it, push it yourself, then re-run to publish:\n\n` +
-        `    git push --atomic origin HEAD:refs/heads/${BRANCH} refs/tags/v${version}\n` +
-        `    yarn release ${version}\n`,
-    );
-    return;
-  }
-
+  console.log("\n  Release notes:\n");
+  console.log(releaseNotes(readFileSync("CHANGELOG.md", "utf8"), version).replace(/^/gm, "    │ "));
   await confirm(
-    `origin has v${version}. Create the GitHub release and publish to npm + MCP Registry?`,
+    `Push v${version} to origin/${BRANCH}, create the GitHub release and publish to npm + MCP Registry?`,
   );
+  pushRelease(version);
   githubRelease(version);
   await npmPublish(version);
   await registryPublish(version);

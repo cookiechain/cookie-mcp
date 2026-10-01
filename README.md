@@ -577,12 +577,12 @@ and friends) mirror the registry entry, so the registry step is what actually up
 `latest` current with `main` — the directories scrape GitHub, and a lagging npm gives people a
 README that promises tools the installed server does not have.
 
-`yarn release <X.Y.Z | patch | minor | major>` runs every step below. It stops after the local
-commit and tag and prints the push command, because it never pushes `main` itself. After you push,
-re-run the same command to create the GitHub release and publish to npm and the registry. Finished
-steps are detected and skipped, so a failed run resumes with the same command. `--dry-run` runs the
+`yarn release <X.Y.Z | patch | minor | major>` runs every step below end to end: it bumps, gates,
+commits and tags locally, shows the release notes and asks once, then pushes the commit and tag to
+`main`, creates the GitHub release and publishes to npm and the registry. Finished steps are
+detected and skipped, so a failed run resumes with the same command. `--dry-run` runs the
 preflight, gate and tarball check without changing anything, and `--yes` skips the confirmation
-before publishing. It refuses to start without `MCP_GITHUB_TOKEN`, a classic PAT with `read:org`
+before pushing and publishing. It refuses to start without `MCP_GITHUB_TOKEN`, a classic PAT with `read:org`
 (see step 7); `read -s MCP_GITHUB_TOKEN && export MCP_GITHUB_TOKEN` keeps it out of shell history.
 
 1. **Bump the version in four places**, all to the same string: `package.json` `version`,
