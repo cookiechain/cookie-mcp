@@ -1,5 +1,6 @@
 # cookie-mcp
 
+[![AgentHub 已收录：cookie-mcp](https://myagenthub.cn/badge/io.github.cookiechain/cookie-mcp)](https://myagenthub.cn/p/io.github.cookiechain/cookie-mcp)
 [![npm version](https://img.shields.io/npm/v/cookie-mcp.svg)](https://www.npmjs.com/package/cookie-mcp)
 [![npm downloads](https://img.shields.io/npm/dm/cookie-mcp.svg)](https://www.npmjs.com/package/cookie-mcp)
 [![MCP Registry](https://img.shields.io/badge/mcp--registry-listed-4b0)](https://registry.modelcontextprotocol.io/v0/servers?search=cookie-mcp)
