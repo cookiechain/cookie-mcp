@@ -1,0 +1,425 @@
+// Pre-sign check for a MomoSwap NFT launchpad build, held to the program's own IDL.
+//
+// `simulateWithinBudget` (spendGuard.ts) bounds what a build may do to OUR accounts: how much COOK
+// leaves, which item leaves, no delegate or owner change. It cannot tell a sell from a
+// `cancel_listing`, or notice a build that names a different collection, because neither shows up
+// as a balance change. This is the part that knows the program — a port of the MomoSwap frontend's
+// `nftTxVerify.ts`, which signs the same API's builds:
+//
+//   - **Which instructions a kind may call, in order** (`KIND_INSTRUCTIONS`). Anything else from the
+//     NFT program, in any position, is refused — `list_on_marketplace` above all.
+//   - **The IDL's account list.** The count, every signer / writable flag, every fixed address and
+//     every PDA, re-derived from the instruction's own slots. A build for another program version has
+//     a different count and is refused before anything else is compared.
+//   - **What only we know.** Our wallet fills the slot that authorises the instruction, the
+//     collection is the one asked for, and an item we hold is the one asked for.
+//   - **The stock instructions around it.** A compute-unit LIMIT (never a price: a price is a fee
+//     drain), idempotent ATA creates paid by us, the native wrap for a mint, the proceeds unwrap for
+//     a claim. No other System or Token call: either could move our funds in the same signature.
+//
+// Like the frontend's, this bounds the TOP-LEVEL instruction list. What happens inside the program is
+// the program's to enforce; this makes sure it is asked to do what the user asked, to the accounts the
+// user asked about. The vendored IDL (`src/idl/momo_nft_launchpad.json`) is anchor-launchpad-momoswap
+// main `93c22af` (#96), the same IDL the backend and the frontend carry, Prettier-formatted; its content
+// hash is pinned in `verify.test.ts`. Refresh it with them when the program changes.
+import { getAssociatedTokenAddressSync, NATIVE_MINT } from "@solana/spl-token";
+import { PublicKey, type Transaction } from "@solana/web3.js";
+
+import { PROGRAM_IDS } from "../config";
+import { CookieMcpError } from "../errors";
+import nftIdl from "../../idl/momo_nft_launchpad.json" with { type: "json" };
+
+const COMPUTE_BUDGET_PROGRAM = "ComputeBudget111111111111111111111111111111";
+const ATA_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const SYSTEM_PROGRAM = "11111111111111111111111111111111";
+
+export const NFT_PROGRAM_ID = PROGRAM_IDS.momoNftLaunchpad;
+
+type IdlSeed =
+  | { kind: "const"; value: number[] }
+  | { kind: "account"; path: string; account?: string }
+  | { kind: "arg"; path: string };
+
+interface IdlAccount {
+  name: string;
+  writable?: boolean;
+  signer?: boolean;
+  optional?: boolean;
+  address?: string;
+  pda?: { seeds: IdlSeed[]; program?: IdlSeed };
+}
+
+interface IdlInstruction {
+  name: string;
+  discriminator: number[];
+  accounts: IdlAccount[];
+  args: { name: string; type: unknown }[];
+}
+
+const INSTRUCTIONS = (nftIdl as { instructions: IdlInstruction[] }).instructions;
+
+/** The kinds of build cookie-mcp signs on this program. */
+export type NftKind =
+  "mint" | "request-mint" | "sell" | "redeem" | "wind-down" | "claim" | "create" | "reveal";
+
+/** For each kind, the program instructions its build may contain, in order. */
+export const KIND_INSTRUCTIONS: Readonly<Record<NftKind, readonly (readonly string[])[]>> = {
+  // A curve mint, or `buy_returned` when the pool holds a unit sold back earlier (same payment legs).
+  mint: [["buy_nft"], ["buy_returned"]],
+  // After a target graduation: the buyer escrows, a keeper settles a random item, or refunds on expiry.
+  "request-mint": [["request_mint"]],
+  sell: [["sell_nft"]],
+  redeem: [["redeem_floor"]],
+  // The chain marks a failed drop live until someone closes it, and only a closed drop winds down, so
+  // the first holder's refund may close it in the same transaction.
+  "wind-down": [["redeem_wind_down"], ["close_collection", "redeem_wind_down"]],
+  claim: [["claim_creator_proceeds"]],
+  // One transaction, so a collection never exists without its vaults. A target is set in the same
+  // transaction, before any buy can exist — and only when the creator asked for one (see below).
+  create: [
+    ["create_collection", "init_vaults"],
+    ["create_collection", "init_vaults", "set_graduation_target"],
+  ],
+  reveal: [["reveal"]],
+};
+
+/** Kinds that wrap native COOK into the wallet's wCOOK account for the payment. */
+const WRAPPING_KINDS: readonly NftKind[] = ["mint", "request-mint"];
+/** Kinds whose proceeds may be unwrapped by closing the wallet's wCOOK account, last. */
+const UNWRAPPING_KINDS: readonly NftKind[] = ["claim"];
+
+/** The account in each instruction that authorises it: the one our wallet must fill. */
+const WALLET_SLOT: Readonly<Record<string, string>> = {
+  buy_nft: "buyer",
+  buy_returned: "buyer",
+  request_mint: "buyer",
+  sell_nft: "seller",
+  redeem_floor: "holder",
+  redeem_wind_down: "holder",
+  close_collection: "signer",
+  claim_creator_proceeds: "creator",
+  create_collection: "creator",
+  init_vaults: "payer",
+  set_graduation_target: "creator",
+  reveal: "creator",
+};
+
+/** What we decided before the API answered. */
+export interface NftExpectation {
+  wallet: string;
+  /** The drop asked about. Absent only for a create, whose build introduces the collection mint. */
+  collectionMint?: string;
+  /** The item a sell / redeem acts on — one we hold and named. */
+  nftMint?: string;
+  /** Create: the graduation target the creator chose (raw), or null/absent for sell-out only. */
+  graduationTarget?: bigint | null;
+  /** Mint / request-mint: the most `max_cost` (the cost leg alone) may allow. */
+  maxCost?: bigint;
+  /** Sell: the least `min_proceeds` may accept. */
+  minProceeds?: bigint;
+}
+
+function refuse(kind: NftKind, detail: string): CookieMcpError {
+  return new CookieMcpError(
+    `refusing to sign this NFT ${kind}: the launchpad's build does not match the request (${detail})`,
+    "nothing was signed or sent; retry, and report this if it persists — it can mean the API is " +
+      "misbehaving, or that the NFT launchpad program changed and cookie-mcp needs an update",
+  );
+}
+
+function sameBytes(a: Uint8Array, b: readonly number[]): boolean {
+  if (a.length < b.length) return false;
+  for (let i = 0; i < b.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+function u64At(d: Uint8Array, o: number): bigint {
+  let v = 0n;
+  for (let i = 7; i >= 0; i--) v = (v << 8n) | BigInt(d[o + i] ?? 0);
+  return v;
+}
+
+/** Bytes a fixed-size argument takes in Anchor's encoding. Null: variable (a vec, a struct). */
+function argSize(type: unknown): number | null {
+  const fixed: Record<string, number> = {
+    u8: 1,
+    bool: 1,
+    u16: 2,
+    u32: 4,
+    u64: 8,
+    i64: 8,
+    pubkey: 32,
+  };
+  if (typeof type === "string") return fixed[type] ?? null;
+  const arr = (type as { array?: [unknown, number] })?.array;
+  return arr && arr[0] === "u8" ? arr[1] : null;
+}
+
+/** An argument's bytes in the instruction data: after the discriminator and every argument before it. */
+function argBytes(spec: IdlInstruction, data: Uint8Array, name: string): Uint8Array {
+  let offset = 8;
+  for (const a of spec.args) {
+    const size = argSize(a.type);
+    if (size === null) throw new Error(`${spec.name}: ${name} sits after a variable-size argument`);
+    if (a.name === name) return data.slice(offset, offset + size);
+    offset += size;
+  }
+  throw new Error(`${spec.name} has no argument ${name}`);
+}
+
+export function instructionByName(name: string): IdlInstruction | undefined {
+  return INSTRUCTIONS.find((i) => i.name === name);
+}
+
+interface Call {
+  at: number;
+  spec: IdlInstruction;
+  data: Uint8Array;
+  accounts: { pubkey: string; signer: boolean; writable: boolean }[];
+}
+
+/**
+ * Hold a decoded NFT build to `kind` and `known`. Throws a `CookieMcpError` on the first difference;
+ * returns the program instructions it found, by name, so the caller can describe the build.
+ */
+export function assertNftBuild(tx: Transaction, kind: NftKind, known: NftExpectation): string[] {
+  const no = (detail: string) => refuse(kind, detail);
+  if (tx.feePayer?.toBase58() !== known.wallet) {
+    throw no(`its fee payer is ${tx.feePayer?.toBase58() ?? "missing"}, not this wallet`);
+  }
+  const wcook = getAssociatedTokenAddressSync(NATIVE_MINT, new PublicKey(known.wallet)).toBase58();
+
+  const calls: Call[] = [];
+  const ixs = tx.instructions;
+  ixs.forEach((ix, at) => {
+    const programId = ix.programId.toBase58();
+    const accounts = ix.keys.map((k) => ({
+      pubkey: k.pubkey.toBase58(),
+      signer: k.isSigner,
+      writable: k.isWritable,
+    }));
+    const data = Uint8Array.from(ix.data);
+    if (programId === NFT_PROGRAM_ID) {
+      const spec = INSTRUCTIONS.find((s) => sameBytes(data, s.discriminator));
+      if (!spec) throw no(`instruction ${at} is an NFT launchpad call cookie-mcp never signs`);
+      calls.push({ at, spec, data, accounts });
+      return;
+    }
+    const closing = calls.length > 0 && at === ixs.length - 1;
+    assertStock(programId, accounts, data, at, kind, { wallet: known.wallet, wcook }, closing, no);
+  });
+
+  let allowed = KIND_INSTRUCTIONS[kind];
+  // A create sets a graduation target only when the creator chose one: the build can neither add one
+  // nobody asked for nor drop the one they did.
+  if (kind === "create") {
+    const withTarget = known.graduationTarget != null && known.graduationTarget > 0n;
+    allowed = allowed.filter((seq) => seq.includes("set_graduation_target") === withTarget);
+  }
+  const names = calls.map((c) => c.spec.name);
+  if (!allowed.some((seq) => seq.length === names.length && seq.every((n, i) => n === names[i]))) {
+    throw no(
+      `it calls ${names.length ? names.join(" + ") : "nothing"} on the NFT launchpad, expected ` +
+        allowed.map((s) => s.join(" + ")).join(" or "),
+    );
+  }
+
+  // Count first: a build for another layout passes a different number of accounts, and every slot
+  // after the first difference would be compared against the wrong name.
+  for (const c of calls) {
+    if (c.accounts.length !== c.spec.accounts.length) {
+      throw no(
+        `instruction ${c.at} (${c.spec.name}) passes ${c.accounts.length} accounts; the program takes ${c.spec.accounts.length}`,
+      );
+    }
+  }
+
+  const slot = (c: Call, name: string): string | undefined => {
+    const j = c.spec.accounts.findIndex((a) => a.name === name);
+    return j < 0 ? undefined : c.accounts[j]!.pubkey;
+  };
+
+  // The collection mint: known for every kind but a create, which introduces it as a fresh signer.
+  let collectionMint = known.collectionMint;
+  for (const c of calls) {
+    const fromBuild = slot(c, "collection_mint");
+    if (fromBuild === undefined) continue;
+    if (collectionMint !== undefined && fromBuild !== collectionMint) {
+      throw no(
+        `instruction ${c.at} (${c.spec.name}) is for collection ${fromBuild}, not ${collectionMint}`,
+      );
+    }
+    collectionMint ??= fromBuild;
+  }
+  if (!collectionMint) throw no("it does not name the collection it is for");
+
+  const keyBytes = (key: string, what: string): Uint8Array => {
+    try {
+      return new PublicKey(key).toBytes();
+    } catch {
+      throw no(`${what} is not an address: ${key}`);
+    }
+  };
+  const seedBytes = (c: Call, seed: IdlSeed, owner: string): Uint8Array => {
+    if (seed.kind === "const") return Uint8Array.from(seed.value);
+    // The one field path the IDL uses: a PDA seeded by the collection ACCOUNT's own mint, which only the
+    // collection mint we asked about can answer.
+    if (seed.path === "collection.collection_mint")
+      return keyBytes(collectionMint!, "the collection mint");
+    if (seed.kind === "arg") {
+      try {
+        return argBytes(c.spec, c.data, seed.path);
+      } catch (e) {
+        throw no(e instanceof Error ? e.message : String(e));
+      }
+    }
+    const key = slot(c, seed.path);
+    if (key === undefined)
+      throw no(`${c.spec.name}: ${owner} is seeded by an unknown account ${seed.path}`);
+    return keyBytes(key, `${c.spec.name}.${seed.path}`);
+  };
+
+  for (const c of calls) {
+    const { spec, accounts, at } = c;
+    const where = `instruction ${at} (${spec.name})`;
+    spec.accounts.forEach((want, j) => {
+      const got = accounts[j]!;
+      // An optional account left out is the program's own id in its slot (Anchor's `None`).
+      if (want.optional && got.pubkey === NFT_PROGRAM_ID) return;
+      if (want.signer && !got.signer) throw no(`${where}: ${want.name} has to sign`);
+      if (want.writable && !got.writable) throw no(`${where}: ${want.name} has to be writable`);
+      if (want.address && got.pubkey !== want.address) {
+        throw no(`${where}: ${want.name} is ${got.pubkey}, expected ${want.address}`);
+      }
+      if (want.pda) {
+        const seeds = want.pda.seeds.map((s) => seedBytes(c, s, want.name));
+        const program = want.pda.program
+          ? new PublicKey(seedBytes(c, want.pda.program, want.name))
+          : new PublicKey(NFT_PROGRAM_ID);
+        const [derived] = PublicKey.findProgramAddressSync(seeds, program);
+        if (derived.toBase58() !== got.pubkey) {
+          throw no(`${where}: ${want.name} is ${got.pubkey}, not the address its seeds derive`);
+        }
+      }
+    });
+
+    const authority = slot(c, WALLET_SLOT[spec.name] ?? "");
+    if (authority !== known.wallet)
+      throw no(`${where} is authorised by ${authority ?? "?"}, not this wallet`);
+
+    // An item we hold (sell, redeem, wind-down) is the one asked about. A mint's `nft_mint` is a fresh
+    // signer the build generates, and `buy_returned`'s is a pool unit the API picks; the program refuses
+    // any unit that is not the collection's, and spendGuard requires one to arrive.
+    const itemSlot = spec.accounts.find((a) => a.name === "nft_mint");
+    if (itemSlot && !itemSlot.signer && !itemSlot.pda && spec.name !== "buy_returned") {
+      if (!known.nftMint) throw no(`${where} acts on an item, but none was named`);
+      if (slot(c, "nft_mint") !== known.nftMint) {
+        throw no(
+          `${where} acts on ${slot(c, "nft_mint")}, not the item asked for (${known.nftMint})`,
+        );
+      }
+    }
+
+    // The arguments only we can vouch for.
+    if (spec.name === "set_graduation_target") {
+      if (c.data.length !== 16)
+        throw no(`${where} carries ${c.data.length} bytes of data, expected 16`);
+      const target = u64At(c.data, 8);
+      if (target !== known.graduationTarget) {
+        throw no(
+          `${where} sets a graduation target of ${target}, not the ${known.graduationTarget ?? "none"} asked for`,
+        );
+      }
+    }
+    if (spec.name === "buy_nft" || spec.name === "buy_returned" || spec.name === "request_mint") {
+      if (known.maxCost === undefined)
+        throw no(`${where} has no approved spend to hold its max_cost to`);
+      const maxCost = u64At(c.data, 8);
+      if (maxCost > known.maxCost) {
+        throw no(
+          `${where} accepts a cost of up to ${maxCost}, more than the ${known.maxCost} approved`,
+        );
+      }
+    }
+    if (spec.name === "sell_nft" && known.minProceeds !== undefined) {
+      const minProceeds = u64At(c.data, 8);
+      if (minProceeds < known.minProceeds) {
+        throw no(
+          `${where} accepts proceeds as low as ${minProceeds}, below the ${known.minProceeds} asked for`,
+        );
+      }
+    }
+  }
+  return names;
+}
+
+/** The stock instructions an NFT build may carry around its program call, each in one shape. */
+function assertStock(
+  programId: string,
+  accounts: { pubkey: string }[],
+  d: Uint8Array,
+  at: number,
+  kind: NftKind,
+  own: { wallet: string; wcook: string },
+  closing: boolean,
+  no: (detail: string) => CookieMcpError,
+): void {
+  const acc = (i: number): string => accounts[i]?.pubkey ?? "";
+  switch (programId) {
+    case COMPUTE_BUDGET_PROGRAM:
+      // SetComputeUnitLimit is tag 2 + a u32. SetComputeUnitPrice (tag 3) would be a priority fee.
+      if (d.length === 5 && d[0] === 2) return;
+      throw no(`instruction ${at} sets a compute budget other than a unit limit`);
+    case ATA_PROGRAM:
+      // CreateIdempotent, paid by us. A claim also creates its royalty partner's account, so the owner
+      // is not pinned: creating an account costs the payer only its rent.
+      if (d.length === 1 && d[0] === 1 && acc(0) === own.wallet) return;
+      throw no(
+        `instruction ${at} is an associated-token call other than an idempotent create we pay for`,
+      );
+    case SYSTEM_PROGRAM:
+      // The wrap: a transfer from the wallet into its own wCOOK account. spendGuard pins how much.
+      if (
+        WRAPPING_KINDS.includes(kind) &&
+        d.length === 12 &&
+        d[0] === 2 &&
+        d[1] === 0 &&
+        d[2] === 0 &&
+        d[3] === 0 &&
+        acc(0) === own.wallet &&
+        acc(1) === own.wcook
+      ) {
+        return;
+      }
+      throw no(`instruction ${at} is a system-program call a ${kind} has no use for`);
+    case TOKEN_PROGRAM:
+      // SyncNative (17) completes the wrap. An approve or transfer here would hand our tokens away.
+      if (WRAPPING_KINDS.includes(kind) && d.length === 1 && d[0] === 17 && acc(0) === own.wcook)
+        return;
+      // CloseAccount (9) unwraps a claim's proceeds: our wCOOK account, to us, by us, last.
+      if (
+        UNWRAPPING_KINDS.includes(kind) &&
+        closing &&
+        d.length === 1 &&
+        d[0] === 9 &&
+        accounts.length === 3 &&
+        acc(0) === own.wcook &&
+        acc(1) === own.wallet &&
+        acc(2) === own.wallet
+      ) {
+        return;
+      }
+      throw no(`instruction ${at} is a token-program call a ${kind} has no use for`);
+    default:
+      throw no(`instruction ${at} calls ${programId}, which no NFT build needs`);
+  }
+}
+
+/** The program's error for a custom code, from the IDL. */
+export function nftProgramError(code: number): { name: string; msg: string } | null {
+  const e = (nftIdl as { errors: { code: number; name: string; msg?: string }[] }).errors.find(
+    (x) => x.code === code,
+  );
+  return e ? { name: e.name, msg: e.msg ?? e.name } : null;
+}

@@ -255,7 +255,7 @@ export function launchpadSimError(
  * ever saw it. Fail loudly here rather than at preflight, because at this point nothing is signed and
  * nothing is sent. A read error is not treated as a failure: never block a good send on a flaky probe.
  */
-async function assertBlockhashUsable(
+export async function assertBlockhashUsable(
   conn: Connection,
   built: BuiltTx,
   what: string,
@@ -1547,7 +1547,7 @@ function isSessionRejected(e: unknown): boolean {
  * safe specifically because this wraps a *build*: no transaction has been signed or sent, so the worst
  * case is a second signed login message. Never widen it past a build.
  */
-async function withLaunchSession<T>(
+export async function withLaunchSession<T>(
   signer: TxSigner,
   build: (session: string) => Promise<T>,
 ): Promise<T> {

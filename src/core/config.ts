@@ -124,6 +124,11 @@ export const PROGRAM_IDS = {
   // the IDL's own `address` is checked against this at load.
   limitOrder: "L1M1tkE57jpgimzjs5S8HVsmwk4uwrWoDFuUvXpVniH",
   dca: "DCAkvX8FW6zY3kSb8s41QbNk422BttFpoo1v53ywS4Js",
+  // MomoSwap's NFT launchpad (src/idl/momo_nft_launchpad.json): fixed-supply drops on a bonding curve.
+  // A separate program from the token launchpad above. It moved once (off `momoBZg4…`, because Cookie
+  // Chain refuses ExtendProgram), and every NFT build is held to this id before signing.
+  momoNftLaunchpad:
+    process.env.MOMOSWAP_NFT_PROGRAM_ID?.trim() || "momoDc2LHwe2Eymo4gK1jg5gAJcjjLGWW1hAaSKAGHb",
 } as const;
 
 /**
@@ -259,4 +264,8 @@ export function launchpadTokenUrl(mint: string): string {
 }
 export function launchpadPoolUrl(pool: string): string {
   return `${MOMOSWAP_SITE_URL}/pool/${pool}`;
+}
+/** A MomoSwap NFT drop's page, by its collection mint. */
+export function nftDropUrl(collectionMint: string): string {
+  return `${MOMOSWAP_SITE_URL}/nft/${collectionMint}`;
 }
