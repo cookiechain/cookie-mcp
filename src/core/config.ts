@@ -124,6 +124,9 @@ export const PROGRAM_IDS = {
   // the IDL's own `address` is checked against this at load.
   limitOrder: "L1M1tkE57jpgimzjs5S8HVsmwk4uwrWoDFuUvXpVniH",
   dca: "DCAkvX8FW6zY3kSb8s41QbNk422BttFpoo1v53ywS4Js",
+  // Aera money market (src/core/lending). No IDL anywhere — instructions are hand-encoded from the
+  // program source; one deployment, not overridable.
+  aera: "AerafpFHsY4N16i4KufPJQyURryxKtYgCr6oZMwbp76q",
   // MomoSwap's NFT launchpad (src/idl/momo_nft_launchpad.json): fixed-supply drops on a bonding curve.
   // A separate program from the token launchpad above. It moved once (off `momoBZg4…`, because Cookie
   // Chain refuses ExtendProgram), and every NFT build is held to this id before signing.

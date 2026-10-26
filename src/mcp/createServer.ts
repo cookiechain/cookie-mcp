@@ -90,6 +90,17 @@ import {
   type PoolStatus,
 } from "../core/launchpad";
 import {
+  borrow,
+  DEFAULT_MIN_HEALTH_FACTOR,
+  depositCollateral,
+  getLendingMarkets,
+  getLendingPosition,
+  lend,
+  repay,
+  withdrawCollateral,
+  withdrawLend,
+} from "../core/lending";
+import {
   claimNftDropProceeds,
   createNftDrop,
   getNftDrop,
@@ -2299,6 +2310,205 @@ export function createServer(): McpServer {
       },
     },
     tool(async (a: { name: string }) => cancelDomainListing(a)),
+  );
+
+  // Lending — Aera (aera.cook): an overcollateralised COOK money market. Suppliers hold share tokens
+  // (aCOOK / abCOOK) that grow with interest; borrowers lock abCOOK as collateral in an obligation
+  // and borrow COOK. No API and no IDL: every instruction is hand-built from the program source and
+  // the same-slot prelude (accrue / refresh_oracle / refresh_obligation) is prepended per action.
+  const LENDING_ASSET_ARG =
+    "reserve asset: `COOK` or `bCOOK` (case-insensitive), a share-token symbol (`aCOOK`), or a mint";
+  const AMOUNT_OR_ALL = (what: string) => `UI amount of ${what}, or "all"`;
+
+  registerTool(
+    "get_lending_markets",
+    {
+      title: "Aera lending markets",
+      description:
+        "Every reserve of the Aera money market: total supplied / borrowed / available, utilization, " +
+        "supply and borrow APR (projected to the current slot), caps, origination fee, collateral terms " +
+        "(loan-to-value, liquidation threshold, bonus, haircut), the share token (aCOOK / abCOOK) and " +
+        "its exchange rate, and each oracle's health. Only `borrowEnabled` reserves can be borrowed " +
+        "(COOK) and only `collateralEnabled` ones can back a loan (bCOOK). No key needed.",
+      inputSchema: {},
+    },
+    tool(async () => getLendingMarkets()),
+  );
+
+  registerTool(
+    "get_lending_position",
+    {
+      title: "A wallet's Aera position",
+      description:
+        "What a wallet has on Aera: share tokens held per reserve and what they redeem for, and its " +
+        "obligation — collateral, debt (interest projected to now), health factor (1.0 = liquidation " +
+        "line), borrow headroom and how much more COOK can be borrowed. Defaults to the configured " +
+        "wallet; pass `wallet` for any address or .cook name. No key needed.",
+      inputSchema: {
+        wallet: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("wallet address or .cook name; omit to use the configured wallet"),
+      },
+    },
+    tool(async (a: { wallet?: string }) => getLendingPosition(a.wallet)),
+  );
+
+  registerTool(
+    "lend",
+    {
+      title: "Supply to Aera",
+      description:
+        "Supply COOK (or bCOOK) to its Aera reserve to earn the supply APR. Mints share tokens (aCOOK / " +
+        "abCOOK) to your wallet that redeem for more of the asset as interest accrues; withdraw with " +
+        "`withdraw_lend`. Respects the reserve and per-wallet supply caps (refuses before signing). To use " +
+        "bCOOK as loan collateral call `deposit_collateral` instead — shares in the wallet do not back a " +
+        "loan. Simulates first." +
+        SIGNING_NOTE,
+      inputSchema: {
+        asset: z.string().min(1).describe(LENDING_ASSET_ARG),
+        amount: z
+          .union([z.number().positive(), z.string()])
+          .describe("UI amount of the asset to supply, e.g. 1000"),
+      },
+    },
+    tool(async (a: { asset: string; amount: string | number }) => lend(a)),
+  );
+
+  registerTool(
+    "withdraw_lend",
+    {
+      title: "Withdraw from Aera",
+      description:
+        "Redeem share tokens held in your wallet (aCOOK / abCOOK) for the underlying asset. `amount` is " +
+        'in the ASSET (what you want back), or "all" to redeem every share you hold. Limited by the ' +
+        "reserve's available liquidity (the rest is lent out). Shares locked as collateral are not in " +
+        "the wallet — use `withdraw_collateral` for those. Simulates first." +
+        SIGNING_NOTE,
+      inputSchema: {
+        asset: z.string().min(1).describe(LENDING_ASSET_ARG),
+        amount: z.union([z.number().positive(), z.string()]).describe(AMOUNT_OR_ALL("the asset")),
+      },
+    },
+    tool(async (a: { asset: string; amount: string | number }) => withdrawLend(a)),
+  );
+
+  registerTool(
+    "deposit_collateral",
+    {
+      title: "Deposit collateral on Aera",
+      description:
+        "Lock bCOOK as collateral so you can `borrow` COOK against it. One transaction: supplies the " +
+        "bCOOK to its reserve, deposits the minted abCOOK shares into your obligation (created on first " +
+        "use). `amount` is in bCOOK. Set `useHeldShares` to deposit abCOOK you already hold instead of " +
+        "supplying new bCOOK. Collateral earns the bCOOK supply APR while locked. Simulates first." +
+        SIGNING_NOTE,
+      inputSchema: {
+        amount: z
+          .union([z.number().positive(), z.string()])
+          .describe("UI amount of bCOOK to lock as collateral"),
+        asset: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("collateral asset; only needed if more than one reserve is collateral-enabled"),
+        useHeldShares: z
+          .boolean()
+          .optional()
+          .describe("deposit share tokens already in the wallet instead of supplying new bCOOK"),
+      },
+    },
+    tool(async (a: { amount: string | number; asset?: string; useHeldShares?: boolean }) =>
+      depositCollateral(a),
+    ),
+  );
+
+  registerTool(
+    "withdraw_collateral",
+    {
+      title: "Withdraw collateral from Aera",
+      description:
+        "Take collateral back out of your obligation and redeem it to bCOOK in the same transaction " +
+        "(`keepShares` leaves the abCOOK shares in your wallet instead). `amount` is in bCOOK, or " +
+        '"all". Refuses before signing if the remaining loan would exceed its loan-to-value limit or ' +
+        `leave the health factor under \`minHealthFactor\` (default ${DEFAULT_MIN_HEALTH_FACTOR}; 1.0 is the ` +
+        "liquidation line). Frozen while the bCOOK oracle is unhealthy. Simulates first." +
+        SIGNING_NOTE,
+      inputSchema: {
+        amount: z.union([z.number().positive(), z.string()]).describe(AMOUNT_OR_ALL("bCOOK")),
+        asset: z.string().min(1).optional().describe("collateral asset; only needed with several"),
+        keepShares: z
+          .boolean()
+          .optional()
+          .describe("keep the abCOOK share tokens instead of redeeming them for bCOOK"),
+        minHealthFactor: z
+          .number()
+          .min(1)
+          .optional()
+          .describe(
+            `refuse if the health factor after would be lower (default ${DEFAULT_MIN_HEALTH_FACTOR})`,
+          ),
+      },
+    },
+    tool(
+      async (a: {
+        amount: string | number;
+        asset?: string;
+        keepShares?: boolean;
+        minHealthFactor?: number;
+      }) => withdrawCollateral(a),
+    ),
+  );
+
+  registerTool(
+    "borrow",
+    {
+      title: "Borrow COOK on Aera",
+      description:
+        "Borrow COOK against your deposited collateral. `amount` is the debt you take on; the " +
+        "origination fee (see get_lending_markets) is deducted from the payout and still owed. " +
+        "Interest accrues per slot at the borrow APR; repay any time with `repay`. Refuses before " +
+        "signing when the loan-to-value limit would be exceeded or the health factor would fall under " +
+        `\`minHealthFactor\` (default ${DEFAULT_MIN_HEALTH_FACTOR}; 1.0 is the liquidation line — ` +
+        "below that your collateral can be seized at a bonus to the liquidator). Needs " +
+        "`deposit_collateral` first. Simulates first." +
+        SIGNING_NOTE,
+      inputSchema: {
+        amount: z
+          .union([z.number().positive(), z.string()])
+          .describe("UI amount of COOK to borrow (debt taken on, before the fee)"),
+        asset: z.string().min(1).optional().describe("asset to borrow; only needed with several"),
+        minHealthFactor: z
+          .number()
+          .min(1)
+          .optional()
+          .describe(
+            `refuse if the health factor after would be lower (default ${DEFAULT_MIN_HEALTH_FACTOR})`,
+          ),
+      },
+    },
+    tool(async (a: { amount: string | number; asset?: string; minHealthFactor?: number }) =>
+      borrow(a),
+    ),
+  );
+
+  registerTool(
+    "repay",
+    {
+      title: "Repay an Aera loan",
+      description:
+        'Repay COOK debt. `amount` in COOK, or "all" to clear the loan (wraps a few slots of extra ' +
+        "interest so it cannot come up short; the excess is returned in the same transaction). " +
+        "Overpaying is safe: the program only takes what is owed. Repay works even while the protocol " +
+        "is paused. Simulates first." +
+        SIGNING_NOTE,
+      inputSchema: {
+        amount: z.union([z.number().positive(), z.string()]).describe(AMOUNT_OR_ALL("COOK")),
+        asset: z.string().min(1).optional().describe("asset to repay; only needed with several"),
+      },
+    },
+    tool(async (a: { amount: string | number; asset?: string }) => repay(a)),
   );
 
   return server;

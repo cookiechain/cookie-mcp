@@ -43,4 +43,5 @@ export {
   resolveWallet,
 } from "./core/domains";
 export * from "./core/launchpad";
+export * from "./core/lending";
 export { VERSION } from "./version";

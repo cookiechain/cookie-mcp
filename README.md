@@ -52,6 +52,8 @@ It is a community project for the whole Cookie Chain ecosystem.
 - **Manage liquidity** — create pools, add / remove liquidity, claim fees, and permanently lock
   positions across Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap BAMM (venue auto-detected).
 - **Liquid-stake** COOK for bCOOK and redeem it instantly.
+- **Lend and borrow** on [Aera](https://aera.cook) — supply COOK to earn interest, or lock bCOOK as
+  collateral and borrow COOK against it, with health-factor guards before anything is signed.
 - **Trade NFTs** on [Baked Bazaar](https://bakedbazaar.art) — search, browse, buy, list, and make /
   accept offers (Cookie Chain's Metaplex Auction House marketplace).
 - **Bridge** COOK, SOL — and any token added to the bridge later — 1:1 between Cookie Chain and
@@ -364,6 +366,23 @@ full-range position by default.
 Metaplex Auction House (1% marketplace fee + creator royalties); every action is built and signed
 locally.
 
+**Lending** ([Aera](https://aera.cook), the overcollateralised COOK money market): `get_lending_markets`
+(every reserve: supplied / borrowed / available, supply and borrow APR, caps, collateral terms, oracle
+health) and `get_lending_position` (a wallet's share tokens, collateral, debt and health factor) need no
+key. Writes need `COOKIE_PRIVATE_KEY`: `lend` / `withdraw_lend` (supply COOK or bCOOK, hold aCOOK /
+abCOOK shares that grow with interest), `deposit_collateral` / `withdraw_collateral` (lock bCOOK —
+supplied and deposited as abCOOK in one transaction — or take it back out), `borrow` / `repay` (COOK,
+with a 0.15% origination fee). Built straight from the program — Aera has no API and no IDL — and every
+health-dependent action carries its same-slot `accrue` / `refresh_oracle` / `refresh_obligation` prelude
+in the same transaction, which is what the program demands.
+
+> ⚠️ **Loans can be liquidated.** `borrow` and `withdraw_collateral` refuse before signing when the
+> loan-to-value limit would be exceeded or the health factor would fall under `minHealthFactor`
+> (default 1.1; 1.0 is the liquidation line, where collateral is seized at an 8% bonus to the
+> liquidator). Pass a lower floor explicitly to accept more risk. Interest accrues per slot, so a loan
+> left alone drifts toward that line; `get_lending_position` projects it to now. Repay works even
+> while the protocol is paused; supplier withdrawals are limited by the reserve's available liquidity.
+
 **Bridge** (need `COOKIE_PRIVATE_KEY`): `bridge` moves a token 1:1 between Cookie Chain and Solana
 mainnet over the [Hyperlane](https://hyperlane.cookiescan.io) warp routes (`token` = a symbol or mint,
 default `COOK`; `direction` = `cookie-to-solana` | `solana-to-cookie`). Today that is **COOK** (native
@@ -548,7 +567,7 @@ same payload the tool returns. Local agents (`COOKIE_PRIVATE_KEY`, stdio) are un
 
 Each domain is also its own entry, so an app that needs one flow does not bundle every venue SDK the
 barrel pulls in: `cookie-mcp/trade`, `/transfer`, `/stake`, `/bridge`, `/bridge-routes`, `/nft`,
-`/domains`, `/launchpad`, `/limit-orders`, `/dca`, `/liquidity`, `/quote`, `/balances`, plus
+`/domains`, `/launchpad`, `/lending`, `/limit-orders`, `/dca`, `/liquidity`, `/quote`, `/balances`, plus
 `/signer`, `/context`, `/submit` and `/errors`. They share state with the barrel (one request context,
 one wallet cache), so mixing them is safe.
 

@@ -22,6 +22,7 @@ export const SUBPATHS: Record<string, string> = {
   nft: "src/core/nft/index.ts",
   domains: "src/core/domains/index.ts",
   launchpad: "src/core/launchpad/index.ts",
+  lending: "src/core/lending/index.ts",
 };
 
 const subpathEntries = Object.fromEntries(

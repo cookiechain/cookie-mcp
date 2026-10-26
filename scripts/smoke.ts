@@ -87,6 +87,14 @@ const EXPECTED_TOOLS = [
   "get_bridge_tokens",
   "bridge",
   "bridge_status",
+  "get_lending_markets",
+  "get_lending_position",
+  "lend",
+  "withdraw_lend",
+  "deposit_collateral",
+  "withdraw_collateral",
+  "borrow",
+  "repay",
 ];
 
 const argv = process.argv.slice(2);
