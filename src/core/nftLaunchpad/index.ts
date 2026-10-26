@@ -63,6 +63,7 @@ import {
   fetchNftStatus,
   sealNftDrop,
   uploadNftArt,
+  type NftBuiltRequest,
   type NftBuiltTx,
   type NftCollection,
   type NftCollectionParams,
@@ -94,7 +95,11 @@ export const NFT_DEFAULT_SLIPPAGE_BPS = 100;
 export const MAX_MINT_COUNT = 10;
 /** Rent a mint opens on top of the payment: the item's mint, metadata, edition and token account. */
 export const NFT_ITEM_RENT_ALLOWANCE = 30_000_000n;
-/** A post-graduation request escrows the item's rent and opens its request and queue accounts. */
+/**
+ * What a post-graduation request may open on top of the payment when the build does not say: the
+ * item's rent in escrow, its request account, and (for the first request after graduation) the drop's
+ * mint queue, `125 + 8·ceil(supply/64)` bytes. About 0.032 COOK for a 10,000-item drop.
+ */
 export const NFT_REQUEST_DEPOSIT_ALLOWANCE = 50_000_000n;
 /** How long a mint request is watched for its keeper settle before handing back a pending result. */
 const SETTLE_WAIT_MS = 20_000;
@@ -239,7 +244,10 @@ export async function getNftDrop(args: { collection: string; count?: number; own
     : ownPublicKey();
 
   const [buy, request, holdings] = await Promise.all([
-    phase === "live" ? fetchNftBuyQuote(c.collectionMint, count).catch(() => null) : null,
+    // An upcoming drop quotes too (`notStarted` + `opensAt`), so the price is readable before it opens.
+    phase === "live" || phase === "upcoming"
+      ? fetchNftBuyQuote(c.collectionMint, count).catch(() => null)
+      : null,
     phase === "minting" ? fetchNftRequestQuote(c.collectionMint).catch(() => null) : null,
     ownerKey ? fetchNftOwnerItems(c.collectionMint, ownerKey).catch(() => null) : null,
   ]);
@@ -472,6 +480,31 @@ export function exitBudget(nftMint: string, min: bigint): SpendBudget {
   };
 }
 
+/**
+ * What one mint request may do: spend at most `maxSpend` (fee included) plus the deposits the build
+ * itself states — the item's escrowed rent, the request account and, for the first request after
+ * graduation, the drop's mint queue. Nothing arrives yet; a keeper settles the item later. A build
+ * that states no deposits gets the allowance.
+ */
+export function requestBudget(
+  maxSpend: bigint,
+  deposits?: NftBuiltRequest["deposits"],
+): SpendBudget {
+  let extra = NFT_REQUEST_DEPOSIT_ALLOWANCE;
+  if (deposits) {
+    try {
+      const stated =
+        BigInt(deposits.itemDepositLamports) +
+        BigInt(deposits.requestRentLamports) +
+        BigInt(deposits.queueRentLamports);
+      if (stated >= 0n) extra = stated;
+    } catch {
+      // Not numbers: keep the allowance.
+    }
+  }
+  return { native: NATIVE_FEE_ALLOWANCE + extra + maxSpend };
+}
+
 /** A creator claim spends nothing beyond fees and rent (a partner's ATA), and at least `own` arrives. */
 export function claimBudget(own: bigint): SpendBudget {
   return { native: NATIVE_FEE_ALLOWANCE, receive: { mint: NATIVE_MINT.toBase58(), min: own } };
@@ -653,7 +686,7 @@ async function requestMint(
     "NFT mint request",
     "request-mint",
     { wallet: buyer, collectionMint: c.collectionMint, maxCost: maxSpend },
-    { native: NATIVE_FEE_ALLOWANCE + NFT_REQUEST_DEPOSIT_ALLOWANCE + maxSpend },
+    requestBudget(maxSpend, built.deposits),
     { drop: c.name, collection: c.collectionMint, maxCook: cook(maxSpend), random: true },
   );
 
@@ -1348,8 +1381,10 @@ export async function createNftDrop(args: CreateNftDropArgs) {
       sealed.set(sealKey, drop);
     }
 
-    // `launch_ts` "now" is stamped at build time: the program refuses one more than 2 minutes old.
-    const launchTs = args.launchAt?.trim() ? plan.launchTs : Math.floor(Date.now() / 1000);
+    // `launch_ts` is stamped at build time: the program refuses one older than its grace window, and
+    // the uploads above can outlast it. A scheduled open keeps its time; "now" (no `launchAt`, or one
+    // already past) is re-read here, and the window and allowlist phase keep their lengths.
+    const launchTs = Math.max(plan.launchTs, Math.floor(Date.now() / 1000));
     const params: NftCollectionParams = {
       name: plan.name,
       symbol: plan.symbol,

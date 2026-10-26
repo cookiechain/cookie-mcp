@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import type { NftCollection } from "./api";
-import { dropPhase, holderExit, mapDropSummary, nftSimError, planNftDrop, spendCap } from "./index";
+import {
+  NFT_REQUEST_DEPOSIT_ALLOWANCE,
+  dropPhase,
+  holderExit,
+  mapDropSummary,
+  nftSimError,
+  planNftDrop,
+  requestBudget,
+  spendCap,
+} from "./index";
+import { NATIVE_FEE_ALLOWANCE } from "../spendGuard";
 
 const NOW = 1_800_000_000;
 
@@ -114,6 +124,29 @@ describe("spendCap", () => {
     expect(spendCap(10_000n, 100)).toBe(10_100n);
     expect(spendCap(1n, 1)).toBe(2n);
     expect(spendCap(10_000n, 0)).toBe(10_000n);
+  });
+});
+
+describe("requestBudget", () => {
+  it("holds the spend to the deposits the build states", () => {
+    const deposits = {
+      itemDepositLamports: "19700000",
+      requestRentLamports: "1600000",
+      queueRentLamports: "10500000",
+    };
+    expect(requestBudget(1_000n, deposits).native).toBe(
+      NATIVE_FEE_ALLOWANCE + 31_800_000n + 1_000n,
+    );
+  });
+
+  it("falls back to the allowance when the build states none, or nonsense", () => {
+    expect(requestBudget(1_000n).native).toBe(
+      NATIVE_FEE_ALLOWANCE + NFT_REQUEST_DEPOSIT_ALLOWANCE + 1_000n,
+    );
+    const bad = { itemDepositLamports: "?", requestRentLamports: "1", queueRentLamports: "1" };
+    expect(requestBudget(1_000n, bad).native).toBe(
+      NATIVE_FEE_ALLOWANCE + NFT_REQUEST_DEPOSIT_ALLOWANCE + 1_000n,
+    );
   });
 });
 
