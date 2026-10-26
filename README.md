@@ -186,7 +186,7 @@ it never turns a name straight into a trade.
 | `COOKIE_MCP_CORS_ORIGIN`                   | `*`, or none with a local key         | Comma-separated browser origins allowed to call the HTTP server (`*` = any).                      |
 | `COOKIE_MCP_HTTP_TOKEN`                    | —                                     | Bearer token every HTTP MCP request must send. Required with a local key over HTTP.               |
 | `COOKIE_MCP_ALLOWED_HOSTS`                 | loopback names on a loopback bind     | Comma-separated `Host` values the HTTP server answers to (blocks DNS rebinding).                  |
-| `COOKIE_IMAGE_DIR`                         | home directory                        | The only folder `deploy_token.imagePath` may read from (stdio only; refused over HTTP).           |
+| `COOKIE_IMAGE_DIR`                         | home directory                        | The only folder `deploy_token.imagePath` and `create_nft_drop`'s art may read from (stdio only).  |
 | `COOKIE_SLIPPAGE_BPS`                      | `500`                                 | Default slippage (bps).                                                                           |
 | `COOKIE_REFERRER`                          | `mcp treasury`                        | Referral wallet (MomoSwap only).                                                                  |
 | `COOKIE_APP_ID`                            | —                                     | Name of your app, sent to the venues in `User-Agent` (see [Client identity](#client-identity)).   |
@@ -327,6 +327,33 @@ per 100 launches. Pass `owner` for any wallet, or omit it for your own.
 A pre-graduation token also has no DEX pool at all, so `get_quote` / `trade` would just report "no
 route". They now recognise that case and point at the launchpad tools instead, and `get_token_info`
 adds a `launchpad` field when a mint shows no price or liquidity because it is still on a curve.
+
+**NFT launchpad** ([MomoSwap NFT drops](https://momoswap.fun/nft), program `momoDc2L…`): fixed-supply
+collections minted off a COOK bonding curve. `get_nft_drops` and `get_nft_drop` need no key; the rest
+need `COOKIE_PRIVATE_KEY`. Each mint costs a little more than the last, and the items are real NFTs in
+the wallet from the first mint (unlike launchpad tokens), with the art hidden behind a committed reveal
+until the sale ends.
+
+- `nft_drop_mint` mints 1–10 items, one transaction each, each capped at `maxCookPerItem` (fee
+  included) or the quote plus `slippageBps` (default 1%). After a drop graduates at its target, a mint
+  is a request a keeper settles with a random remaining item.
+- `nft_drop_sell` sells an item back to the curve while the drop is live (the guaranteed exit).
+- `nft_drop_redeem` burns an item for the permanent floor after graduation, or for the pro-rata refund
+  of a drop that ended short — whichever applies.
+- `nft_drop_claim` pays a drop's creator their proceeds (and a royalty partner their share).
+- `create_nft_drop` launches a collection from a folder of images (optional Metaplex `<name>.json`
+  beside each for traits): the art is pinned to IPFS and its order sealed behind a fairness commitment
+  whose seed MomoSwap holds, so the creator cannot pick the rare mints. Run it with `dryRun: true` first:
+  the preview shows the first and last price, the raise at sell-out and the floor. A launch is final.
+  `reveal_nft_drop` later records the seed on chain (optional; the art is published either way).
+
+> ⚠️ **The MomoSwap API builds every NFT transaction; this server checks it before signing.** Each build
+> is held to the program's vendored IDL (`src/idl/momo_nft_launchpad.json`): only the instructions that
+> action calls, in order; the account count, signer flags, fixed addresses and every PDA re-derived; this
+> wallet in the authorising slot; the collection and item asked about; `max_cost` within the approved
+> spend; and nothing but a compute-unit limit, idempotent ATA creates and the COOK wrap around it. Then
+> the simulation is held to a spend budget: at most the stated COOK leaves, only the named item leaves,
+> and on a mint the item must arrive.
 
 **Liquidity** (need `COOKIE_PRIVATE_KEY`): `create_pool`, `add_liquidity`, `remove_liquidity`,
 `claim_fees` (Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap BAMM, venue auto-detected),
@@ -502,8 +529,8 @@ COOKIE_MCP_ALLOWED_HOSTS=mcp.example.com COOKIE_MCP_CORS_ORIGIN=https://app.exam
 - `step: "intermediate"` marks a prerequisite (wrapping COOK for a dev buy, creating a Solana token
   account before a bridge, CLMM tick-array init). After it confirms, call the same tool again with the
   same arguments to continue.
-- `kind: "message"` (only `deploy_token`, for the launchpad login) asks the wallet to `signMessage`
-  the exact text; call `deploy_token` again with `loginSignature: { message, signature }`. In
+- `kind: "message"` (only `deploy_token` and `reveal_nft_drop`, for the launchpad login) asks the
+  wallet to `signMessage` the exact text; call the tool again with `loginSignature: { message, signature }`. In
   external mode the session is not cached server-side (the wallet header proves nothing), so every
   launch asks for its own login signature.
 - The NFT tools add `bazaarLog`. Pass it back to `submit_signed_tx` and, once the transaction

@@ -24,7 +24,9 @@ async function attempt<T>(
       headers: {
         ...clientHeaders(),
         Accept: "application/json",
-        ...(init?.body ? { "Content-Type": "application/json" } : {}),
+        // A string body is our JSON. Anything else (a multipart `FormData`) sets its own type, boundary
+        // included, which a JSON header would overwrite.
+        ...(typeof init?.body === "string" ? { "Content-Type": "application/json" } : {}),
         ...init?.headers,
       },
       signal: controller.signal,

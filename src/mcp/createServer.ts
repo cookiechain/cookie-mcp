@@ -100,6 +100,18 @@ import {
   withdrawCollateral,
   withdrawLend,
 } from "../core/lending";
+import {
+  claimNftDropProceeds,
+  createNftDrop,
+  getNftDrop,
+  getNftDrops,
+  mintNftDrop,
+  redeemNftDrop,
+  revealNftDrop,
+  sellNftDrop,
+  type CreateNftDropArgs,
+  type NftDropFilter,
+} from "../core/nftLaunchpad";
 
 type ToolContent = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
 
@@ -1220,6 +1232,339 @@ export function createServer(): McpServer {
       },
     },
     tool(async (a: { ref: string; unwrap?: boolean }) => claimCreatorFees(a)),
+  );
+
+  // NFT launchpad — MomoSwap NFT drops (momoswap.fun/nft): fixed-supply collections minted off a
+  // bonding curve priced in COOK. Unlike launchpad tokens, the items are real NFTs in the wallet from
+  // the first mint. While a drop is live a holder can sell an item back to the curve; once it
+  // graduates part of the raise is a permanent floor every item can redeem against; a drop that ends
+  // short refunds its holders pro rata. Every build is checked against the program's IDL, then
+  // simulated within a spend budget, before it is signed.
+  const DROP_REF = "the drop's collection mint (or any of its items' mints)";
+
+  registerTool(
+    "get_nft_drops",
+    {
+      title: "List NFT drops",
+      description:
+        "Browse MomoSwap NFT launchpad drops: name/symbol, collection mint, phase, minted vs supply, " +
+        "graduation progress, floor price once graduated, royalty and the mint window. Phases: " +
+        "`upcoming` (not open), `live` (minting off the curve; holders can sell back), `sold-out` " +
+        "(waiting to graduate), `minting` (graduated at its target; the rest mint at random by " +
+        "request), `graduated`, `ended` (closed short; holders redeem a refund). Defaults to live " +
+        "drops. Use get_nft_drop for prices. Read-only — no key needed.",
+      inputSchema: {
+        status: z
+          .enum(["live", "upcoming", "minting", "graduated", "ended", "all"])
+          .optional()
+          .describe("filter (default live)"),
+        limit: z.number().int().min(1).max(100).optional().describe("max drops (default 20)"),
+      },
+    },
+    tool(async (a: { status?: NftDropFilter; limit?: number }) => getNftDrops(a)),
+  );
+
+  registerTool(
+    "get_nft_drop",
+    {
+      title: "NFT drop detail",
+      description:
+        "Full state of one MomoSwap NFT drop: phase, supply, curve quote for minting `count` items " +
+        "(fee included, price per item), the post-graduation request price, floor and wind-down refund, " +
+        "graduation target, royalty — and, for `owner` (default: this wallet), the items held, what " +
+        "selling one back would pay now, and the exit that applies in this phase. If the wallet " +
+        "created the drop, its unclaimed proceeds. Read-only.",
+      inputSchema: {
+        collection: z.string().min(32).max(44).describe(DROP_REF),
+        count: z
+          .number()
+          .int()
+          .min(1)
+          .max(10)
+          .optional()
+          .describe("items to quote a mint for (default 1)"),
+        owner: z
+          .string()
+          .optional()
+          .describe("wallet or .cook name whose items to list (defaults to your own wallet)"),
+      },
+    },
+    tool(async (a: { collection: string; count?: number; owner?: string }) => getNftDrop(a)),
+  );
+
+  registerTool(
+    "nft_drop_mint",
+    {
+      title: "Mint from an NFT drop",
+      description:
+        "Mint items from a live MomoSwap NFT drop, priced off its bonding curve (each mint costs a " +
+        "little more than the last; the trade fee is on top). `count` 1–10, one transaction each, " +
+        "sent in order; if one fails the ones already minted are kept and reported. Each item is " +
+        "capped at `maxCookPerItem` (fee included) — or, without it, the current price plus " +
+        "`slippageBps` (default 100 = 1%) — and the program refuses to charge more. After a drop " +
+        "graduates at its target, a mint is a REQUEST: you pay now and a keeper settles a random " +
+        "remaining item within seconds (count must be 1). The art stays hidden until the sale ends." +
+        SIGNING_NOTE,
+      inputSchema: {
+        collection: z.string().min(32).max(44).describe(DROP_REF),
+        count: z.number().int().min(1).max(10).optional().describe("items to mint (default 1)"),
+        maxCookPerItem: z
+          .union([z.number().positive(), z.string()])
+          .optional()
+          .describe("the most one item may cost in COOK, fee included"),
+        slippageBps: z
+          .number()
+          .int()
+          .min(0)
+          .max(5000)
+          .optional()
+          .describe("price tolerance when maxCookPerItem is not set (default 100 = 1%)"),
+      },
+    },
+    tool(
+      async (a: {
+        collection: string;
+        count?: number;
+        maxCookPerItem?: string | number;
+        slippageBps?: number;
+      }) => mintNftDrop(a),
+    ),
+  );
+
+  registerTool(
+    "nft_drop_sell",
+    {
+      title: "Sell an NFT back to its drop",
+      description:
+        "Sell an item back to its MomoSwap drop's bonding curve for COOK at the current price, minus " +
+        "the trade fee — the drop's guaranteed exit, available while the drop is live (or sold out and " +
+        "not yet graduated). The item goes into the pool's inventory. After graduation use " +
+        "nft_drop_redeem (floor) or list_nft instead. `minCook` refuses a sale below that." +
+        SIGNING_NOTE,
+      inputSchema: {
+        nftMint: z.string().min(32).max(44).describe("the item's mint"),
+        collection: z
+          .string()
+          .min(32)
+          .max(44)
+          .optional()
+          .describe("the drop's collection mint (looked up from the item when omitted)"),
+        minCook: z
+          .union([z.number().positive(), z.string()])
+          .optional()
+          .describe("refuse unless the sale pays at least this much COOK"),
+        slippageBps: z
+          .number()
+          .int()
+          .min(0)
+          .max(5000)
+          .optional()
+          .describe("price tolerance (default 100 = 1%)"),
+      },
+    },
+    tool(
+      async (a: {
+        nftMint: string;
+        collection?: string;
+        minCook?: string | number;
+        slippageBps?: number;
+      }) => sellNftDrop(a),
+    ),
+  );
+
+  registerTool(
+    "nft_drop_redeem",
+    {
+      title: "Redeem an NFT drop item",
+      description:
+        "Burn an item of a MomoSwap NFT drop for COOK from the drop itself: after graduation, the " +
+        "permanent floor (the locked share of the raise ÷ items outstanding — a redemption never moves " +
+        "it); for a drop whose window closed short, the wind-down refund (the raise ÷ items " +
+        "outstanding; the first refund also closes the drop on chain). Picks whichever applies; " +
+        "get_nft_drop shows both amounts. Burning is final — compare with list_nft first." +
+        SIGNING_NOTE,
+      inputSchema: {
+        nftMint: z.string().min(32).max(44).describe("the item's mint"),
+        collection: z
+          .string()
+          .min(32)
+          .max(44)
+          .optional()
+          .describe("the drop's collection mint (looked up from the item when omitted)"),
+      },
+    },
+    tool(async (a: { nftMint: string; collection?: string }) => redeemNftDrop(a)),
+  );
+
+  registerTool(
+    "nft_drop_claim",
+    {
+      title: "Claim NFT drop proceeds",
+      description:
+        "For a drop's creator: claim the proceeds its creator vault holds (the creator's share of " +
+        "trade fees, and the graduation payout). A royalty partner, if the drop has one, is paid " +
+        "their share in the same transaction. Fails early when nothing has accrued." +
+        SIGNING_NOTE,
+      inputSchema: {
+        collection: z.string().min(32).max(44).describe(DROP_REF),
+      },
+    },
+    tool(async (a: { collection: string }) => claimNftDropProceeds(a)),
+  );
+
+  registerTool(
+    "create_nft_drop",
+    {
+      title: "Launch an NFT drop",
+      description:
+        "Launch a fixed-supply NFT collection on the MomoSwap NFT launchpad. Every image in `artDir` " +
+        "(PNG/JPEG/GIF/WebP, natural file-name order, optional Metaplex-style `<name>.json` beside each " +
+        "for name + traits) becomes one item. The art is uploaded to IPFS, the order is sealed behind " +
+        "a fairness commitment MomoSwap holds the seed for (so the creator cannot know which mint gets " +
+        "which piece), and the art stays hidden until the sale ends. Price: `startPriceCook` is the " +
+        "first item's all-in price; the curve ends near `curveMultiple`× that. At graduation " +
+        "`floorLockPct` of the raise becomes a permanent floor and the creator gets the rest. " +
+        "A launch is FINAL — the art, order, curve and royalty can never change — so run with " +
+        "`dryRun: true` first and confirm the preview (prices, raise, floor) with the user. Reads local " +
+        "files: refused on a hosted server. Signs a login message with the wallet (no fee), then the " +
+        "create transaction (rent only, ~0.03 COOK; there is no creation fee)." +
+        SIGNING_NOTE,
+      inputSchema: {
+        name: z
+          .string()
+          .min(1)
+          .max(24)
+          .describe("collection name, max 24 bytes (items are `{name} #{n}`)"),
+        symbol: z.string().min(1).max(10).describe("symbol, letters and digits, max 10"),
+        description: z.string().max(500).optional().describe("collection description"),
+        artDir: z
+          .string()
+          .min(1)
+          .describe(
+            "folder on this machine holding the art (2–10,000 images, max 25 MB each), inside the " +
+              "home directory or COOKIE_IMAGE_DIR, no hidden folders",
+          ),
+        imagePath: z
+          .string()
+          .optional()
+          .describe("collection image file (defaults to the first piece of art)"),
+        bannerPath: z.string().optional().describe("optional banner image file (~3:1)"),
+        placeholderPath: z
+          .string()
+          .optional()
+          .describe("image collectors see before the reveal (defaults to the collection image)"),
+        startPriceCook: z
+          .union([z.number().positive(), z.string()])
+          .describe("the first item's price in COOK, trade fee included"),
+        curveMultiple: z
+          .number()
+          .min(1.2)
+          .max(25)
+          .optional()
+          .describe("last item's price ÷ first (default 4; the site offers 2, 4 and 9)"),
+        royaltyPct: z
+          .number()
+          .min(0)
+          .max(20)
+          .optional()
+          .describe("creator royalty on secondary sales, % (default 5; capped by the launchpad)"),
+        floorLockPct: z
+          .number()
+          .min(0)
+          .max(50)
+          .optional()
+          .describe("share of the raise locked forever as the floor at graduation, % (default 20)"),
+        royaltyPartner: z
+          .string()
+          .optional()
+          .describe("optional wallet that shares the creator's royalty and proceeds"),
+        partnerSharePct: z
+          .number()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe("the partner's share, % (required with royaltyPartner)"),
+        graduationTargetPct: z
+          .number()
+          .min(50)
+          .max(100)
+          .optional()
+          .describe(
+            "graduate once the raise reaches this % of the sell-out raise; the remaining items then " +
+              "mint at random by request (default 100 = graduate at sell-out)",
+          ),
+        launchAt: z
+          .string()
+          .optional()
+          .describe("ISO date-time to open minting, up to 30 days ahead (default now)"),
+        durationHours: z
+          .number()
+          .min(0.25)
+          .max(720)
+          .optional()
+          .describe(
+            "how long minting stays open (default 24); a drop that does not graduate by then refunds holders",
+          ),
+        maxPerWallet: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("items per wallet, 0 = no limit (default 0)"),
+        antiSnipe: z
+          .boolean()
+          .optional()
+          .describe("limit each wallet during the opening minutes (default true)"),
+        allowlist: z
+          .array(z.string())
+          .max(10000)
+          .optional()
+          .describe("wallets that may mint first, during the allowlist phase"),
+        allowlistHours: z
+          .number()
+          .positive()
+          .optional()
+          .describe("length of the allowlist phase in hours (default 1)"),
+        website: z.string().optional().describe("https URL"),
+        x: z.string().optional().describe("X profile https URL"),
+        telegram: z.string().optional().describe("Telegram https URL"),
+        discord: z.string().optional().describe("Discord https URL"),
+        dryRun: z
+          .boolean()
+          .optional()
+          .describe(
+            "validate the art and preview the curve, raise and floor without uploading or signing",
+          ),
+      },
+    },
+    tool(async (a: CreateNftDropArgs) => createNftDrop(a)),
+  );
+
+  registerTool(
+    "reveal_nft_drop",
+    {
+      title: "Reveal an NFT drop",
+      description:
+        "For a drop's creator, once it sold out, graduated or its window closed: record the reveal seed " +
+        "on chain so anyone can check the item order against the commitment fixed at launch. Optional " +
+        "— MomoSwap publishes the art when the sale ends either way. Signs a login message, then the " +
+        "reveal transaction." +
+        SIGNING_NOTE,
+      inputSchema: {
+        collection: z.string().min(32).max(44).describe(DROP_REF),
+        loginSignature: z
+          .object({ message: z.string().min(1), signature: z.string().min(1) })
+          .optional()
+          .describe(
+            "external-signer mode only: the wallet's signature over the login `message` a previous " +
+              "call returned as needs_signature { kind: 'message' }",
+          ),
+      },
+    },
+    tool(
+      async (a: { collection: string; loginSignature?: { message: string; signature: string } }) =>
+        revealNftDrop(a),
+    ),
   );
 
   // Liquidity — Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap BAMM. Every op simulates before

@@ -127,6 +127,11 @@ export const PROGRAM_IDS = {
   // Aera money market (src/core/lending). No IDL anywhere — instructions are hand-encoded from the
   // program source; one deployment, not overridable.
   aera: "AerafpFHsY4N16i4KufPJQyURryxKtYgCr6oZMwbp76q",
+  // MomoSwap's NFT launchpad (src/idl/momo_nft_launchpad.json): fixed-supply drops on a bonding curve.
+  // A separate program from the token launchpad above. It moved once (off `momoBZg4…`, because Cookie
+  // Chain refuses ExtendProgram), and every NFT build is held to this id before signing.
+  momoNftLaunchpad:
+    process.env.MOMOSWAP_NFT_PROGRAM_ID?.trim() || "momoDc2LHwe2Eymo4gK1jg5gAJcjjLGWW1hAaSKAGHb",
 } as const;
 
 /**
@@ -262,4 +267,8 @@ export function launchpadTokenUrl(mint: string): string {
 }
 export function launchpadPoolUrl(pool: string): string {
   return `${MOMOSWAP_SITE_URL}/pool/${pool}`;
+}
+/** A MomoSwap NFT drop's page, by its collection mint. */
+export function nftDropUrl(collectionMint: string): string {
+  return `${MOMOSWAP_SITE_URL}/nft/${collectionMint}`;
 }
