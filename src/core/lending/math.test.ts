@@ -12,6 +12,7 @@ import {
   marketValue,
   maxAdditionalBorrow,
   mulDiv,
+  permitsBorrow,
   projectAccrual,
   sharesToLiquidity,
   supplyHeadroom,
@@ -206,12 +207,33 @@ describe("obligation health", () => {
       },
       (k) =>
         k.equals(COLLATERAL)
-          ? { reserve: collateral, oracle: oracle((14n * WAD) / 10n, "rateWarning") }
+          ? { reserve: collateral, oracle: oracle((14n * WAD) / 10n, "borrowFrozen") }
           : lookup(k),
     );
     expect(h.liquidatable).toBe(true);
     expect(h.pricesStressed).toBe(true);
     expect(healthFactor(h)!).toBeLessThan(1);
+  });
+
+  it("stresses only an oracle that will not permit borrowing (rateWarning does)", () => {
+    const stressedWith = (health: Parameters<typeof permitsBorrow>[0], onDebt = false) =>
+      evaluateObligation(
+        {
+          deposits: [{ reserve: COLLATERAL, depositedShares: 100n * ONE, marketValue: 0n }],
+          borrows: [{ reserve: DEBT, borrowedPrincipal: ONE, marketValue: 0n }],
+        },
+        (k) =>
+          k.equals(onDebt ? DEBT : COLLATERAL)
+            ? { ...lookup(k), oracle: { ...lookup(k).oracle, health } }
+            : lookup(k),
+      ).pricesStressed;
+    expect(stressedWith("healthy")).toBe(false);
+    expect(stressedWith("rateWarning")).toBe(false);
+    expect(stressedWith("borrowFrozen")).toBe(true);
+    expect(stressedWith("emergency")).toBe(true);
+    expect(stressedWith("bootstrapping")).toBe(true);
+    // The program reads the oracles of borrows too, not only collateral.
+    expect(stressedWith("emergency", true)).toBe(true);
   });
 
   it("has no health factor without debt", () => {

@@ -118,6 +118,14 @@ export interface ReserveView {
   oracle: DecodedOracle;
 }
 
+/**
+ * `OracleHealth::permits(Borrow)` — what `refresh_obligation` calls "stressed" is an oracle that will
+ * NOT permit new risk. RateWarning permits borrowing, so it is not stressed.
+ */
+export function permitsBorrow(health: DecodedOracle["health"]): boolean {
+  return health === "healthy" || health === "rateWarning";
+}
+
 export interface ObligationHealth {
   /** Face value of all collateral, 1e18-scaled COOK. */
   depositedValue: bigint;
@@ -151,7 +159,7 @@ export function evaluateObligation(
     const liquidity = sharesToLiquidity(reserve, d.depositedShares, "down");
     const face = marketValue(liquidity, reserve.liquidityDecimals, oracle.effectiveRate, "down");
     const effective = applyHaircut(face, reserve.config.collateralHaircutBps);
-    pricesStressed ||= oracle.health === "rateWarning";
+    pricesStressed ||= !permitsBorrow(oracle.health);
     depositedValue += face;
     effectiveCollateralValue += effective;
     allowedBorrowValue += mulDiv(effective, BigInt(reserve.config.loanToValueBps), BPS, "down");
@@ -168,7 +176,7 @@ export function evaluateObligation(
     const { reserve, oracle } = lookup(b.reserve);
     const debt = mulDiv(b.borrowedPrincipal, reserve.borrowIndex, WAD, "up");
     const value = marketValue(debt, reserve.liquidityDecimals, oracle.effectiveRate, "up");
-    pricesStressed ||= oracle.health === "rateWarning";
+    pricesStressed ||= !permitsBorrow(oracle.health);
     borrowedValue += value;
     return { reserve: b.reserve, debt, value };
   });

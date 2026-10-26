@@ -54,6 +54,7 @@ import {
   marketValue,
   maxAdditionalBorrow,
   mulDiv,
+  permitsBorrow,
   projectAccrual,
   sharesToLiquidity,
   supplyHeadroom,
@@ -539,8 +540,8 @@ export async function getLendingMarkets(): Promise<LendingMarketsResult> {
     if (r.oracle.health !== "healthy" && r.reserve.config.collateralEnabled) {
       notes.push(
         `⚠️ ${r.symbol} oracle is ${r.oracle.health}: ` +
-          (r.oracle.health === "rateWarning"
-            ? "borrowing is allowed but marked stressed"
+          (permitsBorrow(r.oracle.health)
+            ? "borrowing still works, but the rate is moving unusually"
             : "borrow and withdraw_collateral are refused until it recovers"),
       );
     }
@@ -702,9 +703,9 @@ export async function getLendingPosition(wallet?: string): Promise<LendingPositi
     if (h.liquidatable)
       notes.push("⚠️ This position is LIQUIDATABLE — repay or add collateral now.");
     const hf = healthFactor(h);
-    if (hf !== null && !h.liquidatable && hf < 1.1) {
+    if (hf !== null && !h.liquidatable && hf < DEFAULT_MIN_HEALTH_FACTOR) {
       notes.push(
-        "⚠️ Health factor is under 1.1 — a small bCOOK rate move or interest could liquidate it.",
+        `⚠️ Health factor is under ${DEFAULT_MIN_HEALTH_FACTOR} — a small bCOOK rate move or interest could liquidate it.`,
       );
     }
   }
@@ -946,7 +947,7 @@ export interface CollateralResult {
 }
 
 function requireOracleFor(e: ReserveEntry, action: "borrow" | "withdraw collateral") {
-  if (e.oracle.health === "healthy" || e.oracle.health === "rateWarning") return;
+  if (permitsBorrow(e.oracle.health)) return;
   throw new CookieMcpError(
     `${action} is frozen: the ${e.symbol} oracle is ${e.oracle.health}`,
     e.oracle.health === "bootstrapping"
@@ -1128,6 +1129,13 @@ export async function withdrawCollateral(args: {
     shares = deposited.shares;
   } else {
     const amount = parseAmount(args.amount, r.liquidityDecimals, e.symbol);
+    if (amount > deposited.liquidity) {
+      throw new CookieMcpError(
+        `only ${rawToUi(deposited.liquidity, r.liquidityDecimals)} ${e.symbol} is deposited as collateral`,
+        'withdraw less, or pass "all"',
+      );
+    }
+    // Rounding the burn up can overshoot an exact "everything" ask by one share; that is still all of it.
     shares = liquidityToShares(r, amount, "up");
     if (shares > deposited.shares) shares = deposited.shares;
   }
@@ -1254,8 +1262,8 @@ export async function borrow(args: {
   const h = w.health;
   if (h.pricesStressed) {
     throw new CookieMcpError(
-      "borrowing is frozen while a collateral price is stressed (oracle rateWarning)",
-      "wait for the bCOOK oracle to settle",
+      "borrowing is frozen: an oracle this position depends on is not permitting new borrows",
+      "supply, deposit and repay still work; wait for the oracle to recover (see get_lending_markets)",
     );
   }
   const borrowValue = marketValue(amount, r.liquidityDecimals, e.oracle.effectiveRate, "up");
