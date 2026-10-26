@@ -29,6 +29,7 @@ import {
   assertLaunchCost,
   MAX_UNCAPPED_CREATION_FEE_COOK,
 } from "./index";
+import { LAUNCHPAD_ALT_KEYS } from "../config";
 import { CookieMcpError } from "../errors";
 import type { LaunchpadPool } from "./api";
 
@@ -903,8 +904,8 @@ describe("altAccountMismatch", () => {
     "8nj4iBHZugPZ4T1NPM47zazSjhp68gHYkX6GbLdmT3AP",
     "So11111111111111111111111111111111111111112",
     "SysvarRent111111111111111111111111111111111",
-    "9rj5GEEypdCbJ1W9is4LHeQxg86h9vxSny6pmsxmakni",
-    "7PwH1Q65fAjTD9LjNWakD7iXMhZRF57W5F1Uj6ggYpuf",
+    "85gdK5eftWmbp5G2nJvhvb7fvzcFF5rcTqojf2a7t3Pr",
+    "5jP8CWGPkfCAmuFe6P9n9ik4P4BFCjT3Bod17EKChsXT",
   ] as const;
   const ACTIVE = 2n ** 64n - 1n;
   const table = (
@@ -920,6 +921,10 @@ describe("altAccountMismatch", () => {
 
   it("accepts the real frozen table (the production values, asserted literally)", () => {
     expect(altAccountMismatch(table(KEYS), KEYS)).toBeNull();
+  });
+
+  it("pins LAUNCHPAD_ALT_KEYS to these literals, so a table rotation has to update this test", () => {
+    expect(LAUNCHPAD_ALT_KEYS).toEqual(KEYS);
   });
 
   it("refuses a table that does not exist", () => {
