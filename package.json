@@ -110,6 +110,10 @@
       "types": "./dist/lib/launchpad.d.ts",
       "import": "./dist/lib/launchpad.js"
     },
+    "./lending": {
+      "types": "./dist/lib/lending.d.ts",
+      "import": "./dist/lib/lending.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

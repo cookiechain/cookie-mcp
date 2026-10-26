@@ -124,6 +124,9 @@ export const PROGRAM_IDS = {
   // the IDL's own `address` is checked against this at load.
   limitOrder: "L1M1tkE57jpgimzjs5S8HVsmwk4uwrWoDFuUvXpVniH",
   dca: "DCAkvX8FW6zY3kSb8s41QbNk422BttFpoo1v53ywS4Js",
+  // Aera money market (src/core/lending). No IDL anywhere — instructions are hand-encoded from the
+  // program source; one deployment, not overridable.
+  aera: "AerafpFHsY4N16i4KufPJQyURryxKtYgCr6oZMwbp76q",
 } as const;
 
 /**
