@@ -12,6 +12,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   refund), `nft_drop_claim` (creator proceeds), `create_nft_drop` (launch from a folder of art, with a
   `dryRun` preview) and `reveal_nft_drop`. Every API build is held to the program's vendored IDL before
   signing, then simulated within a spend budget.
+- **Aera lending.** Eight tools for the Aera COOK money market (market 0, "Aera Core"):
+  `get_lending_markets` and `get_lending_position` (reads, `.cook` names accepted), `lend` /
+  `withdraw_lend` (supply for aCOOK / abCOOK share tokens), `deposit_collateral` /
+  `withdraw_collateral` (bCOOK in and out of the obligation in one transaction) and `borrow` / `repay`
+  (COOK; `repay "all"` clears the loan). `borrow` and `withdraw_collateral` refuse before signing when
+  the loan-to-value limit would be exceeded or the health factor would fall under `minHealthFactor`
+  (default 1.1). Aera has no API or IDL, so every instruction is built locally and simulated before
+  signing. Also importable as `cookie-mcp/lending`.
 
 ### Fixed
 
