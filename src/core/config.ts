@@ -141,7 +141,7 @@ export const PROGRAM_IDS = {
  * Override only to talk to a non-production deployment.
  */
 export const LAUNCHPAD_ALT_ADDRESS =
-  process.env.MOMOSWAP_LAUNCHPAD_ALT?.trim() || "CawUNMrsk6KwjXZ8kNPQgC1obMD4QM5oqvo3rF2bErX6";
+  process.env.MOMOSWAP_LAUNCHPAD_ALT?.trim() || "9vExLr84CQaggCo2LbcM5uw8xJG1e6FxiKByoQFGBXKA";
 
 /**
  * What that table must contain, in on-chain order — checked against the live account before we sign a
@@ -154,14 +154,16 @@ export const LAUNCHPAD_ALT_ADDRESS =
  * local copy. Index IS the identity here: a re-order repoints every transaction built against it.
  *
  * Published + frozen for the `momoL7wu…` deployment on Cookie Chain, genesis
- * `9wDaBRDgArEUpvhHxGguNkwozsZh4UpGZB9o2EoEcBB2` (momoswap-backend #123).
+ * `9wDaBRDgArEUpvhHxGguNkwozsZh4UpGZB9o2EoEcBB2` (momoswap-backend #123). Re-published 2026-10-23 when
+ * MomoSwap moved both treasury fields to its Squads vault (the previous table CawUNM… pinned the old
+ * treasury keys and no longer matches the live Config).
  */
 export const LAUNCHPAD_ALT_KEYS = [
   "8nj4iBHZugPZ4T1NPM47zazSjhp68gHYkX6GbLdmT3AP", // launchpad config PDA (owned by momoL7wu…)
   "So11111111111111111111111111111111111111112", // payment mint (wCOOK)
   "SysvarRent111111111111111111111111111111111", // rent sysvar
-  "9rj5GEEypdCbJ1W9is4LHeQxg86h9vxSny6pmsxmakni", // config.treasuryLamports
-  "7PwH1Q65fAjTD9LjNWakD7iXMhZRF57W5F1Uj6ggYpuf", // config.treasuryPayment
+  "85gdK5eftWmbp5G2nJvhvb7fvzcFF5rcTqojf2a7t3Pr", // config.treasuryLamports (the MomoSwap Squads vault)
+  "5jP8CWGPkfCAmuFe6P9n9ik4P4BFCjT3Bod17EKChsXT", // config.treasuryPayment (the vault's wCOOK account)
 ] as const;
 
 // The `.cook` suffix is presentation only: the on-chain PDA seed and the `DomainAccount.name` field

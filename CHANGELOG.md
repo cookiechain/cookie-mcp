@@ -4,6 +4,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 # Unreleased
 
+### Fixed
+
+- **MomoSwap launch with a dev buy works again.** MomoSwap moved both launchpad treasury fields to its
+  Squads vault, so the pinned create-pool lookup table `CawUNM…` no longer matched the live Config and
+  every create + dev-buy build was refused. The pin is now the frozen table `9vExLr84…`, whose keys [3]
+  and [4] are the vault `85gdK5…` and its wCOOK account `5jP8CW…`.
+
 # [0.8.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.8.0)
 
 _October 1, 2026_
