@@ -1,0 +1,4811 @@
+{
+  "address": "momoDc2LHwe2Eymo4gK1jg5gAJcjjLGWW1hAaSKAGHb",
+  "metadata": {
+    "name": "momo_nft_launchpad",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Cookie Chain / Solana fixed-supply NFT drop launchpad with a VRF-free committed reveal"
+  },
+  "instructions": [
+    {
+      "name": "accept_authority",
+      "docs": [
+        "Step 2: the nominee proves control by signing, so governance can never be",
+        "handed to an address nobody can use."
+      ],
+      "discriminator": [107, 86, 198, 91, 33, 12, 107, 160],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "new_authority",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "buy_nft",
+      "docs": [
+        "Buy the next unit off the curve, minting a fresh NFT.",
+        "",
+        "On a drop with a `graduation_target`, the buy that brings the raise to the target also",
+        "graduates the drop (the same effects as `graduate`, `Graduated` emitted after `Bought`).",
+        "",
+        "`max_cost` bounds the price the caller is willing to pay, so a buy that",
+        "lands after someone else's cannot silently fill at a worse price."
+      ],
+      "discriminator": [96, 0, 28, 190, 49, 107, 83, 222],
+      "accounts": [
+        {
+          "name": "buyer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "collection",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "minter",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [109, 105, 110, 116, 101, 114]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              },
+              {
+                "kind": "account",
+                "path": "buyer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "payment_mint",
+          "relations": ["collection"]
+        },
+        {
+          "name": "buyer_payment_account",
+          "writable": true
+        },
+        {
+          "name": "payment_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 97, 121, 109, 101, 110, 116, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 114, 101, 97, 116, 111, 114, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "platform_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 108, 97, 116, 102, 111, 114, 109, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "nft_mint",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "nft_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "buyer"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172, 28,
+                  180, 133, 237, 95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "nft_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140, 151, 37, 143, 78, 36, 137, 241, 187, 61, 16, 41, 20, 142, 13, 131, 11, 90, 19,
+                153, 218, 255, 16, 132, 4, 142, 123, 216, 219, 233, 248, 89
+              ]
+            }
+          }
+        },
+        {
+          "name": "nft_metadata",
+          "writable": true
+        },
+        {
+          "name": "nft_master_edition",
+          "writable": true
+        },
+        {
+          "name": "collection_mint",
+          "writable": true,
+          "relations": ["collection"]
+        },
+        {
+          "name": "collection_authority",
+          "docs": [
+            "Writable because Token Metadata's `verify_collection` treats the",
+            "collection authority as a potential payer."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99, 111, 108, 108, 101, 99, 116, 105, 111, 110, 95, 97, 117, 116, 104, 111, 114,
+                  105, 116, 121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "collection_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "collection_metadata",
+          "writable": true
+        },
+        {
+          "name": "collection_master_edition",
+          "docs": ["`verify_collection` touches the collection's edition account."],
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "token_metadata_program",
+          "address": "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "max_cost",
+          "type": "u64"
+        },
+        {
+          "name": "allowlist_proof",
+          "type": {
+            "vec": {
+              "array": ["u8", 32]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "buy_returned",
+      "docs": [
+        "Buy a unit the pool holds, at the curve price.",
+        "",
+        "The other half of `sell_nft`: a unit sold back goes to the next buyer instead of waiting in",
+        "the pool. Same price, fee, allowlist, per-wallet cap and anti-snipe window as `buy_nft`, and",
+        "the same graduation at the target. Nothing is minted: the unit moves out of the pool's",
+        "custody account, signed by the pool wallet."
+      ],
+      "discriminator": [16, 196, 36, 195, 238, 50, 70, 220],
+      "accounts": [
+        {
+          "name": "buyer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "collection",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "minter",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [109, 105, 110, 116, 101, 114]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              },
+              {
+                "kind": "account",
+                "path": "buyer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "nft_mint"
+        },
+        {
+          "name": "token_metadata_program",
+          "address": "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
+        },
+        {
+          "name": "nft_metadata",
+          "docs": ["Proof that `nft_mint` is one of this drop's items, as in `SellNft`."],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [109, 101, 116, 97, 100, 97, 116, 97]
+              },
+              {
+                "kind": "account",
+                "path": "token_metadata_program"
+              },
+              {
+                "kind": "account",
+                "path": "nft_mint"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "token_metadata_program"
+            }
+          }
+        },
+        {
+          "name": "pool_nft_account",
+          "docs": ["The pool's custody account for this item."],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "pool_wallet"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172, 28,
+                  180, 133, 237, 95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "nft_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140, 151, 37, 143, 78, 36, 137, 241, 187, 61, 16, 41, 20, 142, 13, 131, 11, 90, 19,
+                153, 218, 255, 16, 132, 4, 142, 123, 216, 219, 233, 248, 89
+              ]
+            }
+          }
+        },
+        {
+          "name": "pool_wallet",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 111, 111, 108, 95, 119, 97, 108, 108, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buyer_nft_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "buyer"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172, 28,
+                  180, 133, 237, 95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "nft_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140, 151, 37, 143, 78, 36, 137, 241, 187, 61, 16, 41, 20, 142, 13, 131, 11, 90, 19,
+                153, 218, 255, 16, 132, 4, 142, 123, 216, 219, 233, 248, 89
+              ]
+            }
+          }
+        },
+        {
+          "name": "payment_mint",
+          "relations": ["collection"]
+        },
+        {
+          "name": "buyer_payment_account",
+          "writable": true
+        },
+        {
+          "name": "payment_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 97, 121, 109, 101, 110, 116, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 114, 101, 97, 116, 111, 114, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "platform_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 108, 97, 116, 102, 111, 114, 109, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "max_cost",
+          "type": "u64"
+        },
+        {
+          "name": "allowlist_proof",
+          "type": {
+            "vec": {
+              "array": ["u8", 32]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "cancel_listing",
+      "docs": [
+        "Pull a pool listing off the marketplace (#72).",
+        "",
+        "`pool_wallet` placed the listing and is the only key the venue accepts to withdraw it, and it",
+        "signed nothing but `sell`, so a pool listing stood until it sold: it could not be repriced or",
+        "withdrawn. That matters because a listing's price is bound to the floor only at the moment of",
+        "listing, and the floor rises with every sweep, so a listing placed earlier can end up below",
+        "the floor it was meant to respect.",
+        "",
+        "The stock Auction House `cancel`, signed by the pool wallet: it revokes the venue's delegate on",
+        "the pool's token account and closes the trade state. The unit never left the pool (a delegate",
+        "listing is not an escrow), so it is immediately listable again. Gated like",
+        "`list_on_marketplace` on WHO (the creator or the operator, a graduated drop), but not on WHERE:",
+        "",
+        "- Any house the venue program owns is accepted, not only the pinned one. A listing the live",
+        "build placed on some other house has to be removable too, and a cancel signed by the pool",
+        "wallet can only take away the pool's own approval and refund rent to `pool_wallet`. The",
+        "house's terms (fee, flags) do not matter for that, so they are not checked.",
+        "- Not gated by `paused`, so an incident can still pull open listings.",
+        "- Not gated on collection membership either, unlike listing. Any approval the pool wallet",
+        "holds has to be revocable, including one on a unit that is not this drop's (a listing the",
+        "live build placed before membership was checked), and removing it can only help.",
+        "",
+        "Which listing is being cancelled is decided by the unit's listing record, never by the",
+        "caller's `price` alone (review of #83). A wrong price used to fall into the \"already gone\"",
+        "branch below, revoke the approval and report a cancel while the real trade state stayed open;",
+        "the next listing then re-approved the venue and brought the stale listing back, below the",
+        "floor. Now:",
+        "",
+        "- With a record (every listing this program places): `price` must equal the recorded price",
+        "and `seller_trade_state` the recorded trade state. If that trade state is gone, the listing",
+        "ended on the venue's side (its authority cancelled it, or the unit sold), so any leftover",
+        "approval is revoked here. If it is open, the venue's `cancel` closes it. Either way the",
+        "record is closed and its rent returned to the signer. This is also how a record whose unit",
+        "sold on the venue (`pool_nft_account.amount == 0`) is cleared.",
+        "- Without a record (a listing placed before records existed, or on another house): only the",
+        "venue's own `cancel` is used, so the trade state must exist and the venue checks that it is",
+        "this unit's listing at `price`. Nothing is revoked on the caller's word.",
+        "",
+        "The trade state's rent goes back to `pool_wallet` (the venue refunds the wallet that signs),",
+        "where `sweep_pool_proceeds` will move it onto the floor."
+      ],
+      "discriminator": [41, 183, 50, 232, 230, 233, 157, 70],
+      "accounts": [
+        {
+          "name": "signer",
+          "docs": [
+            "The creator or the protocol operator, checked in the handler exactly as for listing. `mut`",
+            "because it receives the listing record's rent when the record is closed."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "collection",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "nft_mint"
+        },
+        {
+          "name": "pool_nft_account",
+          "docs": [
+            "The pool's custody account for the listed unit: the venue revokes its delegate here."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "pool_wallet"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172, 28,
+                  180, 133, 237, 95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "nft_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140, 151, 37, 143, 78, 36, 137, 241, 187, 61, 16, 41, 20, 142, 13, 131, 11, 90, 19,
+                153, 218, 255, 16, 132, 4, 142, 123, 216, 219, 233, 248, 89
+              ]
+            }
+          }
+        },
+        {
+          "name": "pool_wallet",
+          "docs": ["signed the listing, and receives the trade state's rent back."],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 111, 111, 108, 95, 119, 97, 108, 108, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "listing",
+          "docs": [
+            "placed the listing, and is empty for a listing placed before records existed; the handler",
+            "reads it only when this program owns it, and closes it when it does."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [108, 105, 115, 116, 105, 110, 103]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              },
+              {
+                "kind": "account",
+                "path": "nft_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "auction_house",
+          "docs": ["only the pinned one: see `cancel_listing`."]
+        },
+        {
+          "name": "auction_house_authority"
+        },
+        {
+          "name": "auction_house_fee_account",
+          "writable": true
+        },
+        {
+          "name": "seller_trade_state",
+          "docs": [
+            "With a listing record it must be the recorded one: the trade state the venue accepted for the",
+            "recorded price, open or already gone. Without a record it must be open, and Auction House",
+            "re-derives it from the wallet, house, token account, mint and `price` before closing it."
+          ],
+          "writable": true
+        },
+        {
+          "name": "auction_house_program",
+          "address": "hausS13jsjafwWwGqZTUQRmWyvyxn9EQpqMwV1PBBmk"
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "price",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "claim_creator_proceeds",
+      "docs": [
+        "Sweep the creator side to the creator and their royalty partner, in one",
+        "transaction, split by the share fixed at launch. Pull, not push: pushing",
+        "on every trade would spend a trader's compute to dust two wallets."
+      ],
+      "discriminator": [59, 176, 104, 251, 161, 177, 143, 57],
+      "accounts": [
+        {
+          "name": "creator",
+          "signer": true,
+          "relations": ["collection"]
+        },
+        {
+          "name": "collection",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 114, 101, 97, 116, 111, 114, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator_payment_account",
+          "writable": true
+        },
+        {
+          "name": "partner_payment_account",
+          "docs": ["Required only when the drop has a royalty partner with a non-zero share."],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "payment_mint",
+          "relations": ["collection"]
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_collection",
+      "docs": [
+        "Mark a drop that never sold out as ended, once its window has closed.",
+        "",
+        "Anyone may close a drop that FAILED — window over, not sold out — because `Ended` is the only",
+        "way into `redeem_wind_down`, and that refund is supposed to need nobody's cooperation. When",
+        "this required the creator or operator, holders of a failed drop still depended on exactly",
+        "the person the wind-down exists to route around.",
+        "",
+        "A SOLD-OUT drop is the opposite case: it is waiting to graduate, and closing it would push",
+        "holders onto the wind-down instead of the floor they bought into. So once `minted` reaches",
+        "`total_supply` it stays creator/operator-only, as before. Without that bound anyone could end",
+        "a successful drop the moment its window closed. A drop whose raise has reached its",
+        "`graduation_target` is successful in the same way, and gets the same bound."
+      ],
+      "discriminator": [18, 123, 173, 247, 218, 117, 230, 105],
+      "accounts": [
+        {
+          "name": "signer",
+          "docs": [
+            "Anyone, for a drop that failed; the creator or operator for one that sold out. Checked in",
+            "the handler."
+          ],
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "collection",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "create_collection",
+      "docs": [
+        "Create a drop: mints the collection NFT, writes its metadata and master",
+        "edition, seals the fairness commitment and fixes the curve."
+      ],
+      "discriminator": [156, 251, 92, 54, 233, 2, 16, 82],
+      "accounts": [
+        {
+          "name": "creator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "collection",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "collection_mint",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "collection_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99, 111, 108, 108, 101, 99, 116, 105, 111, 110, 95, 97, 117, 116, 104, 111, 114,
+                  105, 116, 121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "collection_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "collection_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "creator"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172, 28,
+                  180, 133, 237, 95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "collection_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140, 151, 37, 143, 78, 36, 137, 241, 187, 61, 16, 41, 20, 142, 13, 131, 11, 90, 19,
+                153, 218, 255, 16, 132, 4, 142, 123, 216, 219, 233, 248, 89
+              ]
+            }
+          }
+        },
+        {
+          "name": "collection_metadata",
+          "writable": true
+        },
+        {
+          "name": "collection_master_edition",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "token_metadata_program",
+          "address": "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "CollectionParams"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "emergency_pause",
+      "docs": [
+        "The hot operator may FREEZE trading instantly in an incident, but only",
+        "governance can unfreeze — so a compromised operator costs availability,",
+        "never funds."
+      ],
+      "discriminator": [21, 143, 27, 142, 200, 181, 210, 255],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "operator",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "graduate",
+      "docs": [
+        "Graduate a drop that sold out, or that reached its `graduation_target`.",
+        "",
+        "Locks the creator-chosen slice of the raise as the permanent floor —",
+        "irrevocable, with no instruction anywhere that can withdraw it — and",
+        "moves the remainder to the creator. From here the collection trades on",
+        "the marketplace, with the floor standing behind it forever, and selling",
+        "back to the curve is closed. Supply not yet minted (a target graduation)",
+        "keeps minting on the same curve, at random, through `request_mint`.",
+        "",
+        "Permissionless either way. A drop with no target (every drop created",
+        "before targets existed) graduates exactly as before: at sell-out only,",
+        "with the same error otherwise. A drop WITH a target graduates inside the",
+        "`buy_nft` that reaches it, so for those this is only a fallback: called",
+        "on a drop that already graduated it fails with `InvalidCollectionState`",
+        "and changes nothing."
+      ],
+      "discriminator": [45, 235, 225, 181, 17, 218, 64, 130],
+      "accounts": [
+        {
+          "name": "signer",
+          "docs": ["Permissionless: graduation is a fact about the drop, not a privilege."],
+          "signer": true
+        },
+        {
+          "name": "collection",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "payment_mint",
+          "relations": ["collection"]
+        },
+        {
+          "name": "payment_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 97, 121, 109, 101, 110, 116, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 114, 101, 97, 116, 111, 114, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "init_vaults",
+      "docs": [
+        "Create the drop's three vaults.",
+        "",
+        "Permissionless and idempotent, and deliberately NOT folded into",
+        "`create_collection`: that instruction already creates a mint, a token",
+        "account, a metadata account and a master edition. Three more account",
+        "creations would push it past the transaction size limit."
+      ],
+      "discriminator": [250, 62, 242, 50, 163, 133, 108, 93],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": [
+            "Anyone may pay the rent; the accounts are PDAs with fixed seeds, so a",
+            "griefer can only pre-pay for us."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "collection",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "payment_mint"
+        },
+        {
+          "name": "payment_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 97, 121, 109, 101, 110, 116, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 114, 101, 97, 116, 111, 114, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "platform_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 108, 97, 116, 102, 111, 114, 109, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initialize_config",
+      "discriminator": [208, 127, 21, 1, 194, 190, 196, 70],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "payment_mint"
+        },
+        {
+          "name": "treasury_payment"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "ConfigParams"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "list_on_marketplace",
+      "docs": [
+        "List one pool-held NFT on Baked Bazaar at the graduation price.",
+        "",
+        "One listing per transaction, called repeatedly after graduation — a batch",
+        "would not fit the size limit. The pool is the seller: the collection PDA",
+        "owns the token account and signs the CPI itself.",
+        "",
+        "Auction House `sell` is a DELEGATE listing, not an escrow: the NFT stays",
+        "in the pool's account until someone executes the sale, so listing can",
+        "never strand an item somewhere we cannot recover it."
+      ],
+      "discriminator": [191, 73, 48, 238, 209, 255, 223, 115],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": [
+            "Pays the trade-state rent, and must be the creator or the protocol operator — checked in the",
+            "handler. This was permissionless on the theory that listing at the graduation price is a",
+            "published outcome rather than a privilege, but `price` is a caller argument, so anyone could",
+            "list every pool-held item at one base unit and execute the sale against themselves."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "collection",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "nft_mint"
+        },
+        {
+          "name": "pool_nft_account",
+          "docs": ["The pool's custody account for this item; the pool_wallet PDA owns it."],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "pool_wallet"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172, 28,
+                  180, 133, 237, 95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "nft_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140, 151, 37, 143, 78, 36, 137, 241, 187, 61, 16, 41, 20, 142, 13, 131, 11, 90, 19,
+                153, 218, 255, 16, 132, 4, 142, 123, 216, 219, 233, 248, 89
+              ]
+            }
+          }
+        },
+        {
+          "name": "pool_wallet",
+          "docs": ["accounts and is the only account here the System program is allowed to debit."],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 111, 111, 108, 95, 119, 97, 108, 108, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "listing",
+          "docs": [
+            "The unit's listing record, written once the venue accepts the listing; the payer covers its",
+            "rent, which comes back on `cancel_listing`. An existing record means the unit is already",
+            "listed, and the listing is refused (see the handler)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [108, 105, 115, 116, 105, 110, 103]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              },
+              {
+                "kind": "account",
+                "path": "nft_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "nft_metadata",
+          "docs": [
+            "Proof that the unit is one of THIS drop's, through the same `is_collection_item` check",
+            "`sell_nft` and the redeem paths use. Anyone can send a token to `pool_wallet`, and listing",
+            "used to take whatever the pool held: a forged NFT dropped there would go on sale under the",
+            "pool's signature, with royalties paid to whoever its metadata names. Decoded as Token",
+            "Metadata, owner-checked, and pinned to the mint by its PDA seeds, so no other unit's",
+            "metadata can stand in for it."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [109, 101, 116, 97, 100, 97, 116, 97]
+              },
+              {
+                "kind": "const",
+                "value": [
+                  11, 112, 101, 177, 227, 209, 124, 69, 56, 157, 82, 127, 107, 4, 195, 205, 88, 184,
+                  108, 115, 26, 160, 253, 181, 73, 182, 209, 188, 3, 248, 41, 70
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "nft_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                11, 112, 101, 177, 227, 209, 124, 69, 56, 157, 82, 127, 107, 4, 195, 205, 88, 184,
+                108, 115, 26, 160, 253, 181, 73, 182, 209, 188, 3, 248, 41, 70
+              ]
+            }
+          }
+        },
+        {
+          "name": "auction_house",
+          "docs": [
+            "`venue_fee_for_listing`. Auction House then validates the authority and fee account against",
+            "it."
+          ],
+          "address": "EnsbByCrLDxHLMiZSdWa79SKmHsjQ5AaxXMTzRqpS5Nu"
+        },
+        {
+          "name": "auction_house_authority"
+        },
+        {
+          "name": "auction_house_fee_account",
+          "writable": true
+        },
+        {
+          "name": "seller_trade_state",
+          "writable": true
+        },
+        {
+          "name": "free_seller_trade_state",
+          "writable": true
+        },
+        {
+          "name": "program_as_signer"
+        },
+        {
+          "name": "auction_house_program",
+          "address": "hausS13jsjafwWwGqZTUQRmWyvyxn9EQpqMwV1PBBmk"
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "price",
+          "type": "u64"
+        },
+        {
+          "name": "trade_state_bump",
+          "type": "u8"
+        },
+        {
+          "name": "free_trade_state_bump",
+          "type": "u8"
+        },
+        {
+          "name": "program_as_signer_bump",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "nominate_authority",
+      "docs": [
+        "Step 1 of the two-step handoff. Nominating is reversible; the successor is",
+        "not authority until it signs `accept_authority`."
+      ],
+      "discriminator": [148, 182, 144, 91, 186, 12, 118, 18],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": ["config"]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_authority",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "redeem_floor",
+      "docs": [
+        "Redeem an NFT against the permanent floor, after graduation.",
+        "",
+        "Pays `floor_reserve / floor_redeemable` and BURNS the unit. The floor price is invariant",
+        "under redemption (see `logic::floor_price`), so this cannot be drained into a falling floor:",
+        "the last holder gets the same price as the first.",
+        "",
+        "That invariant needs one slot per unit that exists, and the burn is what keeps it (#76). The",
+        "unit used to move into pool custody instead, where `list_on_marketplace` could sell it again",
+        "with its slot already spent: every resale put one more holder outside the pool against the",
+        "same `floor_redeemable`, so the last holders out found the reserve gone. Burned, a redeemed",
+        "unit cannot be listed, sold or redeemed again, and `floor_redeemable` stays equal to the",
+        "number of units still in existence. Pool inventory that CAN be listed is only what holders",
+        "sold back into the curve before graduation, and each of those units still owns its slot."
+      ],
+      "discriminator": [115, 158, 138, 13, 72, 51, 216, 63],
+      "accounts": [
+        {
+          "name": "holder",
+          "signer": true
+        },
+        {
+          "name": "collection",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "nft_mint",
+          "docs": ["`mut` because the unit is burned, which lowers the mint's supply."],
+          "writable": true
+        },
+        {
+          "name": "token_metadata_program",
+          "address": "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
+        },
+        {
+          "name": "nft_metadata",
+          "docs": [
+            "The same proof `sell_nft` requires, through the same helper. The floor is the thing this",
+            "program promises hardest, and it was the cheaper of the two to empty: `floor_redeemable`",
+            "starts at `total_supply`, so junk mints could redeem the whole reserve in one pass and leave",
+            "every real holder with `NothingToClaim`."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [109, 101, 116, 97, 100, 97, 116, 97]
+              },
+              {
+                "kind": "account",
+                "path": "token_metadata_program"
+              },
+              {
+                "kind": "account",
+                "path": "nft_mint"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "token_metadata_program"
+            }
+          }
+        },
+        {
+          "name": "holder_nft_account",
+          "writable": true
+        },
+        {
+          "name": "payment_mint",
+          "relations": ["collection"]
+        },
+        {
+          "name": "holder_payment_account",
+          "writable": true
+        },
+        {
+          "name": "payment_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 97, 121, 109, 101, 110, 116, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "redeem_wind_down",
+      "docs": [
+        "Take your share of the raise back out of a drop that never sold out.",
+        "",
+        "`end_ts` passing without a sell-out used to be the end of the story, and the end of the",
+        "money with it: `sell_nft` reverts past `end_ts`, `graduate` requires",
+        "`minted == total_supply` so it can never run on a drop that fell short, and",
+        "`close_collection` only moves the state to the terminal `Ended`. From `Ended`, no instruction",
+        "in this program could move anything out of `payment_vault` — the whole raise was locked for",
+        "good and every holder was left with an unsellable NFT and no refund. A drop that sells slowly",
+        "is the LIKELY outcome for most launches, so that was the common path, not an edge case.",
+        "",
+        "The price is `payment_raised_net / circulating`, which is `redeem_floor`'s shape and holds",
+        "`redeem_floor`'s invariant. Writing `R = qC + r`, paying `q` leaves `R' = q(C-1) + r` over",
+        "`C' = C - 1`, so the next quotient is `q + r/(C-1)` — never less than `q`. The last holder",
+        "out cannot be paid less than the first, so there is no race to the exit and no advantage in",
+        "being early.",
+        "",
+        "Permissionless, and it has to be: a creator whose drop failed is the last person whose",
+        "cooperation the holders should need. It shares `RedeemFloor`'s accounts deliberately, so the",
+        "collection-membership check is literally the same one and cannot drift."
+      ],
+      "discriminator": [123, 157, 93, 222, 131, 47, 216, 125],
+      "accounts": [
+        {
+          "name": "holder",
+          "signer": true
+        },
+        {
+          "name": "collection",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "nft_mint",
+          "docs": ["`mut` because the unit is burned, which lowers the mint's supply."],
+          "writable": true
+        },
+        {
+          "name": "token_metadata_program",
+          "address": "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
+        },
+        {
+          "name": "nft_metadata",
+          "docs": [
+            "The same proof `sell_nft` requires, through the same helper. The floor is the thing this",
+            "program promises hardest, and it was the cheaper of the two to empty: `floor_redeemable`",
+            "starts at `total_supply`, so junk mints could redeem the whole reserve in one pass and leave",
+            "every real holder with `NothingToClaim`."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [109, 101, 116, 97, 100, 97, 116, 97]
+              },
+              {
+                "kind": "account",
+                "path": "token_metadata_program"
+              },
+              {
+                "kind": "account",
+                "path": "nft_mint"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "token_metadata_program"
+            }
+          }
+        },
+        {
+          "name": "holder_nft_account",
+          "writable": true
+        },
+        {
+          "name": "payment_mint",
+          "relations": ["collection"]
+        },
+        {
+          "name": "holder_payment_account",
+          "writable": true
+        },
+        {
+          "name": "payment_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 97, 121, 109, 101, 110, 116, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "refund_mint",
+      "docs": [
+        "Return a request's payment in full, when it can no longer settle. Permissionless, never",
+        "paused, and the money can only go to the buyer.",
+        "",
+        "One case only, for the oldest pending request (resolution is strictly in order): its",
+        "randomness slot has left `SlotHashes` (about 512 slots, ~4 minutes) without a settle. A",
+        "refund, not a new slot: re-rolling would hand a free second draw to whoever let the first one",
+        "lapse, and a refund is the one outcome that cannot strand the money.",
+        "",
+        "There used to be a second case, a request priced under a floor that had risen since. It let a",
+        "buyer who had seen a bad draw cancel it, by lifting the floor with a dust donation and a sweep",
+        "in the same transaction (#92 review). Sweeps now wait for the queue to drain, nothing else",
+        "can lift the floor over a pending price, and a settle never fails on the floor, so that case",
+        "is gone.",
+        "",
+        "The curve steps back one unit, so the price the next buyer pays is as if the request had never",
+        "been made (or higher, never lower). The buyer's payment-mint ATA is created if it is missing,",
+        "paid by the caller, so a buyer who closed their account cannot hold up the queue."
+      ],
+      "discriminator": [171, 26, 84, 214, 113, 33, 74, 11],
+      "accounts": [
+        {
+          "name": "caller",
+          "docs": ["Anyone. Pays for the buyer's payment ATA only if the buyer has none."],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "collection",
+          "docs": ["`mut` for `mint_requests_pending`."],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          },
+          "relations": ["request"]
+        },
+        {
+          "name": "mint_queue",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [109, 105, 110, 116, 95, 113, 117, 101, 117, 101]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buyer",
+          "docs": ["of the request back."],
+          "writable": true,
+          "relations": ["request"]
+        },
+        {
+          "name": "request",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [109, 105, 110, 116, 95, 114, 101, 113, 117, 101, 115, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              },
+              {
+                "kind": "account",
+                "path": "buyer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "minter",
+          "docs": ["The refunded unit no longer counts against the buyer's wallet cap."],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [109, 105, 110, 116, 101, 114]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              },
+              {
+                "kind": "account",
+                "path": "buyer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "slot_hashes",
+          "address": "SysvarS1otHashes111111111111111111111111111"
+        },
+        {
+          "name": "payment_mint",
+          "relations": ["collection"]
+        },
+        {
+          "name": "payment_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 97, 121, 109, 101, 110, 116, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buyer_payment_account",
+          "docs": [
+            "Any payment-mint token account the buyer owns: the refund can only go to the buyer. If the",
+            "buyer has none, anyone can create their ATA first (the ATA program's permissionless",
+            "`CreateIdempotent`, in the same transaction), so a buyer cannot hold up the queue by closing",
+            "their accounts."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "request_mint",
+      "docs": [
+        "Reserve a post-graduation mint at the curve's current price.",
+        "",
+        "The price is taken now, the curve moves on by one unit now (so concurrent buyers each get the",
+        "next price, exactly as sequential buys would), and the payment (price plus fee) is held in",
+        "`payment_vault` as escrow until the request settles or is refunded. The item is drawn later,",
+        "from the hash of slot `now + RANDOMNESS_DELAY_SLOTS`, which nobody can know yet.",
+        "",
+        "The buyer also deposits the rent of the item's four accounts (and Token Metadata's fee), as a",
+        "`buy_nft` buyer pays them, so whoever settles is repaid and the buyer gets the rest back.",
+        "",
+        "One open request per buyer per drop. The first request after graduation opens the queue and",
+        "pays its rent."
+      ],
+      "discriminator": [130, 38, 27, 69, 46, 211, 135, 145],
+      "accounts": [
+        {
+          "name": "buyer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "collection",
+          "docs": ["`mut` for `mint_requests_pending`."],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint_queue",
+          "docs": [
+            "Opened by the first request after graduation, which pays its rent. Its size depends only on",
+            "`total_supply`, so every later request passes the same `space` check."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [109, 105, 110, 116, 95, 113, 117, 101, 117, 101]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "request",
+          "docs": [
+            "`init`, not `init_if_needed`: a buyer with a pending request must wait for it to resolve."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [109, 105, 110, 116, 95, 114, 101, 113, 117, 101, 115, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              },
+              {
+                "kind": "account",
+                "path": "buyer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "minter",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [109, 105, 110, 116, 101, 114]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              },
+              {
+                "kind": "account",
+                "path": "buyer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "payment_mint",
+          "relations": ["collection"]
+        },
+        {
+          "name": "buyer_payment_account",
+          "writable": true
+        },
+        {
+          "name": "payment_vault",
+          "docs": [
+            "Holds the escrow until the request resolves, ring-fenced by `mint_queue.escrowed`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 97, 121, 109, 101, 110, 116, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "max_cost",
+          "type": "u64"
+        },
+        {
+          "name": "allowlist_proof",
+          "type": {
+            "vec": {
+              "array": ["u8", 32]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "reveal",
+      "docs": [
+        "Publish the shuffle seed.",
+        "",
+        "Deliberately NOT verified on-chain: the commitment covers",
+        "`sha256(seed ‖ ordered_uris)` and the URI list lives off-chain, so the",
+        "check is permissionless and external. A creator who publishes a seed that",
+        "does not reproduce the commitment is caught by every observer at once."
+      ],
+      "discriminator": [9, 35, 59, 190, 167, 249, 76, 115],
+      "accounts": [
+        {
+          "name": "creator",
+          "signer": true,
+          "relations": ["collection"]
+        },
+        {
+          "name": "collection",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "seed",
+          "type": {
+            "array": ["u8", 32]
+          }
+        }
+      ]
+    },
+    {
+      "name": "sell_nft",
+      "docs": [
+        "Sell a unit back into the curve.",
+        "",
+        "The NFT moves into the pool's inventory and the seller is paid the curve",
+        "price less the fee. This is the guaranteed exit: it works from the first",
+        "block, at a price anyone can compute in advance."
+      ],
+      "discriminator": [159, 159, 140, 34, 240, 239, 83, 89],
+      "accounts": [
+        {
+          "name": "seller",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "collection",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "nft_mint"
+        },
+        {
+          "name": "token_metadata_program",
+          "docs": [
+            "Declared BEFORE `nft_metadata`: Anchor resolves accounts in declaration order, so a",
+            "constraint can only name an account above it."
+          ],
+          "address": "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
+        },
+        {
+          "name": "nft_metadata",
+          "docs": [
+            "Proof that `nft_mint` is one of this drop's items — see `is_collection_item`. Pinned to the",
+            "mint by its own PDA seeds, so no other item's metadata can be passed in its place."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [109, 101, 116, 97, 100, 97, 116, 97]
+              },
+              {
+                "kind": "account",
+                "path": "token_metadata_program"
+              },
+              {
+                "kind": "account",
+                "path": "nft_mint"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "token_metadata_program"
+            }
+          }
+        },
+        {
+          "name": "seller_nft_account",
+          "writable": true
+        },
+        {
+          "name": "pool_nft_account",
+          "docs": ["The pool's custody account for this item."],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "pool_wallet"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172, 28,
+                  180, 133, 237, 95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "nft_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140, 151, 37, 143, 78, 36, 137, 241, 187, 61, 16, 41, 20, 142, 13, 131, 11, 90, 19,
+                153, 218, 255, 16, 132, 4, 142, 123, 216, 219, 233, 248, 89
+              ]
+            }
+          }
+        },
+        {
+          "name": "pool_wallet",
+          "docs": ["accounts and is the only account here the System program is allowed to debit."],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 111, 111, 108, 95, 119, 97, 108, 108, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "payment_mint",
+          "relations": ["collection"]
+        },
+        {
+          "name": "seller_payment_account",
+          "writable": true
+        },
+        {
+          "name": "payment_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 97, 121, 109, 101, 110, 116, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 114, 101, 97, 116, 111, 114, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "platform_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 108, 97, 116, 102, 111, 114, 109, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "min_proceeds",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_graduation_target",
+      "docs": [
+        "Let the drop graduate once its raise reaches `graduation_target`, without selling out; the",
+        "rest of the supply then keeps minting on the curve, at random (see `request_mint`). 0 clears",
+        "it: graduate at sell-out only, as every drop did before.",
+        "",
+        "Creator only, and only while the drop is `Created`, i.e. before its first unit: the target is",
+        "part of what a buyer buys into, so it is fixed from the first mint on. Its own instruction",
+        "rather than a `CollectionParams` field, so `create_collection`'s instruction data, which the",
+        "backend already builds, does not change; send it in the same transaction as `init_vaults`,",
+        "which no buy can precede.",
+        "",
+        "Bounded to between half and all of the raise at sell-out under this drop's own curve",
+        "(`logic::sellout_raise`), computed here from the curve the drop was created with. Below half,",
+        "graduation would lock a floor from too little of the raise; above all of it, the target could",
+        "be unreachable."
+      ],
+      "discriminator": [222, 121, 229, 5, 150, 93, 163, 46],
+      "accounts": [
+        {
+          "name": "creator",
+          "signer": true,
+          "relations": ["collection"]
+        },
+        {
+          "name": "collection",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "graduation_target",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_operator",
+      "discriminator": [238, 153, 101, 169, 243, 131, 36, 1],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": ["config"]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_operator",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_paused",
+      "discriminator": [91, 60, 125, 192, 176, 225, 166, 218],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": ["config"]
+        }
+      ],
+      "args": [
+        {
+          "name": "paused",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "set_platform_royalty",
+      "docs": [
+        "Set the platform's marketplace royalty for drops created from now on. A drop fixes it at",
+        "create, so this never changes the creators of an item already minted, nor of a live drop.",
+        "The wallet must be a plain system-owned wallet: on Baked Bazaar's native house a royalty is",
+        "paid in lamports straight to the creator address, and a token account would strand it. It",
+        "must also hold at least the rent-exempt minimum: Auction House silently SKIPS a native",
+        "royalty payout that would leave the payee below it, and the seller keeps the cut. This only",
+        "holds at the moment of the call, so the wallet must never be drained below that minimum.",
+        "`royalty_bps` 0 turns the royalty off for new drops."
+      ],
+      "discriminator": [182, 145, 46, 199, 77, 181, 34, 56],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": ["config"]
+        },
+        {
+          "name": "platform_royalty_wallet"
+        }
+      ],
+      "args": [
+        {
+          "name": "royalty_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "settle_mint",
+      "docs": [
+        "Draw and mint the oldest pending request. Permissionless: the backend keeper calls it about a",
+        "second after the request, but anyone may, and the outcome is the same whoever does.",
+        "",
+        "Needs the request's randomness slot to be in `SlotHashes` (see `logic::find_slot_hash`). The",
+        "draw is `draw_value(slot_hash, collection, request, nonce) mod remaining`, rank-selected over",
+        "the indices not yet minted. The caller passes the `index` that draw gives (it is a pure",
+        "function of public state, so the keeper computes it) because the item's mint is the PDA",
+        "`[\"item\", collection, index]` and Anchor creates it before this handler runs; a wrong index is",
+        "refused, and the PDA means no index can ever be minted twice.",
+        "",
+        "The item is the same as a `buy_nft` item: immutable metadata at `{base_uri}{index}.json`,",
+        "verified into the collection, a master edition with max supply 0, the drop's creators. The",
+        "escrow splits as `logic::post_grad_split` says: the fee to the platform and creator vaults as",
+        "on any trade, at least the floor per unit onto the floor (with one more slot), the rest to the",
+        "creator. The caller pays the item's rent and is repaid from the buyer's deposit.",
+        "",
+        "Nothing about the floor can make this fail: once the randomness exists, the head request",
+        "settles, and its only other exit is the expiry refund. Nobody, the buyer included, gets to",
+        "choose between the two after seeing the draw."
+      ],
+      "discriminator": [201, 168, 164, 233, 170, 82, 40, 96],
+      "accounts": [
+        {
+          "name": "settler",
+          "docs": ["Anyone. Pays the item's rent and is repaid from the request's deposit."],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "collection",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection_mint"
+              }
+            ]
+          },
+          "relations": ["request"]
+        },
+        {
+          "name": "mint_queue",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [109, 105, 110, 116, 95, 113, 117, 101, 117, 101]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buyer",
+          "docs": ["the unspent part of the deposit."],
+          "writable": true,
+          "relations": ["request"]
+        },
+        {
+          "name": "request",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [109, 105, 110, 116, 95, 114, 101, 113, 117, 101, 115, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              },
+              {
+                "kind": "account",
+                "path": "buyer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "slot_hashes",
+          "address": "SysvarS1otHashes111111111111111111111111111"
+        },
+        {
+          "name": "payment_mint",
+          "relations": ["collection"]
+        },
+        {
+          "name": "payment_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 97, 121, 109, 101, 110, 116, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 114, 101, 97, 116, 111, 114, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "platform_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 108, 97, 116, 102, 111, 114, 109, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "nft_mint",
+          "docs": [
+            "The drawn item's mint, at the index's PDA. Created here, so an index already minted fails."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [105, 116, 101, 109]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              },
+              {
+                "kind": "arg",
+                "path": "index"
+              }
+            ]
+          }
+        },
+        {
+          "name": "nft_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "buyer"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172, 28,
+                  180, 133, 237, 95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "nft_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140, 151, 37, 143, 78, 36, 137, 241, 187, 61, 16, 41, 20, 142, 13, 131, 11, 90, 19,
+                153, 218, 255, 16, 132, 4, 142, 123, 216, 219, 233, 248, 89
+              ]
+            }
+          }
+        },
+        {
+          "name": "nft_metadata",
+          "writable": true
+        },
+        {
+          "name": "nft_master_edition",
+          "writable": true
+        },
+        {
+          "name": "collection_mint",
+          "writable": true,
+          "relations": ["collection"]
+        },
+        {
+          "name": "collection_authority",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99, 111, 108, 108, 101, 99, 116, 105, 111, 110, 95, 97, 117, 116, 104, 111, 114,
+                  105, 116, 121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "collection_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "collection_metadata",
+          "writable": true
+        },
+        {
+          "name": "collection_master_edition",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "token_metadata_program",
+          "address": "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "index",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "sweep_platform_fees",
+      "docs": [
+        "Sweep the platform's cut. Operator-signed, destination pinned to Config —",
+        "the operator chooses WHEN, never WHERE."
+      ],
+      "discriminator": [190, 168, 25, 182, 75, 123, 135, 189],
+      "accounts": [
+        {
+          "name": "operator",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "collection",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "platform_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 108, 97, 116, 102, 111, 114, 109, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury_payment",
+          "docs": ["Destination pinned to Config: the operator picks when, never where."],
+          "writable": true
+        },
+        {
+          "name": "payment_mint",
+          "relations": ["collection"]
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "sweep_pool_proceeds",
+      "docs": [
+        "Bring marketplace proceeds back into the reserve that backs the floor.",
+        "",
+        "Auction House pays the SELLER WALLET, and the seller wallet here is `pool_wallet` — the",
+        "dataless PDA that holds the pool's inventory. Before this, `pool_wallet` signed only the",
+        "marketplace CPIs (`sell`, and since #72 `cancel`), neither of which moves money out, so every",
+        "unit the pool sold on the marketplace left its payment somewhere no instruction in this",
+        "program could move. The listing path was shipping money into a hole.",
+        "",
+        "WHERE the money lands depends on the auction house's treasury mint, and the production one",
+        "is the case that matters. Baked Bazaar's auction house has `treasury_mint = So111…112`, the",
+        "same as our `payment_mint`, and on that native path `execute_sale` asserts the seller's",
+        "payment receipt account IS the seller and pays LAMPORTS straight to `pool_wallet` — never to",
+        "its wCOOK token account. An earlier version read only the token account, so against",
+        "production it always found nothing and the proceeds stayed stuck. Both paths are swept:",
+        "",
+        "- native: every lamport on `pool_wallet` above its rent-exempt minimum moves into",
+        "`payment_vault` and is wrapped there with SyncNative. The minimum stays, because the next",
+        "`list_on_marketplace` relies on the pool holding exactly that before it tops up the rent.",
+        "- SPL: for an auction house whose treasury is a token, the pool's token account, when one",
+        "is passed.",
+        "",
+        "Lamports above the minimum can include trade-state rent Auction House refunds to the seller",
+        "when a listing settles or is cancelled — rent the listing's payer originally covered. It is swept too: this",
+        "instruction can only move money toward holders, and a floor slightly higher than earned is",
+        "the conservative error.",
+        "",
+        "The proceeds go onto `floor_reserve`, which raises the floor for every unit still",
+        "outstanding. Permissionless for the same reason: the only thing this can do is pay holders.",
+        "",
+        "Refused while any post-graduation mint request is pending (#92 review). A request's price is",
+        "fixed when it is made, and its draw becomes public a few slots before anyone settles it; if",
+        "the floor could still move in between, raising it past the price is a way to cancel a draw",
+        "you have already seen. With sweeps held back, nothing in that window can lift the floor over",
+        "a pending price (proof at `logic::post_grad_price`). Proceeds simply wait in `pool_wallet`",
+        "until the queue drains, which takes seconds (or one expiry). Also refused while no unit",
+        "exists: there is nobody to credit, and a reserve with no unit would be handed whole to the",
+        "next mint."
+      ],
+      "discriminator": [191, 94, 39, 85, 213, 171, 190, 205],
+      "accounts": [
+        {
+          "name": "signer",
+          "docs": ["Anyone. The instruction can only move money toward holders."],
+          "signer": true
+        },
+        {
+          "name": "collection",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool_wallet",
+          "docs": [
+            "accounts, and Auction House pays the seller wallet, which is this. `mut` because on the",
+            "native path the proceeds ARE its lamports."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 111, 111, 108, 95, 119, 97, 108, 108, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "payment_mint",
+          "relations": ["collection"]
+        },
+        {
+          "name": "pool_payment_account",
+          "docs": [
+            "Where an SPL-treasury auction house leaves the money. Optional: on the native path — Baked",
+            "Bazaar's — this account usually does not exist, and requiring it made the sweep uncallable."
+          ],
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "pool_wallet"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172, 28,
+                  180, 133, 237, 95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "payment_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140, 151, 37, 143, 78, 36, 137, 241, 187, 61, 16, 41, 20, 142, 13, 131, 11, 90, 19,
+                153, 218, 255, 16, 132, 4, 142, 123, 216, 219, 233, 248, 89
+              ]
+            }
+          }
+        },
+        {
+          "name": "payment_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 97, 121, 109, 101, 110, 116, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "update_config",
+      "discriminator": [29, 158, 252, 191, 10, 83, 219, 99],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": ["config"]
+        },
+        {
+          "name": "treasury_payment"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "ConfigParams"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Collection",
+      "discriminator": [48, 160, 232, 205, 191, 207, 26, 141]
+    },
+    {
+      "name": "Config",
+      "discriminator": [155, 12, 170, 224, 30, 250, 204, 130]
+    },
+    {
+      "name": "Listing",
+      "discriminator": [218, 32, 50, 73, 43, 134, 26, 58]
+    },
+    {
+      "name": "MintQueue",
+      "discriminator": [51, 77, 130, 84, 59, 132, 207, 31]
+    },
+    {
+      "name": "MintRequest",
+      "discriminator": [60, 88, 16, 213, 180, 138, 14, 225]
+    },
+    {
+      "name": "Minter",
+      "discriminator": [28, 69, 107, 166, 41, 139, 205, 247]
+    }
+  ],
+  "events": [
+    {
+      "name": "AuthorityAccepted",
+      "discriminator": [166, 192, 219, 188, 41, 209, 195, 26]
+    },
+    {
+      "name": "AuthorityNominated",
+      "discriminator": [83, 253, 94, 222, 179, 41, 95, 127]
+    },
+    {
+      "name": "Bought",
+      "discriminator": [193, 56, 215, 24, 156, 76, 42, 104]
+    },
+    {
+      "name": "BoughtReturned",
+      "discriminator": [133, 245, 43, 121, 15, 174, 236, 141]
+    },
+    {
+      "name": "CollectionClosed",
+      "discriminator": [161, 2, 13, 21, 60, 123, 241, 233]
+    },
+    {
+      "name": "CollectionCreated",
+      "discriminator": [69, 167, 76, 142, 182, 183, 233, 139]
+    },
+    {
+      "name": "ConfigInitialized",
+      "discriminator": [181, 49, 200, 156, 19, 167, 178, 91]
+    },
+    {
+      "name": "FloorRedeemed",
+      "discriminator": [90, 55, 238, 50, 6, 80, 26, 0]
+    },
+    {
+      "name": "Graduated",
+      "discriminator": [51, 241, 66, 50, 140, 245, 156, 192]
+    },
+    {
+      "name": "GraduationTargetSet",
+      "discriminator": [110, 235, 163, 239, 197, 46, 233, 141]
+    },
+    {
+      "name": "Listed",
+      "discriminator": [243, 173, 136, 195, 125, 241, 12, 99]
+    },
+    {
+      "name": "ListingCancelled",
+      "discriminator": [11, 46, 163, 10, 103, 80, 139, 194]
+    },
+    {
+      "name": "MintRefunded",
+      "discriminator": [59, 110, 150, 76, 181, 15, 124, 21]
+    },
+    {
+      "name": "MintRequested",
+      "discriminator": [35, 69, 51, 130, 53, 43, 189, 196]
+    },
+    {
+      "name": "MintSettled",
+      "discriminator": [84, 121, 3, 176, 3, 239, 234, 127]
+    },
+    {
+      "name": "OperatorSet",
+      "discriminator": [187, 242, 164, 221, 208, 246, 180, 178]
+    },
+    {
+      "name": "PauseSet",
+      "discriminator": [175, 57, 198, 136, 192, 66, 204, 73]
+    },
+    {
+      "name": "PlatformRoyaltySet",
+      "discriminator": [56, 147, 20, 133, 34, 38, 131, 39]
+    },
+    {
+      "name": "PoolProceedsSwept",
+      "discriminator": [203, 81, 54, 67, 62, 223, 82, 24]
+    },
+    {
+      "name": "ProceedsClaimed",
+      "discriminator": [153, 159, 250, 104, 73, 211, 73, 9]
+    },
+    {
+      "name": "Revealed",
+      "discriminator": [180, 7, 199, 88, 154, 19, 181, 154]
+    },
+    {
+      "name": "Sold",
+      "discriminator": [205, 203, 210, 202, 96, 11, 192, 10]
+    },
+    {
+      "name": "WindDownRedeemed",
+      "discriminator": [239, 121, 63, 21, 133, 248, 102, 124]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Unauthorized",
+      "msg": "Only the configured authority may do this"
+    },
+    {
+      "code": 6001,
+      "name": "Paused",
+      "msg": "Minting is paused"
+    },
+    {
+      "code": 6002,
+      "name": "InvalidAmount",
+      "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6003,
+      "name": "MathOverflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6004,
+      "name": "InvalidFeeSplit",
+      "msg": "Fee basis points must not exceed 10000"
+    },
+    {
+      "code": 6005,
+      "name": "SellerFeeTooHigh",
+      "msg": "Royalty exceeds the protocol maximum"
+    },
+    {
+      "code": 6006,
+      "name": "NameTooLong",
+      "msg": "Name exceeds the metadata limit"
+    },
+    {
+      "code": 6007,
+      "name": "SymbolTooLong",
+      "msg": "Symbol exceeds the metadata limit"
+    },
+    {
+      "code": 6008,
+      "name": "UriTooLong",
+      "msg": "Base URI exceeds the metadata limit"
+    },
+    {
+      "code": 6009,
+      "name": "InvalidSupply",
+      "msg": "Total supply must be greater than zero"
+    },
+    {
+      "code": 6010,
+      "name": "InvalidTimeWindow",
+      "msg": "The mint window is empty or inverted"
+    },
+    {
+      "code": 6011,
+      "name": "InvalidLaunchTime",
+      "msg": "Launch time is too far in the past"
+    },
+    {
+      "code": 6012,
+      "name": "InvalidCollectionState",
+      "msg": "The drop is not in a state that allows this"
+    },
+    {
+      "code": 6013,
+      "name": "NotStarted",
+      "msg": "Minting has not opened yet"
+    },
+    {
+      "code": 6014,
+      "name": "DropEnded",
+      "msg": "The mint window has closed"
+    },
+    {
+      "code": 6015,
+      "name": "SoldOut",
+      "msg": "Every unit has been minted"
+    },
+    {
+      "code": 6016,
+      "name": "WalletLimitExceeded",
+      "msg": "This wallet has reached its mint limit for this drop"
+    },
+    {
+      "code": 6017,
+      "name": "AntiSnipeLimit",
+      "msg": "Opening-window limit: this wallet cannot mint that many yet"
+    },
+    {
+      "code": 6018,
+      "name": "AllowlistProofRequired",
+      "msg": "This phase is allowlist only and requires a valid proof"
+    },
+    {
+      "code": 6019,
+      "name": "InvalidAllowlistProof",
+      "msg": "The supplied allowlist proof is not valid for this wallet"
+    },
+    {
+      "code": 6020,
+      "name": "AlreadyRevealed",
+      "msg": "The reveal seed has already been published"
+    },
+    {
+      "code": 6021,
+      "name": "RevealTooEarly",
+      "msg": "A drop can only be revealed once it is sold out or its window has closed"
+    },
+    {
+      "code": 6022,
+      "name": "InvalidCommitment",
+      "msg": "The fairness commitment must not be empty"
+    },
+    {
+      "code": 6023,
+      "name": "NothingToClaim",
+      "msg": "Nothing to claim"
+    },
+    {
+      "code": 6024,
+      "name": "InvalidPaymentAccount",
+      "msg": "Payment account does not match the configured mint or owner"
+    },
+    {
+      "code": 6025,
+      "name": "NoPendingAuthority",
+      "msg": "No authority handoff is in flight"
+    },
+    {
+      "code": 6026,
+      "name": "CollectionMismatch",
+      "msg": "Account does not belong to this collection"
+    },
+    {
+      "code": 6027,
+      "name": "TransferAmountMismatch",
+      "msg": "The transfer moved a different amount than expected"
+    },
+    {
+      "code": 6028,
+      "name": "InvalidReserves",
+      "msg": "Curve reserves are exhausted or invalid"
+    },
+    {
+      "code": 6029,
+      "name": "AlreadyGraduated",
+      "msg": "The drop has already graduated"
+    },
+    {
+      "code": 6030,
+      "name": "NotGraduated",
+      "msg": "The drop has not graduated yet"
+    },
+    {
+      "code": 6031,
+      "name": "SlippageExceeded",
+      "msg": "Price moved beyond the limit you accepted"
+    },
+    {
+      "code": 6032,
+      "name": "NotInInventory",
+      "msg": "The pool does not hold this NFT"
+    },
+    {
+      "code": 6033,
+      "name": "FloorLockTooHigh",
+      "msg": "Floor lock exceeds the protocol maximum"
+    },
+    {
+      "code": 6034,
+      "name": "AuctionHouseMismatch",
+      "msg": "Pool inventory may only be listed on Baked Bazaar's auction house"
+    },
+    {
+      "code": 6035,
+      "name": "AuctionHouseUnusable",
+      "msg": "The auction house is not one the pool can list on: wrong mint, fee too high, or sign-off, price-change or auctioneer enabled"
+    },
+    {
+      "code": 6036,
+      "name": "AlreadyListed",
+      "msg": "This unit is already listed; cancel the listing before listing it again"
+    },
+    {
+      "code": 6037,
+      "name": "ListingPriceMismatch",
+      "msg": "That is not the price or trade state this unit is listed at"
+    },
+    {
+      "code": 6038,
+      "name": "NotListed",
+      "msg": "No open listing to cancel for this unit"
+    },
+    {
+      "code": 6039,
+      "name": "DuplicateRoyaltyPayee",
+      "msg": "The platform royalty wallet cannot also be the creator or the royalty partner"
+    },
+    {
+      "code": 6040,
+      "name": "InvalidRoyaltyWallet",
+      "msg": "The platform royalty wallet must be a funded, plain system-owned wallet"
+    },
+    {
+      "code": 6041,
+      "name": "PlatformRoyaltyTooHigh",
+      "msg": "The platform royalty plus the creator's royalty would exceed the royalty hard cap"
+    },
+    {
+      "code": 6042,
+      "name": "GraduationTargetOutOfRange",
+      "msg": "The graduation target must be between half and all of the raise at sell-out"
+    },
+    {
+      "code": 6043,
+      "name": "GraduationTargetSupplyTooLarge",
+      "msg": "A drop with a graduation target can have at most 10,000 units"
+    },
+    {
+      "code": 6044,
+      "name": "GraduationTargetNotMet",
+      "msg": "The drop has neither sold out nor reached its graduation target"
+    },
+    {
+      "code": 6045,
+      "name": "RandomnessNotReady",
+      "msg": "The request's randomness slot has not been produced yet"
+    },
+    {
+      "code": 6046,
+      "name": "RequestExpired",
+      "msg": "The request's randomness slot is no longer in SlotHashes; refund it instead"
+    },
+    {
+      "code": 6047,
+      "name": "NotNextInQueue",
+      "msg": "Requests resolve in order: settle or refund the earlier one first"
+    },
+    {
+      "code": 6048,
+      "name": "DrawMismatch",
+      "msg": "That index is not the one the draw picked"
+    },
+    {
+      "code": 6049,
+      "name": "FloorAboveRequestPrice",
+      "msg": "Unused"
+    },
+    {
+      "code": 6050,
+      "name": "RefundNotAvailable",
+      "msg": "This request can still settle; it can be refunded only once its randomness has expired"
+    },
+    {
+      "code": 6051,
+      "name": "InvalidSlotHashes",
+      "msg": "The SlotHashes sysvar could not be read"
+    },
+    {
+      "code": 6052,
+      "name": "MintRequestsPending",
+      "msg": "Post-graduation mint requests are pending; sweep once they have settled or been refunded"
+    },
+    {
+      "code": 6053,
+      "name": "NoUnitsOutstanding",
+      "msg": "No unit is outstanding to credit the proceeds to; sweep once one exists"
+    },
+    {
+      "code": 6054,
+      "name": "InventoryFirst",
+      "msg": "The pool holds returned units; buy one of those before a new unit is minted"
+    }
+  ],
+  "types": [
+    {
+      "name": "AuthorityAccepted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "previous",
+            "type": "pubkey"
+          },
+          {
+            "name": "current",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AuthorityNominated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "current",
+            "type": "pubkey"
+          },
+          {
+            "name": "pending",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Bought",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "nft_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "buyer",
+            "type": "pubkey"
+          },
+          {
+            "name": "index",
+            "docs": ["Sequential position, and the number in `{base_uri}{index}.json`."],
+            "type": "u64"
+          },
+          {
+            "name": "cost",
+            "docs": ["Curve price paid, before the fee."],
+            "type": "u64"
+          },
+          {
+            "name": "fee",
+            "type": "u64"
+          },
+          {
+            "name": "circulating",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BoughtReturned",
+      "docs": [
+        "A unit the pool held was bought off the curve. No `index`: the program does not track which",
+        "index a returned unit has (it is in the unit's metadata)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "nft_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "buyer",
+            "type": "pubkey"
+          },
+          {
+            "name": "cost",
+            "docs": ["Curve price paid, before the fee."],
+            "type": "u64"
+          },
+          {
+            "name": "fee",
+            "type": "u64"
+          },
+          {
+            "name": "circulating",
+            "type": "u64"
+          },
+          {
+            "name": "inventory",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Collection",
+      "docs": [
+        "One drop. Seeds: `[\"collection\", collection_mint]`.",
+        "",
+        "Keyed on the collection mint (not a counter) for the same reason the pool PDA",
+        "is keyed on its token mint: the mint is the natural, collision-free identity,",
+        "and any client can derive the account from the thing it already knows."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "config",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "royalty_partner",
+            "docs": [
+              "Optional second payee who shares the creator's cut, on curve fees AND on",
+              "marketplace royalties. Zero = no partner."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "collection_mint",
+            "docs": ["The collection NFT itself. Every minted item is verified into it."],
+            "type": "pubkey"
+          },
+          {
+            "name": "payment_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "virtual_payment_reserve",
+            "docs": [
+              "Constant-product virtual reserves. `x = virtual_payment_reserve +",
+              "payment_raised_net`, `y = virtual_nft_reserve - circulating`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "virtual_nft_reserve",
+            "type": "u64"
+          },
+          {
+            "name": "payment_raised_net",
+            "docs": ["Payment side of the curve: what buyers put in, less what sellers took out."],
+            "type": "u64"
+          },
+          {
+            "name": "total_supply",
+            "docs": ["Fixed supply. `minted` never exceeds it."],
+            "type": "u64"
+          },
+          {
+            "name": "minted",
+            "docs": ["Units ever minted."],
+            "type": "u64"
+          },
+          {
+            "name": "inventory",
+            "docs": [
+              "Units the pool bought back and holds. `circulating = minted - inventory - burned`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "launch_ts",
+            "type": "i64"
+          },
+          {
+            "name": "end_ts",
+            "type": "i64"
+          },
+          {
+            "name": "max_per_wallet",
+            "docs": ["0 = unlimited."],
+            "type": "u64"
+          },
+          {
+            "name": "allowlist_root",
+            "docs": [
+              "Allowlist phase: early ACCESS, not a discount (the curve sets the price).",
+              "Zero root = public from `launch_ts`."
+            ],
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "allowlist_end_ts",
+            "type": "i64"
+          },
+          {
+            "name": "floor_lock_bps",
+            "docs": [
+              "Share of the raise locked forever at graduation to back the floor.",
+              "Creator-chosen at launch, bounded by `config.max_floor_lock_bps`."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "floor_reserve",
+            "docs": ["Locked payment backing the floor. Only leaves via `redeem_floor`."],
+            "type": "u64"
+          },
+          {
+            "name": "floor_redeemable",
+            "docs": [
+              "Units still redeemable against the floor. `floor_reserve / floor_redeemable`",
+              "is the floor price, and it is invariant under redemption. Equal to the",
+              "number of units that still exist (`minted - burned`) for the whole",
+              "graduated life of a drop, because a redeemed unit is burned in the same",
+              "instruction that takes its slot, and a unit minted after graduation adds",
+              "its slot in the instruction that mints it (`settle_mint`)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "commitment",
+            "docs": [
+              "`sha256(seed ‖ ordered_uris)`, fixed BEFORE the first mint. The",
+              "position-to-artwork mapping is sealed here, so nobody — us included — can",
+              "favour a wallet after minting starts."
+            ],
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "reveal_seed",
+            "docs": ["Published at reveal so anyone can recompute the commitment and check it."],
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "revealed",
+            "type": "bool"
+          },
+          {
+            "name": "anti_snipe",
+            "type": "bool"
+          },
+          {
+            "name": "state",
+            "type": {
+              "defined": {
+                "name": "CollectionState"
+              }
+            }
+          },
+          {
+            "name": "seller_fee_bps",
+            "docs": [
+              "Royalty written immutably into every item: the creator's own royalty plus the platform's",
+              "(see `platform_royalty_pct`), split creator/partner/platform. The total, because the total is",
+              "what Auction House takes off a sale."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "partner_share_bps",
+            "docs": ["Partner's share OF the creator side. 0 = creator takes all."],
+            "type": "u16"
+          },
+          {
+            "name": "collection_authority_bump",
+            "docs": [
+              "PDA holding update authority over the COLLECTION NFT so the program can",
+              "verify items into it. Grants no power over item metadata, which is",
+              "created immutable."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "burned",
+            "docs": [
+              "Units burned on the way out: by `redeem_floor` after graduation, by `redeem_wind_down` after",
+              "a failed drop. A burned unit has used its floor slot and no longer exists, so it can never be",
+              "listed or redeemed again (#76). Taken from the padding, so accounts written by an older",
+              "binary read it as zero, which is correct for them."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "platform_royalty_wallet",
+            "docs": [
+              "The platform's royalty payee and its whole-percent share of `seller_fee_bps`, fixed from",
+              "`Config` at create so every item of a drop carries the same creators. Taken from the padding,",
+              "so a drop created by an older binary reads as no platform royalty, which is what its items",
+              "carry."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "platform_royalty_pct",
+            "type": "u8"
+          },
+          {
+            "name": "graduation_target",
+            "docs": [
+              "Creator-chosen graduation target, in the units of `payment_raised_net`: the drop may graduate",
+              "once its raise reaches this, without selling out, and the rest of the supply then mints on the",
+              "curve at random (see `request_mint`). Bounded at `set_graduation_target` to between half and",
+              "all of the raise at sell-out under this drop's own curve. 0 = graduate at sell-out only, which",
+              "is what every drop created before this field existed reads, from the padding."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "graduation_raise",
+            "docs": [
+              "`payment_raised_net` at the moment of graduation: the curve's payment side, which",
+              "`payment_raised_net` itself no longer carries once `graduate` zeroes it. Post-graduation",
+              "minting prices off the curve from this point. Written by every graduation from this binary on;",
+              "zero (from the padding) on a drop graduated earlier, which sold out and has nothing to mint."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "mint_requests_pending",
+            "docs": [
+              "Post-graduation mint requests not yet settled or refunded: the drop's `MintQueue` pending",
+              "count, kept here too so `sweep_pool_proceeds` can refuse while any is pending without taking",
+              "the queue account (its accounts stay as the backend builds them). Moves in lockstep with the",
+              "queue: +1 in `request_mint`, -1 in `settle_mint` and `refund_mint`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "padding",
+            "docs": ["Append new fixed-size fields HERE. Strings stay last."],
+            "type": {
+              "array": ["u8", 63]
+            }
+          },
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "symbol",
+            "type": "string"
+          },
+          {
+            "name": "base_uri",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CollectionClosed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "minted",
+            "type": "u64"
+          },
+          {
+            "name": "total_supply",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CollectionCreated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "collection_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "total_supply",
+            "type": "u64"
+          },
+          {
+            "name": "launch_ts",
+            "type": "i64"
+          },
+          {
+            "name": "end_ts",
+            "type": "i64"
+          },
+          {
+            "name": "commitment",
+            "docs": ["The fairness commitment, recorded at the moment it was sealed."],
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "seller_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "floor_lock_bps",
+            "docs": [
+              "The creator's trust signal: how much of the raise will be locked as the",
+              "permanent floor at graduation."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "platform_royalty_wallet",
+            "docs": [
+              "The platform's royalty payee and its whole-percent share of `seller_fee_bps`, which is the",
+              "total (creator + platform). Default / 0 when the drop carries no platform royalty."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "platform_royalty_pct",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CollectionParams",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "symbol",
+            "type": "string"
+          },
+          {
+            "name": "base_uri",
+            "docs": ["Base for each item's final URI: `{base_uri}{index}.json`."],
+            "type": "string"
+          },
+          {
+            "name": "collection_uri",
+            "docs": ["The collection-level JSON (not an item)."],
+            "type": "string"
+          },
+          {
+            "name": "total_supply",
+            "type": "u64"
+          },
+          {
+            "name": "virtual_payment_reserve",
+            "docs": ["Curve shape. `virtual_nft_reserve` must exceed `total_supply`."],
+            "type": "u64"
+          },
+          {
+            "name": "virtual_nft_reserve",
+            "type": "u64"
+          },
+          {
+            "name": "launch_ts",
+            "type": "i64"
+          },
+          {
+            "name": "end_ts",
+            "type": "i64"
+          },
+          {
+            "name": "max_per_wallet",
+            "type": "u64"
+          },
+          {
+            "name": "anti_snipe",
+            "type": "bool"
+          },
+          {
+            "name": "allowlist_root",
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "allowlist_end_ts",
+            "type": "i64"
+          },
+          {
+            "name": "commitment",
+            "docs": ["`sha256(seed ‖ ordered_uris)`. Must be non-zero."],
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "seller_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "royalty_partner",
+            "docs": ["Optional second payee sharing the creator's cut. Zero = none."],
+            "type": "pubkey"
+          },
+          {
+            "name": "partner_share_bps",
+            "type": "u16"
+          },
+          {
+            "name": "floor_lock_bps",
+            "docs": [
+              "Share of the raise locked forever as the floor. The creator's trust",
+              "signal: higher means buyers have a stronger guaranteed exit."
+            ],
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CollectionState",
+      "docs": ["Lifecycle of a drop."],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Created"
+          },
+          {
+            "name": "Live"
+          },
+          {
+            "name": "Graduated"
+          },
+          {
+            "name": "Ended"
+          },
+          {
+            "name": "Closed"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Config",
+      "docs": ["Protocol singleton. Seeds: `[\"config\"]`."],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "docs": ["Governance. Intended to sit behind the cold multisig."],
+            "type": "pubkey"
+          },
+          {
+            "name": "pending_authority",
+            "docs": [
+              "Two-step rotation target. Zero means no handoff in flight; the successor",
+              "must sign `accept_authority`, so governance can never be handed to an",
+              "address that cannot use it."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "docs": [
+              "Hot key for automated, non-custodial ops (pause, sweep, list). Separated",
+              "from `authority` from day one rather than retrofitted."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "payment_mint",
+            "docs": ["The mint every drop trades in (wCOOK)."],
+            "type": "pubkey"
+          },
+          {
+            "name": "treasury_payment",
+            "docs": ["Where the platform's cut is swept to."],
+            "type": "pubkey"
+          },
+          {
+            "name": "trade_fee_bps",
+            "docs": ["Fee on EVERY curve trade, buy and sell alike. 300 = 3%."],
+            "type": "u16"
+          },
+          {
+            "name": "platform_share_bps",
+            "docs": [
+              "Share OF `trade_fee_bps` kept by the platform; the remainder is the",
+              "creator side. 5000 = half, i.e. 1.5% platform / 1.5% creator at a 3% fee."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "default_seller_fee_bps",
+            "docs": [
+              "Royalty policy. Kept as config rather than a constant so it can be",
+              "retuned without a redeploy. Both bound the CREATOR's own royalty; the",
+              "platform royalty goes on top, and `max + platform_royalty_bps` must fit",
+              "`ROYALTY_HARD_CAP_BPS`."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "max_seller_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "max_floor_lock_bps",
+            "docs": ["Ceiling on how much of a raise a creator may lock as the permanent floor."],
+            "type": "u16"
+          },
+          {
+            "name": "paused",
+            "docs": ["Freezes new trades. Only governance can unpause."],
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "platform_royalty_wallet",
+            "docs": [
+              "The platform's marketplace royalty, written into the metadata of drops created from now on",
+              "as an extra creator on top of the creator's own royalty. The curve fee ends at graduation;",
+              "this is how the platform earns on secondary sales. A plain wallet, not a token account:",
+              "Auction House pays a native-mint royalty in lamports straight to the creator address. Zero",
+              "wallet or zero bps = off. Taken from the padding, so the live account reads it as off."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "platform_royalty_bps",
+            "type": "u16"
+          },
+          {
+            "name": "padding",
+            "docs": ["Append new fields HERE, shrinking the padding. Never mid-struct."],
+            "type": {
+              "array": ["u8", 94]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ConfigInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "payment_mint",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ConfigParams",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "trade_fee_bps",
+            "docs": ["Fee on every curve trade. 300 = 3%."],
+            "type": "u16"
+          },
+          {
+            "name": "platform_share_bps",
+            "docs": ["Platform's share of that fee. 5000 = half."],
+            "type": "u16"
+          },
+          {
+            "name": "default_seller_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "max_seller_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "max_floor_lock_bps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FloorRedeemed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "nft_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "holder",
+            "type": "pubkey"
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          },
+          {
+            "name": "floor_reserve",
+            "type": "u64"
+          },
+          {
+            "name": "floor_redeemable",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Graduated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "raised",
+            "type": "u64"
+          },
+          {
+            "name": "floor_reserve",
+            "docs": ["Locked forever. No instruction can withdraw it."],
+            "type": "u64"
+          },
+          {
+            "name": "to_creator",
+            "type": "u64"
+          },
+          {
+            "name": "floor_price",
+            "docs": ["What every holder can always redeem for."],
+            "type": "u64"
+          },
+          {
+            "name": "inventory",
+            "docs": ["Units the pool holds, to be listed on the marketplace."],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GraduationTargetSet",
+      "docs": [
+        "The creator set (or cleared, with 0) the raise at which the drop may graduate early."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "graduation_target",
+            "type": "u64"
+          },
+          {
+            "name": "sellout_raise",
+            "docs": [
+              "The raise at sell-out under this drop's curve, which the target was bounded against."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Listed",
+      "docs": ["A pool-held unit was listed on the marketplace after graduation."],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "nft_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Listing",
+      "docs": [
+        "One open pool listing on the marketplace. Seeds: `[\"listing\", collection, nft_mint]`.",
+        "",
+        "Written by `list_on_marketplace` (the lister pays the rent) and closed by `cancel_listing`. It is",
+        "what lets a cancel tell \"the venue already closed this listing\" from \"the caller named a price",
+        "that was never listed\": the record holds the exact trade state the listing created, so a cancel",
+        "can only ever act on that one (review of #83)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "nft_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "price",
+            "docs": ["The listed price, in payment-mint base units."],
+            "type": "u64"
+          },
+          {
+            "name": "trade_state",
+            "docs": [
+              "The venue's trade state for this listing, as the venue derived and accepted it."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ListingCancelled",
+      "docs": [
+        "A pool listing was pulled off the marketplace. The unit stays in pool custody, listable again."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "nft_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MintQueue",
+      "docs": [
+        "The post-graduation mint of one drop: the curve position it prices from, the FIFO queue of",
+        "requests, the payment they escrow, and which indices have been minted. Seeds:",
+        "`[\"mint_queue\", collection]`.",
+        "",
+        "A separate account, not more `Collection` fields: the minted-index bitmap is up to 1,256 bytes,",
+        "and `Collection` is a fixed 713 bytes on chain that cannot grow without a realloc of every live",
+        "drop. Opened by the first `request_mint` after graduation (that buyer pays its rent), so neither",
+        "`graduate`'s accounts nor a legacy drop change at all."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "base",
+            "docs": [
+              "`minted` when the queue opened, i.e. at graduation: every index below it was minted before",
+              "graduation, in order. Kept for indexers; the bitmap is the source of truth."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "curve_raised",
+            "docs": [
+              "The curve's position for post-graduation pricing, `x = virtual_payment_reserve +",
+              "curve_raised`, `y = virtual_nft_reserve - curve_circulating`. Starts where the curve stood at",
+              "graduation and moves forward one unit per request (back one per refund). Redemptions and",
+              "marketplace sales do not move it, so the price only ever continues up the same curve."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "curve_circulating",
+            "type": "u64"
+          },
+          {
+            "name": "next_nonce",
+            "docs": ["Nonce the next request gets."],
+            "type": "u64"
+          },
+          {
+            "name": "settle_cursor",
+            "docs": [
+              "Nonce of the oldest request not yet settled or refunded. Requests are resolved strictly in",
+              "nonce order, so `next_nonce - settle_cursor` are pending."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "escrowed",
+            "docs": [
+              "Payment (price + fee) that pending requests hold inside `payment_vault`. The vault always",
+              "holds at least `floor_reserve + escrowed` after graduation."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "lock_bound",
+            "docs": [
+              "The largest floor share (`floor_lock_bps` of the price) of any request made since the queue",
+              "was last empty. `request_mint` prices no lower than this while requests are pending, because",
+              "an earlier request's settle can lift the floor to its share (see `logic::post_grad_price`)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "padding",
+            "docs": ["Append new fixed-size fields HERE. The bitmap stays last."],
+            "type": {
+              "array": ["u8", 24]
+            }
+          },
+          {
+            "name": "minted_bits",
+            "docs": [
+              "One bit per index of the supply, set once it is minted (or does not exist: bits past",
+              "`total_supply` in the last word are set at open). The draw picks among the clear bits."
+            ],
+            "type": {
+              "vec": "u64"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "MintRefunded",
+      "docs": [
+        "A post-graduation request was refunded in full: its randomness expired, or the floor rose",
+        "above its price before it could settle."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "request",
+            "type": "pubkey"
+          },
+          {
+            "name": "buyer",
+            "type": "pubkey"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "Price plus fee, returned. A refund is always an expiry: the randomness slot left",
+              "`SlotHashes` before anyone settled."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MintRequest",
+      "docs": [
+        "One buyer's pending post-graduation mint. Seeds: `[\"mint_request\", collection, buyer]`, so a",
+        "buyer has at most one at a time. Created by `request_mint`, closed by `settle_mint` or",
+        "`refund_mint`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "buyer",
+            "type": "pubkey"
+          },
+          {
+            "name": "nonce",
+            "docs": ["Position in the drop's queue. Also an input of the draw."],
+            "type": "u64"
+          },
+          {
+            "name": "target_slot",
+            "docs": [
+              "The slot whose hash decides the item: the first produced slot at or after this one."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "cost",
+            "docs": [
+              "Price paid, before the fee: the net that `settle_mint` splits between floor and creator."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "fee_platform",
+            "docs": [
+              "The fee, split as it was at request time, so a later config change cannot reprice it."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "fee_creator",
+            "type": "u64"
+          },
+          {
+            "name": "rent_deposit",
+            "docs": [
+              "Lamports the buyer put up, on top of this account's own rent, for the item's four accounts",
+              "(mint, token account, metadata, master edition). Whoever settles pays those and is repaid",
+              "from this; the rest goes back to the buyer."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MintRequested",
+      "docs": ["A buyer reserved a post-graduation mint. The item is drawn when it settles."],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "request",
+            "type": "pubkey"
+          },
+          {
+            "name": "buyer",
+            "type": "pubkey"
+          },
+          {
+            "name": "nonce",
+            "docs": ["Queue position: requests settle in this order."],
+            "type": "u64"
+          },
+          {
+            "name": "target_slot",
+            "docs": ["The draw uses the hash of the first produced slot at or after this one."],
+            "type": "u64"
+          },
+          {
+            "name": "cost",
+            "docs": ["Price paid into escrow, before the fee."],
+            "type": "u64"
+          },
+          {
+            "name": "fee",
+            "type": "u64"
+          },
+          {
+            "name": "curve_circulating",
+            "docs": [
+              "The curve's position after this request: what the next request is priced from."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MintSettled",
+      "docs": ["A post-graduation request was drawn and minted."],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "request",
+            "type": "pubkey"
+          },
+          {
+            "name": "buyer",
+            "type": "pubkey"
+          },
+          {
+            "name": "nft_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "index",
+            "docs": ["The drawn index: the number in `{base_uri}{index}.json`."],
+            "type": "u64"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "slot",
+            "docs": ["The slot whose hash decided the draw."],
+            "type": "u64"
+          },
+          {
+            "name": "cost",
+            "type": "u64"
+          },
+          {
+            "name": "fee",
+            "type": "u64"
+          },
+          {
+            "name": "to_floor",
+            "docs": [
+              "The part of `cost` that went onto the floor, and the part that went to the creator side."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "to_creator",
+            "type": "u64"
+          },
+          {
+            "name": "floor_reserve",
+            "type": "u64"
+          },
+          {
+            "name": "floor_redeemable",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Minter",
+      "docs": [
+        "Per-wallet trade record for one drop. Seeds: `[\"minter\", collection, owner]`.",
+        "",
+        "Exists so `max_per_wallet` and the opening-window throttle are enforced",
+        "on-chain rather than trusted from the client."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "minted_count",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "padding",
+            "type": {
+              "array": ["u8", 32]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "OperatorSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "operator",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PauseSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "paused",
+            "type": "bool"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PlatformRoyaltySet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "royalty_bps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PoolProceedsSwept",
+      "docs": ["Marketplace proceeds were brought back out of the pool wallet and onto the floor."],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "floor_reserve",
+            "type": "u64"
+          },
+          {
+            "name": "floor_redeemable",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProceedsClaimed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator_amount",
+            "type": "u64"
+          },
+          {
+            "name": "partner_amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Revealed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "seed",
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "commitment",
+            "type": {
+              "array": ["u8", 32]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Sold",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "nft_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "seller",
+            "type": "pubkey"
+          },
+          {
+            "name": "proceeds",
+            "docs": ["What the seller actually received, after the fee."],
+            "type": "u64"
+          },
+          {
+            "name": "fee",
+            "type": "u64"
+          },
+          {
+            "name": "circulating",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "WindDownRedeemed",
+      "docs": ["A holder of a drop that never sold out took their share of the raise back."],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "nft_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "holder",
+            "type": "pubkey"
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          },
+          {
+            "name": "payment_raised_net",
+            "docs": [
+              "What is left in the raise, and how many units are still out, after this one."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "circulating",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}

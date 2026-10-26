@@ -4,6 +4,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 # Unreleased
 
+### Added
+
+- **MomoSwap NFT launchpad.** Eight tools for NFT drops on a COOK bonding curve: `get_nft_drops` and
+  `get_nft_drop` (reads), `nft_drop_mint` (curve mints, or a random request after a target
+  graduation), `nft_drop_sell` (sell back to the curve), `nft_drop_redeem` (floor or wind-down
+  refund), `nft_drop_claim` (creator proceeds), `create_nft_drop` (launch from a folder of art, with a
+  `dryRun` preview) and `reveal_nft_drop`. Every API build is held to the program's vendored IDL before
+  signing, then simulated within a spend budget.
+
 ### Fixed
 
 - **MomoSwap launch with a dev buy works again.** MomoSwap moved both launchpad treasury fields to its
