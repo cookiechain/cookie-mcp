@@ -204,6 +204,23 @@ export interface NftBuiltCreate extends NftBuiltTx {
   graduationTarget: { targetRaw: string; bps: number; selloutRaiseRaw: string } | null;
 }
 
+/** The queue head a settle build acts on, and the item drawn for it. */
+export interface NftBuiltSettle extends NftBuiltTx {
+  request: string;
+  buyer: string;
+  nonce: string;
+  index: number;
+  itemMint: string;
+}
+
+/** The queue head a refund build acts on, and what goes back to its buyer (price plus fee). */
+export interface NftBuiltRefund extends NftBuiltTx {
+  request: string;
+  buyer: string;
+  nonce: string;
+  amountRaw: string;
+}
+
 /** `GET /request/:pda`: one post-graduation mint request, by how far it got. */
 export interface NftMintRequestView {
   request: string;
@@ -464,6 +481,32 @@ export async function buildNftClaimTx(body: {
   collectionMint: string;
 }): Promise<NftBuiltClaim> {
   return post<NftBuiltClaim>("/tx/claim", body, "NFT creator claim build");
+}
+
+// ── upkeep: anyone may send these ────────────────────────────────────────────
+
+/** Settle the drop's mint-queue head with its drawn item. Refused unless its randomness is ready. */
+export async function buildNftSettleTx(body: {
+  signer: string;
+  collectionMint: string;
+}): Promise<NftBuiltSettle> {
+  return post<NftBuiltSettle>("/tx/settle-mint", body, "NFT mint settle build");
+}
+
+/** Refund the drop's mint-queue head to its buyer. Refused unless its randomness has expired. */
+export async function buildNftRefundTx(body: {
+  signer: string;
+  collectionMint: string;
+}): Promise<NftBuiltRefund> {
+  return post<NftBuiltRefund>("/tx/refund-mint", body, "NFT mint refund build");
+}
+
+/** Graduate a drop that qualifies (sold out). Refused while it does not. */
+export async function buildNftGraduateTx(body: {
+  signer: string;
+  collectionMint: string;
+}): Promise<NftBuiltTx> {
+  return post<NftBuiltTx>("/tx/graduate", body, "NFT drop graduation build");
 }
 
 // ── session-gated: launching a drop ──────────────────────────────────────────

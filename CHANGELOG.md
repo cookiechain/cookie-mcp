@@ -20,6 +20,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the loan-to-value limit would be exceeded or the health factor would fall under `minHealthFactor`
   (default 1.1). Aera has no API or IDL, so every instruction is built locally and simulated before
   signing. Also importable as `cookie-mcp/lending`.
+- **NFT drop upkeep.** `nft_drop_settle` pushes a drop's mint queue to your pending request, settling
+  each head whose randomness is ready and refunding each whose randomness expired (until now a stuck
+  request had no way out). `nft_drop_graduate` graduates a sold-out drop. Both are checked against the
+  IDL like every other NFT build.
+- **`unwrap_cook`** closes the wallet's wrapped-COOK account and returns the balance as native COOK.
+  This is where launchpad referral earnings and NFT sell-back proceeds collect.
 
 ### Fixed
 

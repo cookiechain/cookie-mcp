@@ -15,7 +15,7 @@
 // Same non-custodial shape as the token launchpad: the API builds every transaction; we hold it to
 // the program's IDL (verify.ts), simulate it within a spend budget (spendGuard.ts), sign locally, send.
 import { NATIVE_MINT } from "@solana/spl-token";
-import { Transaction } from "@solana/web3.js";
+import { PublicKey, Transaction } from "@solana/web3.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 
@@ -47,10 +47,13 @@ import {
   buildNftBuyTx,
   buildNftClaimTx,
   buildNftCreateTx,
+  buildNftGraduateTx,
   buildNftRedeemTx,
+  buildNftRefundTx,
   buildNftRequestMintTx,
   buildNftRevealTx,
   buildNftSellTx,
+  buildNftSettleTx,
   buildNftWindDownTx,
   fetchNftBuyQuote,
   fetchNftCollection,
@@ -63,7 +66,9 @@ import {
   fetchNftStatus,
   sealNftDrop,
   uploadNftArt,
+  type NftBuiltRefund,
   type NftBuiltRequest,
+  type NftBuiltSettle,
   type NftBuiltTx,
   type NftCollection,
   type NftCollectionParams,
@@ -85,7 +90,13 @@ import {
   targetForBps,
   unitsToTarget,
 } from "./curve";
-import { assertNftBuild, nftProgramError, type NftExpectation, type NftKind } from "./verify";
+import {
+  assertNftBuild,
+  NFT_PROGRAM_ID,
+  nftProgramError,
+  type NftExpectation,
+  type NftKind,
+} from "./verify";
 
 export type { NftDropFilter } from "./api";
 
@@ -103,6 +114,8 @@ export const NFT_ITEM_RENT_ALLOWANCE = 30_000_000n;
 export const NFT_REQUEST_DEPOSIT_ALLOWANCE = 50_000_000n;
 /** How long a mint request is watched for its keeper settle before handing back a pending result. */
 const SETTLE_WAIT_MS = 20_000;
+/** Queue heads one `nft_drop_settle` call may push through on the way to this wallet's request. */
+export const MAX_SETTLE_STEPS = 5;
 
 const cook = (raw: string | bigint): string => rawToUi(raw, COOK_DECIMALS);
 const iso = (ts: number): string | null => (ts > 0 ? new Date(ts * 1000).toISOString() : null);
@@ -113,7 +126,7 @@ const iso = (ts: number): string | null => (ts > 0 ? new Date(ts * 1000).toISOSt
  * Where a drop is, in terms of what can be done with it:
  *   upcoming — scheduled, not open yet
  *   live     — minting off the curve; holders can sell back
- *   sold-out — every unit minted, waiting for the (permissionless, keeper-run) graduation; sell-backs still work
+ *   sold-out — every unit minted, waiting for the (permissionless) graduation a keeper or anyone sends; sell-backs still work
  *   minting  — graduated at a target, the rest mint at random by request; holders redeem the floor
  *   graduated — done minting; holders redeem the floor or trade on Baked Bazaar
  *   ended    — the window closed short; holders redeem the wind-down refund
@@ -134,8 +147,9 @@ export function dropPhase(c: NftCollection, nowSec: number): NftDropPhase {
 export function holderExit(c: NftCollection, phase: NftDropPhase): string {
   switch (phase) {
     case "live":
-    case "sold-out":
       return "sell an item back to the curve at the current price with nft_drop_sell";
+    case "sold-out":
+      return "sell an item back to the curve at the current price with nft_drop_sell, or graduate the drop with nft_drop_graduate to open the floor";
     case "minting":
     case "graduated":
       return BigInt(c.floorPriceRaw || "0") > 0n
@@ -510,6 +524,40 @@ export function claimBudget(own: bigint): SpendBudget {
   return { native: NATIVE_FEE_ALLOWANCE, receive: { mint: NATIVE_MINT.toBase58(), min: own } };
 }
 
+/**
+ * Settling a queue head: the settler fronts the item's rent and the program repays it from the
+ * request's deposit in the same instruction. When the request is ours, the item has to arrive.
+ */
+export function settleBudget(ownItem: string | null): SpendBudget {
+  return {
+    native: NATIVE_FEE_ALLOWANCE + NFT_ITEM_RENT_ALLOWANCE,
+    ...(ownItem ? { receive: { mint: ownItem, min: 1n } } : {}),
+  };
+}
+
+/**
+ * Refunding a queue head costs fees and, at most, the rent of its buyer's wCOOK account (inside the
+ * fee allowance). When the request is ours, its price and fee have to come back.
+ */
+export function refundBudget(ownAmount: bigint | null): SpendBudget {
+  return {
+    native: NATIVE_FEE_ALLOWANCE,
+    ...(ownAmount !== null ? { receive: { mint: NATIVE_MINT.toBase58(), min: ownAmount } } : {}),
+  };
+}
+
+/** A wallet's mint-request account on a drop: one per buyer per drop, reused by each request. Pure. */
+export function mintRequestPda(collectionAddress: string, buyer: string): string {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("mint_request"),
+      new PublicKey(collectionAddress).toBuffer(),
+      new PublicKey(buyer).toBuffer(),
+    ],
+    new PublicKey(NFT_PROGRAM_ID),
+  )[0].toBase58();
+}
+
 /** The creator's own share of a claim: the vault minus the royalty partner's floored share. */
 export function creatorShare(totalRaw: bigint, partnerShareBps: number): bigint {
   return totalRaw - (partnerShareBps > 0 ? (totalRaw * BigInt(partnerShareBps)) / 10_000n : 0n);
@@ -728,7 +776,8 @@ async function requestMint(
     status: "pending",
     note:
       "paid and queued: a keeper settles it with a random remaining item, normally within seconds. " +
-      "get_nft_drop lists your items once it lands. If no keeper settles it in ~3 minutes it can only be refunded.",
+      "get_nft_drop lists your items once it lands. If it is still pending after a minute, nft_drop_settle " +
+      "settles it yourself; once its randomness expires (~3 minutes) the same tool refunds it.",
   };
 }
 
@@ -897,6 +946,177 @@ export async function redeemNftDrop(args: { nftMint: string; collection?: string
     };
   }
   throw phaseRefusal(c, phase, "redeem items of");
+}
+
+// ── upkeep: the mint queue and graduation ────────────────────────────────────
+
+export interface NftQueueStep {
+  action: "settled" | "refunded";
+  request: string;
+  buyer: string;
+  yours: boolean;
+  signature: string;
+  explorerUrl: string;
+  nftMint?: string;
+  refundedCook?: string;
+}
+
+/**
+ * Push a drop's mint queue to this wallet's pending request: settle each head whose randomness is
+ * ready, refund each whose randomness expired. The queue is FIFO and only its head can move, so a
+ * request behind others needs those settled (or refunded) first — to their own buyers, never to us.
+ */
+export async function settleNftDropQueue(args: { collection: string }) {
+  const signer = requireSigner();
+  const wallet = signer.publicKey.toBase58();
+  const c = await resolveDrop(args.collection);
+  if (c.state !== "graduated") {
+    throw new CookieMcpError(
+      `"${c.name}" has no mint queue: only a drop that graduated at a target mints by request`,
+      "get_nft_drop shows the drop's phase",
+    );
+  }
+  const pda = mintRequestPda(c.address, wallet);
+  const mine = await fetchNftMintRequest(pda);
+  if (mine.status !== "pending") {
+    throw new CookieMcpError(
+      `this wallet has no pending mint request on "${c.name}"`,
+      mine.status === "settled"
+        ? `its last request already settled${mine.itemMint ? ` (item ${mine.itemMint})` : ""}`
+        : mine.status === "refunded"
+          ? "its last request was already refunded"
+          : "nft_drop_mint places one",
+    );
+  }
+  const steps: NftQueueStep[] = [];
+  const limit = Math.min(MAX_SETTLE_STEPS, (mine.queuePosition ?? 0) + 1);
+  let view = mine;
+  let stoppedEarly: string | null = null;
+  for (let i = 0; i < limit && view.status === "pending"; i++) {
+    try {
+      steps.push(await pushQueueHead(signer, c, wallet));
+    } catch (e) {
+      // The first step failing is the call failing. A later one keeps what already landed.
+      if (steps.length === 0) throw e;
+      stoppedEarly = e instanceof Error ? e.message : String(e);
+      break;
+    }
+    view = await fetchNftMintRequest(pda, mine.nonce).catch(() => view);
+  }
+
+  const yours =
+    view.status === "settled"
+      ? { status: "settled", nftMint: view.itemMint ?? null, index: view.index ?? null }
+      : view.status === "refunded"
+        ? { status: "refunded", refundedCook: view.amountRaw ? cook(view.amountRaw) : null }
+        : {
+            status: "pending",
+            queuePosition: view.queuePosition ?? null,
+            note: "still queued behind other requests — call nft_drop_settle again",
+          };
+  return {
+    drop: c.name,
+    collectionMint: c.collectionMint,
+    request: pda,
+    steps,
+    yourRequest: yours,
+    ...(stoppedEarly ? { stoppedEarly } : {}),
+    links: { drop: nftDropUrl(c.collectionMint) },
+  };
+}
+
+/** Settle the queue head if the API will build that, else refund it. One transaction. */
+async function pushQueueHead(
+  signer: TxSigner,
+  c: NftCollection,
+  wallet: string,
+): Promise<NftQueueStep> {
+  const body = { signer: wallet, collectionMint: c.collectionMint };
+  // Each builder reads the head itself and refuses what the program would: a settle needs randomness
+  // that is ready, a refund needs it expired. Neither refusal means the other applies, so when both
+  // refuse the settle's reason is the one to show ("not ready yet", "nothing waiting").
+  let settle: NftBuiltSettle | null = null;
+  let refund: NftBuiltRefund | null = null;
+  try {
+    settle = await buildNftSettleTx(body);
+  } catch (settleErr) {
+    refund = await buildNftRefundTx(body).catch(() => {
+      throw settleErr;
+    });
+  }
+  const known = { wallet, collectionMint: c.collectionMint };
+  if (settle) {
+    const yours = settle.buyer === wallet;
+    const signature = await submitNft(
+      settle,
+      signer,
+      "NFT mint settle",
+      "settle",
+      known,
+      settleBudget(yours ? settle.itemMint : null),
+      { drop: c.name, request: settle.request, buyer: settle.buyer, item: settle.itemMint },
+    );
+    return {
+      action: "settled",
+      request: settle.request,
+      buyer: settle.buyer,
+      yours,
+      signature,
+      explorerUrl: explorerTxUrl(signature),
+      nftMint: settle.itemMint,
+    };
+  }
+  const r = refund!;
+  const yours = r.buyer === wallet;
+  const signature = await submitNft(
+    r,
+    signer,
+    "NFT mint refund",
+    "refund",
+    known,
+    refundBudget(yours ? BigInt(r.amountRaw) : null),
+    { drop: c.name, request: r.request, buyer: r.buyer, refundCook: cook(r.amountRaw) },
+  );
+  return {
+    action: "refunded",
+    request: r.request,
+    buyer: r.buyer,
+    yours,
+    signature,
+    explorerUrl: explorerTxUrl(signature),
+    refundedCook: cook(r.amountRaw),
+  };
+}
+
+/** Graduate a sold-out drop. Permissionless: whoever sends it pays only the network fee. */
+export async function graduateNftDrop(args: { collection: string }) {
+  const signer = requireSigner();
+  const wallet = signer.publicKey.toBase58();
+  const c = await resolveDrop(args.collection);
+  const phase = dropPhase(c, Math.floor(Date.now() / 1000));
+  if (phase !== "sold-out") throw phaseRefusal(c, phase, "graduate");
+  const built = await buildNftGraduateTx({ signer: wallet, collectionMint: c.collectionMint });
+  const signature = await submitNft(
+    built,
+    signer,
+    "NFT drop graduation",
+    "graduate",
+    { wallet, collectionMint: c.collectionMint },
+    { native: NATIVE_FEE_ALLOWANCE },
+    { drop: c.name, collection: c.collectionMint },
+  );
+  const after = await fetchNftCollection(c.collectionMint).catch(() => null);
+  const floor = after ? BigInt(after.floorPriceRaw || "0") : 0n;
+  return {
+    drop: c.name,
+    collectionMint: c.collectionMint,
+    signature,
+    explorerUrl: explorerTxUrl(signature),
+    ...(floor > 0n ? { floorPerItemCook: cook(floor) } : {}),
+    note:
+      "The drop graduated: the floor share of the raise is locked for redemptions (nft_drop_redeem), " +
+      "the creator's share is claimable with nft_drop_claim, and items trade on Baked Bazaar (list_nft).",
+  };
 }
 
 // ── creator ──────────────────────────────────────────────────────────────────

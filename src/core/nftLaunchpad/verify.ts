@@ -61,7 +61,17 @@ const INSTRUCTIONS = (nftIdl as { instructions: IdlInstruction[] }).instructions
 
 /** The kinds of build cookie-mcp signs on this program. */
 export type NftKind =
-  "mint" | "request-mint" | "sell" | "redeem" | "wind-down" | "claim" | "create" | "reveal";
+  | "mint"
+  | "request-mint"
+  | "sell"
+  | "redeem"
+  | "wind-down"
+  | "claim"
+  | "create"
+  | "reveal"
+  | "settle"
+  | "refund"
+  | "graduate";
 
 /** For each kind, the program instructions its build may contain, in order. */
 export const KIND_INSTRUCTIONS: Readonly<Record<NftKind, readonly (readonly string[])[]>> = {
@@ -82,6 +92,12 @@ export const KIND_INSTRUCTIONS: Readonly<Record<NftKind, readonly (readonly stri
     ["create_collection", "init_vaults", "set_graduation_target"],
   ],
   reveal: [["reveal"]],
+  // Upkeep anyone may send. The queue head need not be ours: the program pays its item or its refund
+  // to the request's own buyer, whoever signs. A refund first creates that buyer's wCOOK account
+  // (idempotent, paid by us) so a buyer who closed theirs cannot hold up the queue.
+  settle: [["settle_mint"]],
+  refund: [["refund_mint"]],
+  graduate: [["graduate"]],
 };
 
 /** Kinds that wrap native COOK into the wallet's wCOOK account for the payment. */
@@ -103,6 +119,9 @@ const WALLET_SLOT: Readonly<Record<string, string>> = {
   init_vaults: "payer",
   set_graduation_target: "creator",
   reveal: "creator",
+  settle_mint: "settler",
+  refund_mint: "caller",
+  graduate: "signer",
 };
 
 /** What we decided before the API answered. */
