@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { NftCollection } from "./api";
 import {
+  MAX_SALE_WINDOW_SECS,
   NFT_ITEM_RENT_ALLOWANCE,
   NFT_REQUEST_DEPOSIT_ALLOWANCE,
   dropPhase,
@@ -180,6 +181,22 @@ describe("nftSimError", () => {
     expect(e.hint).toMatch(/raise slippageBps/);
   });
 
+  it("advises on the errors the upgraded program adds (anchor #110, #113) and on a pause", () => {
+    for (const code of [6055, 6056, 6057, 6058, 6059]) {
+      const e = nftSimError("x", { InstructionError: [0, { Custom: code }] }, null);
+      expect(e.hint, String(code)).not.toMatch(/re-read the drop/);
+    }
+    expect(nftSimError("x", { InstructionError: [0, { Custom: 6058 }] }, null).hint).toMatch(
+      /royaltyPartner/,
+    );
+    expect(nftSimError("x", { InstructionError: [0, { Custom: 6059 }] }, null).message).toMatch(
+      /at most 30 days \(SaleWindowTooLong\)/,
+    );
+    expect(nftSimError("x", { InstructionError: [0, { Custom: 6001 }] }, null).hint).toMatch(
+      /refunds still work/,
+    );
+  });
+
   it("falls back to the program's own message for codes without advice", () => {
     expect(nftSimError("x", { InstructionError: [0, { Custom: 6023 }] }, null).message).toMatch(
       /Nothing to claim/,
@@ -198,6 +215,7 @@ describe("planNftDrop", () => {
     tradeFeeBps: 200,
     maxCreatorRoyaltyBps: 1_000,
     maxStartAheadSeconds: 30 * 86_400,
+    maxSaleWindowSeconds: MAX_SALE_WINDOW_SECS,
     targetGraduation: true,
     targetMaxSupply: 10_000,
   };
@@ -271,6 +289,22 @@ describe("planNftDrop", () => {
     ).toThrow(/allowlist phase must end before/);
     expect(() => planNftDrop({ ...base, partnerSharePct: 10 }, 10, terms, NOW)).toThrow(
       /needs a royaltyPartner/,
+    );
+  });
+
+  it("holds the mint window to the program's 30 days (anchor #113), or the shorter one the API states", () => {
+    expect(MAX_SALE_WINDOW_SECS).toBe(30 * 86_400);
+    const p = planNftDrop({ ...base, durationHours: 720 }, 10, terms, NOW);
+    expect(p.endTs - p.launchTs).toBe(30 * 86_400);
+    expect(() => planNftDrop({ ...base, durationHours: 720.01 }, 10, terms, NOW)).toThrow(
+      /between 0.25 and 720/,
+    );
+    const week = { ...terms, maxSaleWindowSeconds: 7 * 86_400 };
+    expect(planNftDrop({ ...base, durationHours: 168 }, 10, week, NOW).endTs).toBe(
+      NOW + 7 * 86_400,
+    );
+    expect(() => planNftDrop({ ...base, durationHours: 169 }, 10, week, NOW)).toThrow(
+      /mint window may run at most 168 hours \(7 days\)/,
     );
   });
 });

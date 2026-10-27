@@ -50,11 +50,11 @@ describe("the vendored IDL", () => {
     expect(NFT_PROGRAM_ID).toBe("momoDc2LHwe2Eymo4gK1jg5gAJcjjLGWW1hAaSKAGHb");
   });
 
-  it("is the IDL the program repo, backend and frontend carry (anchor #96, upstream sha256 9daf1019…)", () => {
+  it("is the IDL anchor main and the backend carry (anchor 79973de, upstream sha256 4d2561e0…)", () => {
     // Over the parsed content, so formatting is free but any change to an instruction, account,
     // seed or error is not. A deliberate refresh updates this hash.
     expect(createHash("sha256").update(JSON.stringify(nftIdl)).digest("hex")).toBe(
-      "220c1e915677d7d591d600de25dab210bb13d94cd641d450d6cab74fa41cac29",
+      "c5e01358ba0c046c696157334464156af280676c70d86f8e2d795191693f7a9b",
     );
   });
 
@@ -391,5 +391,371 @@ describe("assertNftBuild — upkeep built from the IDL", () => {
     expect(() =>
       assertNftBuild(settleTx(Keypair.generate().publicKey, 7n), "settle", known),
     ).toThrow(/is authorised by .*, not this wallet/);
+  });
+});
+
+// ── Builds laid out by the IDL itself ────────────────────────────────────────
+
+type IdlSeedT = { kind: string; value?: number[]; path?: string };
+type IdlAccountT = {
+  name: string;
+  signer?: boolean;
+  writable?: boolean;
+  address?: string;
+  pda?: { seeds: IdlSeedT[]; program?: IdlSeedT };
+};
+const idlInstruction = (name: string) =>
+  (
+    nftIdl as unknown as { instructions: { name: string; accounts: IdlAccountT[] }[] }
+  ).instructions.find((i) => i.name === name)!;
+
+/**
+ * An instruction with every slot the IDL fixes (addresses, PDAs) filled in from `given`, the way an
+ * honest build lays it out. `given` names the free accounts; anything left free is a fresh key.
+ */
+function idlIx(
+  name: string,
+  collectionMint: PublicKey,
+  given: Record<string, PublicKey>,
+  data: Buffer,
+): TransactionInstruction {
+  const spec = idlInstruction(name);
+  const programId = new PublicKey(NFT_PROGRAM_ID);
+  const got: Record<string, PublicKey> = { ...given };
+  for (let pass = 0; pass < 4; pass++) {
+    for (const a of spec.accounts) {
+      if (got[a.name]) continue;
+      if (a.address) {
+        got[a.name] = new PublicKey(a.address);
+        continue;
+      }
+      if (!a.pda) continue;
+      const bytes = (s: IdlSeedT): Buffer | null => {
+        if (s.kind === "const") return Buffer.from(s.value!);
+        if (s.path === "collection.collection_mint") return collectionMint.toBuffer();
+        return got[s.path!]?.toBuffer() ?? null;
+      };
+      const seeds = a.pda.seeds.map(bytes);
+      if (seeds.some((s) => s === null)) continue;
+      const program = a.pda.program ? new PublicKey(bytes(a.pda.program)!) : programId;
+      got[a.name] = PublicKey.findProgramAddressSync(seeds as Buffer[], program)[0];
+    }
+  }
+  return new TransactionInstruction({
+    programId,
+    data: Buffer.concat([Buffer.from(instructionByName(name)!.discriminator), data]),
+    keys: spec.accounts.map((a) => ({
+      pubkey: got[a.name] ?? Keypair.generate().publicKey,
+      isSigner: !!a.signer,
+      isWritable: !!a.writable,
+    })),
+  });
+}
+
+const unsignedTx = (payer: PublicKey, ...ixs: TransactionInstruction[]) => {
+  const tx = new Transaction({
+    feePayer: payer,
+    recentBlockhash: Keypair.generate().publicKey.toBase58(),
+  });
+  tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }), ...ixs);
+  return Transaction.from(tx.serialize({ requireAllSignatures: false, verifySignatures: false }));
+};
+
+const u64 = (v: bigint) => {
+  const b = Buffer.alloc(8);
+  b.writeBigUInt64LE(v);
+  return b;
+};
+
+/** `CollectionParams` in Borsh, field by field from the IDL, so a new field breaks this loudly. */
+function encodeCollectionParams(v: Record<string, unknown>): Buffer {
+  const fields = (
+    nftIdl as unknown as {
+      types: { name: string; type: { fields: { name: string; type: unknown }[] } }[];
+    }
+  ).types.find((t) => t.name === "CollectionParams")!.type.fields;
+  return Buffer.concat(
+    fields.map((f) => {
+      const x = v[f.name];
+      if (x === undefined) throw new Error(`no test value for ${f.name}`);
+      switch (f.type) {
+        case "string": {
+          const s = Buffer.from(String(x));
+          const len = Buffer.alloc(4);
+          len.writeUInt32LE(s.length);
+          return Buffer.concat([len, s]);
+        }
+        case "u16": {
+          const b = Buffer.alloc(2);
+          b.writeUInt16LE(Number(x));
+          return b;
+        }
+        case "u64":
+          return u64(BigInt(x as number));
+        case "i64": {
+          const b = Buffer.alloc(8);
+          b.writeBigInt64LE(BigInt(x as number));
+          return b;
+        }
+        case "bool":
+          return Buffer.from([x ? 1 : 0]);
+        case "pubkey":
+          return new PublicKey(x as string).toBuffer();
+        default:
+          return Buffer.from(x as Uint8Array); // [u8; 32]
+      }
+    }),
+  );
+}
+
+describe("assertNftBuild — a create for the upgraded program (anchor #110, #111)", () => {
+  const creator = Keypair.generate().publicKey;
+  const collectionMint = Keypair.generate().publicKey;
+  const PARTNER = Keypair.generate().publicKey;
+  const STRANGER = Keypair.generate().publicKey;
+  const programId = new PublicKey(NFT_PROGRAM_ID);
+  const [collectionAuthority] = PublicKey.findProgramAddressSync(
+    [Buffer.from("collection_authority"), collectionMint.toBuffer()],
+    programId,
+  );
+  const params = (partner: PublicKey | null, shareBps: number) =>
+    encodeCollectionParams({
+      name: "Cookie Chads",
+      symbol: "CHADS",
+      base_uri: "ipfs://bafy/",
+      collection_uri: "ipfs://bafy/collection.json",
+      total_supply: 444,
+      virtual_payment_reserve: 130_441_176_470_223,
+      virtual_nft_reserve: 888,
+      launch_ts: 1_800_000_000,
+      end_ts: 1_800_086_400,
+      max_per_wallet: 0,
+      anti_snipe: true,
+      allowlist_root: new Uint8Array(32),
+      allowlist_end_ts: 0,
+      commitment: new Uint8Array(32).fill(9),
+      seller_fee_bps: 500,
+      royalty_partner: (partner ?? SystemProgram.programId).toBase58(),
+      partner_share_bps: shareBps,
+      floor_lock_bps: 2_000,
+    });
+  type Extra = { pubkey: PublicKey; isSigner: boolean; isWritable: boolean };
+  const ro = (pubkey: PublicKey): Extra => ({ pubkey, isSigner: false, isWritable: false });
+  const createTx = (
+    opts: {
+      partner?: PublicKey | null;
+      shareBps?: number;
+      extra?: Extra[];
+      tokenAccount?: PublicKey;
+    } = {},
+  ) => {
+    const create = idlIx(
+      "create_collection",
+      collectionMint,
+      {
+        creator,
+        collection_mint: collectionMint,
+        token_program: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+        ...(opts.tokenAccount ? { collection_token_account: opts.tokenAccount } : {}),
+      },
+      params(opts.partner ?? null, opts.shareBps ?? 0),
+    );
+    create.keys.push(...(opts.extra ?? []));
+    const vaults = idlIx(
+      "init_vaults",
+      collectionMint,
+      {
+        payer: creator,
+        payment_mint: new PublicKey("So11111111111111111111111111111111111111112"),
+        token_program: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+      },
+      Buffer.alloc(0),
+    );
+    return unsignedTx(creator, create, vaults);
+  };
+  const known = (partner: PublicKey | null = null, partnerShareBps = 0) => ({
+    wallet: creator.toBase58(),
+    graduationTarget: null,
+    royaltyPartner: partner?.toBase58() ?? null,
+    partnerShareBps,
+  });
+  const programAta = getAssociatedTokenAddressSync(collectionMint, collectionAuthority, true);
+  const creatorAta = getAssociatedTokenAddressSync(collectionMint, creator);
+
+  it("derives the collection NFT's account from the IDL's new seed: the collection authority's ATA", () => {
+    const ix = createTx().instructions.find((i) => i.programId.equals(programId))!;
+    expect(ix.keys[5]!.pubkey.toBase58()).toBe(programAta.toBase58());
+  });
+
+  it("accepts the collection NFT in the program's ATA (upgraded binary) or the creator's (live, for one release)", () => {
+    expect(assertNftBuild(createTx({ tokenAccount: programAta }), "create", known())).toEqual([
+      "create_collection",
+      "init_vaults",
+    ]);
+    expect(assertNftBuild(createTx({ tokenAccount: creatorAta }), "create", known())).toEqual([
+      "create_collection",
+      "init_vaults",
+    ]);
+  });
+
+  it("refuses the collection NFT anywhere else", () => {
+    for (const tokenAccount of [
+      getAssociatedTokenAddressSync(collectionMint, STRANGER),
+      Keypair.generate().publicKey,
+    ]) {
+      expect(() => assertNftBuild(createTx({ tokenAccount }), "create", known())).toThrow(
+        /collection_token_account is \w+, not the address its seeds derive/,
+      );
+    }
+  });
+
+  const withPartner = { partner: PARTNER, shareBps: 2_500 };
+  const partnerKnown = known(PARTNER, 2_500);
+
+  it("accepts the royalty partner, read-only, after the accounts when the params name it with a share", () => {
+    expect(
+      assertNftBuild(createTx({ ...withPartner, extra: [ro(PARTNER)] }), "create", partnerKnown),
+    ).toEqual(["create_collection", "init_vaults"]);
+  });
+
+  it("accepts a partner create with no extra account, as the backend builds it before #333", () => {
+    expect(assertNftBuild(createTx(withPartner), "create", partnerKnown)).toEqual([
+      "create_collection",
+      "init_vaults",
+    ]);
+  });
+
+  it("refuses the partner writable or as a signer", () => {
+    for (const extra of [
+      { pubkey: PARTNER, isSigner: false, isWritable: true },
+      { pubkey: PARTNER, isSigner: true, isWritable: false },
+    ]) {
+      expect(() =>
+        assertNftBuild(createTx({ ...withPartner, extra: [extra] }), "create", partnerKnown),
+      ).toThrow(/royalty partner it passes has to be read-only/);
+    }
+  });
+
+  it("refuses another key in the partner's place", () => {
+    expect(() =>
+      assertNftBuild(createTx({ ...withPartner, extra: [ro(STRANGER)] }), "create", partnerKnown),
+    ).toThrow(/passes \w+ after its accounts, not the royalty partner/);
+  });
+
+  it("refuses an extra account on a create with no partner, or a partner with no share", () => {
+    expect(() => assertNftBuild(createTx({ extra: [ro(STRANGER)] }), "create", known())).toThrow(
+      /extra account .*names no royalty partner with a share/,
+    );
+    expect(() =>
+      assertNftBuild(
+        createTx({ partner: PARTNER, shareBps: 0, extra: [ro(PARTNER)] }),
+        "create",
+        known(PARTNER, 0),
+      ),
+    ).toThrow(/names no royalty partner with a share/);
+  });
+
+  it("refuses two extra accounts", () => {
+    expect(() =>
+      assertNftBuild(
+        createTx({ ...withPartner, extra: [ro(PARTNER), ro(PARTNER)] }),
+        "create",
+        partnerKnown,
+      ),
+    ).toThrow(/passes 15 accounts; the program takes 13/);
+  });
+
+  it("refuses a create whose params name another partner or share than the creator chose", () => {
+    expect(() =>
+      assertNftBuild(
+        createTx({ partner: STRANGER, shareBps: 2_500, extra: [ro(STRANGER)] }),
+        "create",
+        partnerKnown,
+      ),
+    ).toThrow(/names royalty partner \w+ at 2500 bps, not the/);
+    expect(() =>
+      assertNftBuild(createTx({ partner: PARTNER, shareBps: 10_000 }), "create", partnerKnown),
+    ).toThrow(/at 10000 bps, not the/);
+    expect(() =>
+      assertNftBuild(createTx({ ...withPartner, extra: [ro(PARTNER)] }), "create", known()),
+    ).toThrow(/not the 11111111111111111111111111111111 at 0 bps/);
+  });
+
+  it("refuses params cut short or with bytes left over", () => {
+    const tx = createTx();
+    const ix = tx.instructions.find((i) => i.programId.equals(programId))!;
+    const full = ix.data;
+    ix.data = full.subarray(0, full.length - 1);
+    expect(() => assertNftBuild(tx, "create", known())).toThrow(/data ends inside floor_lock_bps/);
+    ix.data = Buffer.concat([full, Buffer.from([0])]);
+    expect(() => assertNftBuild(tx, "create", known())).toThrow(/1 bytes after its arguments/);
+  });
+});
+
+describe("assertNftBuild — max_cost is the all-in spend (anchor #112, backend #333)", () => {
+  const buyer = Keypair.generate().publicKey;
+  const collectionMint = Keypair.generate().publicKey;
+  const SPEND = 153_000_000_000n; // 150 COOK quoted + 2% fee, the user's approved all-in spend
+  const POOL_UNIT = Keypair.generate().publicKey;
+  const COST_LEG = 150_000_000_000n; // what the backend sent before #333: the price cap alone
+  const known = { wallet: buyer.toBase58(), collectionMint: collectionMint.toBase58() };
+  const buyIx = (name: "buy_returned" | "request_mint", maxCost: bigint) =>
+    idlIx(
+      name,
+      collectionMint,
+      {
+        buyer,
+        nft_mint: POOL_UNIT,
+        payment_mint: new PublicKey("So11111111111111111111111111111111111111112"),
+        buyer_payment_account: getAssociatedTokenAddressSync(
+          new PublicKey("So11111111111111111111111111111111111111112"),
+          buyer,
+        ),
+        token_program: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+      },
+      Buffer.concat([u64(maxCost), Buffer.alloc(4)]), // + an empty allowlist proof
+    );
+  const realBuy = (maxCost: bigint) => {
+    const tx = buy();
+    const ix = tx.instructions.find((i) => i.programId.toBase58() === NFT_PROGRAM_ID)!;
+    ix.data = Buffer.concat([ix.data.subarray(0, 8), u64(maxCost), ix.data.subarray(16)]);
+    return tx;
+  };
+
+  it("accepts an all-in max_cost equal to the approved spend, and today's cost-leg one", () => {
+    expect(assertNftBuild(realBuy(BUY_CAP), "mint", buyKnown)).toEqual(["buy_nft"]);
+    for (const name of ["buy_returned", "request_mint"] as const) {
+      const kind = name === "request_mint" ? "request-mint" : "mint";
+      for (const maxCost of [SPEND, COST_LEG]) {
+        expect(
+          assertNftBuild(unsignedTx(buyer, buyIx(name, maxCost)), kind, {
+            ...known,
+            maxCost: SPEND,
+          }),
+        ).toEqual([name]);
+      }
+    }
+  });
+
+  it("refuses one lamport over the approved spend on every buy path", () => {
+    expect(() => assertNftBuild(realBuy(BUY_CAP + 1n), "mint", buyKnown)).toThrow(
+      /more than the \d+ approved/,
+    );
+    for (const name of ["buy_returned", "request_mint"] as const) {
+      const kind = name === "request_mint" ? "request-mint" : "mint";
+      expect(() =>
+        assertNftBuild(unsignedTx(buyer, buyIx(name, SPEND + 1n)), kind, {
+          ...known,
+          maxCost: SPEND,
+        }),
+      ).toThrow(/more than the 153000000000 approved/);
+    }
+  });
+
+  it("refuses a buy that carries no max_cost at all", () => {
+    const tx = buy();
+    const ix = tx.instructions.find((i) => i.programId.toBase58() === NFT_PROGRAM_ID)!;
+    ix.data = ix.data.subarray(0, 8);
+    expect(() => assertNftBuild(tx, "mint", buyKnown)).toThrow(/carries no max_cost/);
   });
 });

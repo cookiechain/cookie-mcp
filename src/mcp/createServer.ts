@@ -1537,7 +1537,9 @@ export function createServer(): McpServer {
         royaltyPartner: z
           .string()
           .optional()
-          .describe("optional wallet that shares the creator's royalty and proceeds"),
+          .describe(
+            "optional plain wallet (not a program or token account) that shares the creator's royalty and proceeds",
+          ),
         partnerSharePct: z
           .number()
           .min(1)
@@ -1563,7 +1565,8 @@ export function createServer(): McpServer {
           .max(720)
           .optional()
           .describe(
-            "how long minting stays open (default 24); a drop that does not graduate by then refunds holders",
+            "how long minting stays open, at most 720 (30 days, the program's cap) (default 24); a drop " +
+              "that does not graduate by then refunds holders",
           ),
         maxPerWallet: z
           .number()

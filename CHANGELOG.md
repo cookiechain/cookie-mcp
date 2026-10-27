@@ -33,6 +33,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Squads vault, so the pinned create-pool lookup table `CawUNM…` no longer matched the live Config and
   every create + dev-buy build was refused. The pin is now the frozen table `9vExLr84…`, whose keys [3]
   and [4] are the vault `85gdK5…` and its wCOOK account `5jP8CW…`.
+- **NFT launches keep working through MomoSwap's program upgrade.** The NFT launchpad IDL is refreshed
+  to anchor-launchpad-momoswap main (#108, #110–#114). A create may now pass its royalty partner,
+  read-only, after `create_collection`'s accounts, and for one release its collection NFT may sit in
+  either the creator's or the program's token account, so builds for the live and the upgraded binary
+  both pass. A build whose royalty partner or share differs from the one asked for is refused, as is a
+  buy whose `max_cost` data is missing. `create_nft_drop` refuses a mint window over 30 days before
+  uploading anything, and errors 6055–6059 get hints.
 
 # [0.8.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.8.0)
 
