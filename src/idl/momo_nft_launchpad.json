@@ -42,8 +42,9 @@
         "On a drop with a `graduation_target`, the buy that brings the raise to the target also",
         "graduates the drop (the same effects as `graduate`, `Graduated` emitted after `Bought`).",
         "",
-        "`max_cost` bounds the price the caller is willing to pay, so a buy that",
-        "lands after someone else's cannot silently fill at a worse price."
+        "`max_cost` bounds everything the buyer pays: the curve price plus the trade fee on it. A buy",
+        "that lands after someone else's cannot fill at a worse price, nor after a fee raise at a",
+        "higher fee than the buyer agreed to (#101)."
       ],
       "discriminator": [96, 0, 28, 190, 49, 107, 83, 222],
       "accounts": [
@@ -278,7 +279,7 @@
         "The other half of `sell_nft`: a unit sold back goes to the next buyer instead of waiting in",
         "the pool. Same price, fee, allowlist, per-wallet cap and anti-snipe window as `buy_nft`, and",
         "the same graduation at the target. Nothing is minted: the unit moves out of the pool's",
-        "custody account, signed by the pool wallet."
+        "custody account, signed by the pool wallet. `max_cost` bounds price plus fee, as on `buy_nft`."
       ],
       "discriminator": [16, 196, 36, 195, 238, 50, 70, 220],
       "accounts": [
@@ -539,7 +540,7 @@
         "The stock Auction House `cancel`, signed by the pool wallet: it revokes the venue's delegate on",
         "the pool's token account and closes the trade state. The unit never left the pool (a delegate",
         "listing is not an escrow), so it is immediately listable again. Gated like",
-        "`list_on_marketplace` on WHO (the creator or the operator, a graduated drop), but not on WHERE:",
+        "`list_on_marketplace` on WHO (the operator, a graduated drop), but not on WHERE:",
         "",
         "- Any house the venue program owns is accepted, not only the pinned one. A listing the live",
         "build placed on some other house has to be removable too, and a cancel signed by the pool",
@@ -574,7 +575,7 @@
         {
           "name": "signer",
           "docs": [
-            "The creator or the protocol operator, checked in the handler exactly as for listing. `mut`",
+            "The protocol operator (#104), checked in the handler exactly as for listing. `mut`",
             "because it receives the listing record's rent when the record is closed."
           ],
           "writable": true,
@@ -846,7 +847,10 @@
       "name": "create_collection",
       "docs": [
         "Create a drop: mints the collection NFT, writes its metadata and master",
-        "edition, seals the fairness commitment and fixes the curve."
+        "edition, seals the fairness commitment and fixes the curve.",
+        "",
+        "A drop with a royalty partner and a non-zero partner share passes the partner's wallet as",
+        "the first remaining account (read-only), so the program can check it is a plain wallet."
       ],
       "discriminator": [156, 251, 92, 54, 233, 2, 16, 82],
       "accounts": [
@@ -907,12 +911,19 @@
         },
         {
           "name": "collection_token_account",
+          "docs": [
+            "Holds the collection NFT: the associated account of `collection_authority`, not of the",
+            "creator. Every item mint verifies into the collection, which needs its metadata and master",
+            "edition to exist, and Token Metadata lets the holder burn both. In the creator's wallet that",
+            "was a switch to stop the drop minting (#103); no instruction here ever moves it out of this",
+            "account. Drops created before this keep theirs in the creator's account."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
               {
                 "kind": "account",
-                "path": "creator"
+                "path": "collection_authority"
               },
               {
                 "kind": "const",
@@ -1246,7 +1257,7 @@
         {
           "name": "payer",
           "docs": [
-            "Pays the trade-state rent, and must be the creator or the protocol operator — checked in the",
+            "Pays the trade-state rent, and must be the protocol operator (#104) — checked in the",
             "handler. This was permissionless on the theory that listing at the graduation price is a",
             "published outcome rather than a privilege, but `price` is a caller argument, so anyone could",
             "list every pool-held item at one base unit and execute the sale against themselves."
@@ -1879,6 +1890,7 @@
         "next price, exactly as sequential buys would), and the payment (price plus fee) is held in",
         "`payment_vault` as escrow until the request settles or is refunded. The item is drawn later,",
         "from the hash of slot `now + RANDOMNESS_DELAY_SLOTS`, which nobody can know yet.",
+        "`max_cost` bounds that whole payment, price plus fee, as on `buy_nft`.",
         "",
         "The buyer also deposits the rent of the item's four accounts (and Token Metadata's fee), as a",
         "`buy_nft` buyer pays them, so whoever settles is repaid and the buyer gets the rest back.",
@@ -2295,11 +2307,16 @@
         "rest of the supply then keeps minting on the curve, at random (see `request_mint`). 0 clears",
         "it: graduate at sell-out only, as every drop did before.",
         "",
-        "Creator only, and only while the drop is `Created`, i.e. before its first unit: the target is",
-        "part of what a buyer buys into, so it is fixed from the first mint on. Its own instruction",
-        "rather than a `CollectionParams` field, so `create_collection`'s instruction data, which the",
-        "backend already builds, does not change; send it in the same transaction as `init_vaults`,",
-        "which no buy can precede.",
+        "Creator only, once, and only as the drop is created: the target is part of what a buyer buys",
+        "into, so the creator cannot set, raise, lower or clear it once anyone can see the drop. \"As",
+        "it is created\" is the slot `create_collection` ran in (`created_slot`), with the drop still",
+        "`Created` and nothing minted. The creation transaction always passes, and nothing from the",
+        "next slot on does: not a \"launch now\" drop in its first seconds, nor a scheduled drop before",
+        "it opens, nor a drop created by an older binary (it reads `created_slot` 0). From then on only",
+        "governance moves a target (`set_live_graduation_target`). Its own instruction rather than a",
+        "`CollectionParams` field, so `create_collection`'s instruction data, which the backend already",
+        "builds, does not change; send it in the creation transaction, after `init_vaults`, which no",
+        "buy can precede.",
         "",
         "Bounded to between half and all of the raise at sell-out under this drop's own curve",
         "(`logic::sellout_raise`), computed here from the curve the drop was created with. Below half,",
@@ -2312,6 +2329,68 @@
           "name": "creator",
           "signer": true,
           "relations": ["collection"]
+        },
+        {
+          "name": "collection",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "graduation_target",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_live_graduation_target",
+      "docs": [
+        "Give a drop that is already selling a graduation target, or change or clear it. Governance",
+        "only, at the creator's request.",
+        "",
+        "`set_graduation_target` is the creator's, once, as the drop is created, because the target is",
+        "part of what a buyer buys into. A creator may still want a selling drop to graduate early (to",
+        "open Baked Bazaar trading sooner); that changes the terms for every holder, so the creator",
+        "announces it and the multisig sets it. Not the creator alone: graduation pays the creator the",
+        "raise above the floor, so a creator who could lower the bar mid-sale could cash out early.",
+        "",
+        "Bounded exactly as at creation (`validate_graduation_target`: half to all of the sell-out",
+        "raise under this drop's own curve, and a supply the post-graduation bitmap can hold), only",
+        "while the drop is still selling (`Created` or `Live`, inside its window), and strictly above",
+        "what it has raised so far, so setting a target never graduates a drop by itself: the buy",
+        "that reaches it does, in that same instruction, as for any target. 0 clears it (sell-out",
+        "only again). Every holder can see the change in `GraduationTargetSet`."
+      ],
+      "discriminator": [171, 68, 208, 12, 82, 104, 70, 155],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": ["config"]
         },
         {
           "name": "collection",
@@ -2459,7 +2538,12 @@
         "",
         "Nothing about the floor can make this fail: once the randomness exists, the head request",
         "settles, and its only other exit is the expiry refund. Nobody, the buyer included, gets to",
-        "choose between the two after seeing the draw."
+        "choose between the two after seeing the draw.",
+        "",
+        "Not gated by `paused`. A settle only completes a trade already paid for, at a fixed price,",
+        "with an outcome fixed by the slot hash. A pause that stopped it would leave every pending",
+        "request to expire into a refund, letting whoever pauses cancel the draws they have already",
+        "seen. `request_mint` stays paused, so a pause still stops new risk."
       ],
       "discriminator": [201, 168, 164, 233, 170, 82, 40, 96],
       "accounts": [
@@ -2471,6 +2555,9 @@
         },
         {
           "name": "config",
+          "docs": [
+            "Unread since the settle stopped being paused; kept so the instruction's accounts are unchanged."
+          ],
           "pda": {
             "seeds": [
               {
@@ -3367,6 +3454,31 @@
       "code": 6054,
       "name": "InventoryFirst",
       "msg": "The pool holds returned units; buy one of those before a new unit is minted"
+    },
+    {
+      "code": 6055,
+      "name": "GraduationTargetAlreadyMet",
+      "msg": "The drop has already raised that much; a target must be above its raise so far"
+    },
+    {
+      "code": 6056,
+      "name": "GraduationTargetAlreadySet",
+      "msg": "The creator already set this graduation target; only governance can change it now"
+    },
+    {
+      "code": 6057,
+      "name": "GraduationTargetWindowClosed",
+      "msg": "The creator sets a graduation target only as the drop is created; governance can now"
+    },
+    {
+      "code": 6058,
+      "name": "InvalidRoyaltyPartner",
+      "msg": "A partner share needs a royalty partner, passed as the first remaining account, that is a plain system-owned wallet"
+    },
+    {
+      "code": 6059,
+      "name": "SaleWindowTooLong",
+      "msg": "The mint window may run at most 30 days"
     }
   ],
   "types": [
@@ -3721,10 +3833,20 @@
             "type": "u64"
           },
           {
+            "name": "created_slot",
+            "docs": [
+              "The slot `create_collection` ran in. The creator's `set_graduation_target` must run in this",
+              "same slot, which in practice means the creation transaction itself (the clients send it there,",
+              "after `init_vaults`). Taken from the padding, so a drop created by an older binary reads 0, a",
+              "slot no transaction runs in: its creator can no longer set a target, and governance still can."
+            ],
+            "type": "u64"
+          },
+          {
             "name": "padding",
             "docs": ["Append new fixed-size fields HERE. Strings stay last."],
             "type": {
-              "array": ["u8", 63]
+              "array": ["u8", 55]
             }
           },
           {
@@ -3900,7 +4022,10 @@
           },
           {
             "name": "royalty_partner",
-            "docs": ["Optional second payee sharing the creator's cut. Zero = none."],
+            "docs": [
+              "Optional second payee sharing the creator's cut. Zero = none. A plain system-owned wallet,",
+              "passed as the first remaining account whenever `partner_share_bps` is non-zero."
+            ],
             "type": "pubkey"
           },
           {
@@ -4170,7 +4295,8 @@
     {
       "name": "GraduationTargetSet",
       "docs": [
-        "The creator set (or cleared, with 0) the raise at which the drop may graduate early."
+        "The creator (before the first unit), or governance on a live drop at the creator's request, set",
+        "(or cleared, with 0) the raise at which the drop may graduate early."
       ],
       "type": {
         "kind": "struct",
