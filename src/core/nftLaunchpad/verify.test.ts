@@ -50,11 +50,11 @@ describe("the vendored IDL", () => {
     expect(NFT_PROGRAM_ID).toBe("momoDc2LHwe2Eymo4gK1jg5gAJcjjLGWW1hAaSKAGHb");
   });
 
-  it("is the IDL anchor main and the backend carry (anchor 79973de, upstream sha256 4d2561e0…)", () => {
+  it("is the IDL anchor main carries (918d12b, upstream sha256 ca86a51f…), a superset of the backend's (79973de)", () => {
     // Over the parsed content, so formatting is free but any change to an instruction, account,
     // seed or error is not. A deliberate refresh updates this hash.
     expect(createHash("sha256").update(JSON.stringify(nftIdl)).digest("hex")).toBe(
-      "c5e01358ba0c046c696157334464156af280676c70d86f8e2d795191693f7a9b",
+      "f7621611ba1edb87082ad5686c3d846aefe3e49fa98e56688a61b68da91ffaf7",
     );
   });
 

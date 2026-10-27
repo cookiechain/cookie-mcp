@@ -360,6 +360,13 @@ const CODE_HINTS: Record<number, string> = {
   6057: "a creator sets the graduation target only as the drop is created (graduationTargetPct on create_nft_drop)",
   6058: "a royalty partner share needs the partner's plain wallet address (not a program or token account) — fix royaltyPartner, or drop partnerSharePct",
   6059: "the mint window may run at most 30 days — lower durationHours",
+  6060: "the creator's held-back share is forfeited only past its deadline, or once no unit is left to mint",
+  6061:
+    "the creator's held-back share is due to be forfeited and the program wants forfeit_creator_escrow sent " +
+    "first; cookie-mcp does not build it (any wallet can, the keeper usually does) — retry once it has run",
+  6062:
+    "post-graduation mint requests pause in the last 10 minutes before the creator's held-back share is " +
+    "forfeited — retry after the deadline, once forfeit_creator_escrow has run",
 };
 
 /** Program errors in a failed simulation, as a sentence (pure). */
@@ -575,6 +582,19 @@ export function spendCap(totalRaw: bigint, slippageBps: number): bigint {
   return (totalRaw * BigInt(10_000 + slippageBps) + 9_999n) / 10_000n;
 }
 
+/**
+ * The tolerance to send the API when `maxCookPerItem` is tighter than the one asked for: the most the
+ * quoted all-in cost may rise and still fit the cap, one bp under for the API's rounding. A mint
+ * request's build refuses a stated spend below ITS worst case (the cost-leg cap plus its fee, 409
+ * "the price moved") even while the current price fits, unlike a buy, which it clamps — so the
+ * tolerance has to fit the cap before the build is asked for. Never looser than asked.
+ */
+export function fitSlippage(quotedRaw: bigint, maxSpend: bigint, slippageBps: number): number {
+  if (quotedRaw <= 0n || maxSpend < quotedRaw) return slippageBps;
+  const room = Number(((maxSpend - quotedRaw) * 10_000n) / quotedRaw);
+  return room >= slippageBps ? slippageBps : Math.max(0, room - 1);
+}
+
 function phaseRefusal(c: NftCollection, phase: NftDropPhase, action: string): CookieMcpError {
   const why: Record<NftDropPhase, string> = {
     upcoming: `it opens at ${iso(c.launchTs)}`,
@@ -733,7 +753,7 @@ async function requestMint(
     buyer,
     collectionMint: c.collectionMint,
     maxSpendRaw: maxSpend.toString(),
-    slippageBps,
+    slippageBps: cap === null ? slippageBps : fitSlippage(quoted, maxSpend, slippageBps),
   });
   const signature = await submitNft(
     built,

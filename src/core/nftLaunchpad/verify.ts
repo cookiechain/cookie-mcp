@@ -20,9 +20,10 @@
 // Like the frontend's, this bounds the TOP-LEVEL instruction list. What happens inside the program is
 // the program's to enforce; this makes sure it is asked to do what the user asked, to the accounts the
 // user asked about. The vendored IDL (`src/idl/momo_nft_launchpad.json`) is anchor-launchpad-momoswap
-// main `79973de` (#108, #110–#114), the same IDL the backend carries (momoswap-backend#333, upstream
-// sha256 `4d2561e0…`), Prettier-formatted; its content hash is pinned in `verify.test.ts`. Refresh it
-// with them when the program changes.
+// main `918d12b` (#108, #110–#116; upstream sha256 `ca86a51f…`), Prettier-formatted; its content hash
+// is pinned in `verify.test.ts`. It is a superset of the one the backend carries (momoswap-backend#333,
+// anchor `79973de`): #115 and #116 add `forfeit_creator_escrow`, account fields and errors 6060–6062,
+// and change no instruction cookie-mcp signs. Refresh it with the backend's when the program changes.
 //
 // That IDL is ahead of the deployed `momoDc2L…` binary, and the backend builds for whichever one is
 // live, so a create is accepted in both shapes for one release (`LEGACY_SEED_PATHS`, and the royalty

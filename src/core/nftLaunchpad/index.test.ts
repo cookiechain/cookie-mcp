@@ -6,6 +6,7 @@ import {
   NFT_ITEM_RENT_ALLOWANCE,
   NFT_REQUEST_DEPOSIT_ALLOWANCE,
   dropPhase,
+  fitSlippage,
   holderExit,
   mapDropSummary,
   nftSimError,
@@ -181,8 +182,8 @@ describe("nftSimError", () => {
     expect(e.hint).toMatch(/raise slippageBps/);
   });
 
-  it("advises on the errors the upgraded program adds (anchor #110, #113) and on a pause", () => {
-    for (const code of [6055, 6056, 6057, 6058, 6059]) {
+  it("advises on the errors the upgraded program adds (anchor #110, #113, #115) and on a pause", () => {
+    for (const code of [6055, 6056, 6057, 6058, 6059, 6060, 6061, 6062]) {
       const e = nftSimError("x", { InstructionError: [0, { Custom: code }] }, null);
       expect(e.hint, String(code)).not.toMatch(/re-read the drop/);
     }
@@ -194,6 +195,9 @@ describe("nftSimError", () => {
     );
     expect(nftSimError("x", { InstructionError: [0, { Custom: 6001 }] }, null).hint).toMatch(
       /refunds still work/,
+    );
+    expect(nftSimError("x", { InstructionError: [0, { Custom: 6061 }] }, null).hint).toMatch(
+      /forfeit_creator_escrow/,
     );
   });
 
@@ -207,6 +211,27 @@ describe("nftSimError", () => {
     expect(
       nftSimError("x", { InstructionError: [0, { Custom: 1 }] }, ["insufficient lamports"]).message,
     ).toMatch(/insufficient funds/);
+  });
+});
+
+describe("fitSlippage", () => {
+  const quoted = 150_000_000_000n; // 150 COOK all-in
+
+  it("keeps the tolerance asked for when the cap has room for it", () => {
+    expect(fitSlippage(quoted, spendCap(quoted, 100), 100)).toBe(100);
+    expect(fitSlippage(quoted, 200_000_000_000n, 100)).toBe(100);
+  });
+
+  it("lowers it to what the cap affords, one bp under for the API's rounding", () => {
+    // 150.75 COOK is 50 bp over the quote: send 49, so the API's cost-leg cap plus its fee fits.
+    expect(fitSlippage(quoted, 150_750_000_000n, 100)).toBe(49);
+    expect(fitSlippage(quoted, 150_010_000_000n, 100)).toBe(0);
+    expect(fitSlippage(quoted, quoted, 100)).toBe(0);
+  });
+
+  it("is the caller's problem below the quote (refused before any build)", () => {
+    expect(fitSlippage(quoted, quoted - 1n, 100)).toBe(100);
+    expect(fitSlippage(0n, quoted, 100)).toBe(100);
   });
 });
 
