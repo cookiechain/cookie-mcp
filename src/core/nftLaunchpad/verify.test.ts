@@ -323,4 +323,73 @@ describe("assertNftBuild — upkeep built from the IDL", () => {
       /expected settle_mint/,
     );
   });
+
+  // `settle_mint` is the one instruction whose PDA is seeded by an argument: the drawn item's mint
+  // derives from the `index` u64, so this is where `argBytes` is held to the IDL.
+  const ATA_PROGRAM = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+  const METADATA_PROGRAM = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+  const indexBytes = (index: bigint) => {
+    const b = Buffer.alloc(8);
+    b.writeBigUInt64LE(index);
+    return b;
+  };
+  const settleTx = (signer: PublicKey, index: bigint, itemIndex = index) => {
+    const nftMint = pda(Buffer.from("item"), collection.toBuffer(), indexBytes(itemIndex));
+    const nftAta = PublicKey.findProgramAddressSync(
+      [buyer.toBuffer(), TOKEN.toBuffer(), nftMint.toBuffer()],
+      ATA_PROGRAM,
+    )[0];
+    const ix = new TransactionInstruction({
+      programId,
+      data: Buffer.concat([
+        Buffer.from(instructionByName("settle_mint")!.discriminator),
+        indexBytes(index),
+      ]),
+      keys: (
+        [
+          [signer, true, true],
+          [pda(Buffer.from("config")), false, false],
+          [collection, false, true],
+          [pda(Buffer.from("mint_queue"), collection.toBuffer()), false, true],
+          [buyer, false, true],
+          [ownRequest, false, true],
+          [new PublicKey("SysvarS1otHashes111111111111111111111111111"), false, false],
+          [wcook, false, false],
+          [pda(Buffer.from("payment_vault"), collection.toBuffer()), false, true],
+          [pda(Buffer.from("creator_vault"), collection.toBuffer()), false, true],
+          [pda(Buffer.from("platform_vault"), collection.toBuffer()), false, true],
+          [nftMint, false, true],
+          [nftAta, false, true],
+          [Keypair.generate().publicKey, false, true], // nft_metadata: Metaplex checks it
+          [Keypair.generate().publicKey, false, true], // nft_master_edition
+          [collectionMint, false, true],
+          [pda(Buffer.from("collection_authority"), collectionMint.toBuffer()), false, true],
+          [Keypair.generate().publicKey, false, true], // collection_metadata
+          [Keypair.generate().publicKey, false, true], // collection_master_edition
+          [TOKEN, false, false],
+          [ATA_PROGRAM, false, false],
+          [METADATA_PROGRAM, false, false],
+          [SystemProgram.programId, false, false],
+          [new PublicKey("SysvarRent111111111111111111111111111111111"), false, false],
+        ] as [PublicKey, boolean, boolean][]
+      ).map(([pubkey, isSigner, isWritable]) => ({ pubkey, isSigner, isWritable })),
+    });
+    return txOf(ix);
+  };
+
+  it("accepts a settle of the queue head, with the item at the index the argument names", () => {
+    expect(assertNftBuild(settleTx(caller, 7n), "settle", known)).toEqual(["settle_mint"]);
+  });
+
+  it("refuses a settle whose item is not the one its index argument derives", () => {
+    expect(() => assertNftBuild(settleTx(caller, 7n, 8n), "settle", known)).toThrow(
+      /nft_mint is \w+, not the address its seeds derive/,
+    );
+  });
+
+  it("refuses a settle someone else authorises", () => {
+    expect(() =>
+      assertNftBuild(settleTx(Keypair.generate().publicKey, 7n), "settle", known),
+    ).toThrow(/is authorised by .*, not this wallet/);
+  });
 });
