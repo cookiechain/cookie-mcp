@@ -10,7 +10,7 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that gives any AI agent
 onchain tools for the [Cookie Chain](https://www.cookiechain.wtf) blockchain — read the market, swap,
-launch tokens, manage liquidity, stake, trade NFTs, and bridge to Solana.
+launch tokens and NFT collections, manage liquidity, stake, trade NFTs, and bridge to Solana.
 
 It runs **locally over stdio** and **signs with your key on your machine**, so it is non-custodial by
 design. For hosted apps (a web chat, a bot behind a website) it runs in **external-signer mode**: the
@@ -49,6 +49,9 @@ It is a community project for the whole Cookie Chain ecosystem.
   across every routable Cookie Chain market.
 - **Launch tokens** on the [MomoSwap launchpad](https://momoswap.fun) — create a token on a COOK
   bonding curve, buy / sell the curve, claim after graduation, and sweep your creator fees.
+- **Launch and mint NFT collections** on the [MomoSwap NFT launchpad](https://momoswap.fun/nft) —
+  launch a fixed-supply drop from a folder of images, mint items off its COOK bonding curve, sell them
+  back while it is live, redeem the floor after graduation, and claim a creator's proceeds.
 - **Manage liquidity** — create pools, add / remove liquidity, claim fees, and permanently lock
   positions across Cookiebox DAMM v2, Cookiebox CLMM, and CookieSwap BAMM (venue auto-detected).
 - **Liquid-stake** COOK for bCOOK and redeem it instantly.
@@ -207,7 +210,9 @@ bridge can move).
 
 **Money** (need `COOKIE_PRIVATE_KEY`): `trade` (swap via Cookiebox or Cookiescan), `transfer` (COOK or any token,
 with an optional `memo` written through the SPL Memo program — the way to pay an invoice or payment
-request that matches transfers by memo), `stake` / `unstake` (COOK ⇄ bCOOK liquid staking).
+request that matches transfers by memo), `unwrap_cook` (turn the wallet's wrapped COOK — where
+launchpad referral earnings and NFT sell-backs land — back into native COOK), `stake` / `unstake`
+(COOK ⇄ bCOOK liquid staking).
 
 **Limit orders** ([Cookiebox](https://cookiebox.app/trade) limit-order escrow, program `L1M1tk…`):
 `get_limit_orders` lists a wallet's resting orders with no key (yours, or any address / `.cook` name);
@@ -337,10 +342,15 @@ until the sale ends.
 - `nft_drop_mint` mints 1–10 items, one transaction each, each capped at `maxCookPerItem` (fee
   included) or the quote plus `slippageBps` (default 1%). After a drop graduates at its target, a mint
   is a request a keeper settles with a random remaining item.
+- `nft_drop_settle` is for when that request stays `pending`: it pushes the drop's FIFO mint queue up
+  to your request, settling each head whose randomness is ready and refunding each whose randomness
+  expired (~3 minutes). Requests ahead of yours pay out to their own buyers; you pay only the fee.
 - `nft_drop_sell` sells an item back to the curve while the drop is live (the guaranteed exit).
 - `nft_drop_redeem` burns an item for the permanent floor after graduation, or for the pro-rata refund
   of a drop that ended short — whichever applies.
 - `nft_drop_claim` pays a drop's creator their proceeds (and a royalty partner their share).
+- `nft_drop_graduate` graduates a sold-out drop. Anyone may send it (usually a keeper does); it opens
+  the floor and the creator's payout, and ends sell-backs.
 - `create_nft_drop` launches a collection from a folder of images (optional Metaplex `<name>.json`
   beside each for traits): the art is pinned to IPFS and its order sealed behind a fairness commitment
   whose seed MomoSwap holds, so the creator cannot pick the rare mints. Run it with `dryRun: true` first:

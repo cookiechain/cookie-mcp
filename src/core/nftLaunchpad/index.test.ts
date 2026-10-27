@@ -2,13 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import type { NftCollection } from "./api";
 import {
+  NFT_ITEM_RENT_ALLOWANCE,
   NFT_REQUEST_DEPOSIT_ALLOWANCE,
   dropPhase,
   holderExit,
   mapDropSummary,
   nftSimError,
   planNftDrop,
+  refundBudget,
   requestBudget,
+  settleBudget,
   spendCap,
 } from "./index";
 import { NATIVE_FEE_ALLOWANCE } from "../spendGuard";
@@ -88,6 +91,8 @@ describe("dropPhase", () => {
 describe("holderExit", () => {
   it("names the tool that applies in each phase", () => {
     expect(holderExit(drop(), "live")).toMatch(/nft_drop_sell/);
+    expect(holderExit(drop(), "live")).not.toMatch(/nft_drop_graduate/);
+    expect(holderExit(drop(), "sold-out")).toMatch(/nft_drop_sell.*nft_drop_graduate/);
     expect(holderExit(drop({ floorPriceRaw: "2500000000" }), "graduated")).toMatch(
       /2\.5 COOK floor with nft_drop_redeem/,
     );
@@ -147,6 +152,21 @@ describe("requestBudget", () => {
     expect(requestBudget(1_000n, bad).native).toBe(
       NATIVE_FEE_ALLOWANCE + NFT_REQUEST_DEPOSIT_ALLOWANCE + 1_000n,
     );
+  });
+});
+
+describe("settleBudget / refundBudget", () => {
+  const WCOOK = "So11111111111111111111111111111111111111112";
+  const ITEM = "76peo3d2i7MiELMvZFTZLc2g7qT3df7vtccBuY6ms1dw";
+
+  it("lets a settler front the item's rent, and requires the item only when the request is ours", () => {
+    expect(settleBudget(null)).toEqual({ native: NATIVE_FEE_ALLOWANCE + NFT_ITEM_RENT_ALLOWANCE });
+    expect(settleBudget(ITEM).receive).toEqual({ mint: ITEM, min: 1n });
+  });
+
+  it("lets a refund cost only fees, and requires our money back only when the request is ours", () => {
+    expect(refundBudget(null)).toEqual({ native: NATIVE_FEE_ALLOWANCE });
+    expect(refundBudget(5_000n).receive).toEqual({ mint: WCOOK, min: 5_000n });
   });
 });
 

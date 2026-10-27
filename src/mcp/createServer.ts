@@ -23,6 +23,7 @@ import { getBalances, getSolanaBalances } from "../core/balances";
 import { ownPublicKey, walletInfo } from "../core/wallet";
 import { trade } from "../core/trade";
 import { transfer } from "../core/transfer";
+import { unwrapCook } from "../core/unwrap";
 import {
   cancelLimitOrder,
   getLimitOrders,
@@ -105,10 +106,13 @@ import {
   createNftDrop,
   getNftDrop,
   getNftDrops,
+  graduateNftDrop,
+  MAX_SETTLE_STEPS,
   mintNftDrop,
   redeemNftDrop,
   revealNftDrop,
   sellNftDrop,
+  settleNftDropQueue,
   type CreateNftDropArgs,
   type NftDropFilter,
 } from "../core/nftLaunchpad";
@@ -874,6 +878,22 @@ export function createServer(): McpServer {
   );
 
   registerTool(
+    "unwrap_cook",
+    {
+      title: "Unwrap wCOOK to COOK",
+      description:
+        "Turn the wallet's whole wrapped-COOK (wCOOK) balance back into native COOK by closing its " +
+        "wCOOK token account; the account's rent comes back too. wCOOK collects where a venue pays " +
+        "out in it — MomoSwap launchpad referral earnings, NFT sell-backs, swaps run with " +
+        "`unwrapCook: false` — and shows in get_balance as a token on the native mint. Fails early " +
+        "when the wallet has no wCOOK account. Network fee only." +
+        SIGNING_NOTE,
+      inputSchema: {},
+    },
+    tool(async () => unwrapCook()),
+  );
+
+  registerTool(
     "stake",
     {
       title: "Stake COOK for bCOOK",
@@ -1410,6 +1430,46 @@ export function createServer(): McpServer {
       },
     },
     tool(async (a: { collection: string }) => claimNftDropProceeds(a)),
+  );
+
+  registerTool(
+    "nft_drop_settle",
+    {
+      title: "Settle or refund a queued NFT mint",
+      description:
+        "After a drop graduates at its target, each mint is a request a keeper settles with a random " +
+        "item. When nft_drop_mint returned `pending` and the item still hasn't arrived, this pushes " +
+        "the drop's FIFO mint queue up to this wallet's request: each head whose randomness is ready " +
+        "is settled (its buyer gets the drawn item), each whose randomness expired (~3 minutes) is " +
+        "refunded (its buyer gets price + fee back). Requests ahead of yours go to THEIR buyers, never " +
+        "to you; you pay only network fees (a settle's rent is repaid in the same transaction, a refund " +
+        "may open the buyer's wCOOK account). Up to " +
+        MAX_SETTLE_STEPS +
+        " heads per call; call again if `yourRequest.status` is still pending." +
+        SIGNING_NOTE,
+      inputSchema: {
+        collection: z.string().min(32).max(44).describe(DROP_REF),
+      },
+    },
+    tool(async (a: { collection: string }) => settleNftDropQueue(a)),
+  );
+
+  registerTool(
+    "nft_drop_graduate",
+    {
+      title: "Graduate a sold-out NFT drop",
+      description:
+        "Graduate a sold-out MomoSwap NFT drop (phase `sold-out` in get_nft_drop). Permissionless: " +
+        "anyone may send it, usually a keeper does. It locks the floor share of the raise for " +
+        "nft_drop_redeem, releases the creator's share to nft_drop_claim and ends sell-backs. A drop " +
+        "with a raise target graduates on the buy that reaches it, so this only applies at sell-out. " +
+        "Network fee only." +
+        SIGNING_NOTE,
+      inputSchema: {
+        collection: z.string().min(32).max(44).describe(DROP_REF),
+      },
+    },
+    tool(async (a: { collection: string }) => graduateNftDrop(a)),
   );
 
   registerTool(
