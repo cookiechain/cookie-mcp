@@ -132,7 +132,24 @@ export const PROGRAM_IDS = {
   // Chain refuses ExtendProgram), and every NFT build is held to this id before signing.
   momoNftLaunchpad:
     process.env.MOMOSWAP_NFT_PROGRAM_ID?.trim() || "momoDc2LHwe2Eymo4gK1jg5gAJcjjLGWW1hAaSKAGHb",
+  // Cookiebox Ratchet (src/idl/ratchet.json): trailing range orders on CLMM positions. One deployment,
+  // not overridable — the IDL's own `address` is checked against this at load.
+  ratchet: "RTCHidURfYbbig1xAiXq39gyNYuBBLs3QQUL4mpqYRX",
 } as const;
+
+/**
+ * The Cookiebox keeper: one key fills limit orders and DCA cycles and cranks Ratchet orders. Not
+ * overridable — `start_ratchet` pins it as an order's `cranker` and reports any other key as
+ * "custom", so an env value here would relabel a stranger's key as Cookiebox's.
+ */
+export const COOKIEBOX_KEEPER = "9shiCAJ6ZtpKkoNA5WtK81vZFZa9LSq1JX9SBxSWw8to";
+
+/**
+ * Who cranks Ratchet orders by default. `start_ratchet` pins it as the order's `cranker` unless told
+ * otherwise: an order anyone may crank can be handed back mostly unconverted by a hostile cranker
+ * (see the Ratchet trust model).
+ */
+export const RATCHET_KEEPER = COOKIEBOX_KEEPER;
 
 /**
  * The launchpad's create-pool Address Lookup Table, PINNED here rather than taken from the build.

@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Cookiebox Ratchet.** Three tools for trailing range orders on CLMM positions (program
+  `RTCHidUR…`): `get_ratchet_orders` (read, `.cook` names accepted), `start_ratchet` and
+  `stop_ratchet`. A Ratchet lets a one-sided CLMM position sell into the other token as the price
+  moves through its range without the fill converting back: the Cookiebox keeper moves the range's
+  trailing edge to the price and pays each filled part, with the LP fees earned, to the wallet. The
+  position NFT stays in the wallet (the order is only its SPL delegate, limited by the program to
+  moving the edge and finishing). Starting creates the owner's payout accounts and the range's tick
+  arrays at the owner's expense, pins the Cookiebox keeper as cranker unless told otherwise, and
+  refuses locked, empty, already-ratcheted or over-wide positions and a sell of a token the position
+  no longer holds. Every order's status predicts the keeper's next move from the program's own edge
+  rule. Also importable from the library entry (`cookie-mcp`).
+
 - **MomoSwap NFT launchpad.** Eight tools for NFT drops on a COOK bonding curve: `get_nft_drops` and
   `get_nft_drop` (reads), `nft_drop_mint` (curve mints, or a random request after a target
   graduation), `nft_drop_sell` (sell back to the curve), `nft_drop_redeem` (floor or wind-down

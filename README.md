@@ -310,6 +310,51 @@ The open/close transactions are built by the aggregator and verified here exactl
 ones are — user, amounts, frequency, the band, the start time, the schedule PDA against the signing
 `base`, the pinned refund/payout accounts, the five allowed programs — and simulated before signing.
 
+**Ratchet — trailing range orders** ([Cookiebox](https://cookiebox.app) Ratchet, program `RTCHidUR…`,
+on CLMM positions): `get_ratchet_orders` lists a wallet's open orders with no key (yours, or any
+address / `.cook` name); `start_ratchet` and `stop_ratchet` need a signer. A one-sided CLMM position
+already converts one token into the other as the price moves through its range — and converts it
+straight back when the price turns. A Ratchet keeps the fill: the Cookiebox keeper moves the range's
+**trailing edge** up to the price one tick spacing at a time, and each move pays the part that has
+filled (plus the LP fees earned on the way) to your wallet, so nothing is left behind the price to
+convert back. Selling COOKHOUSE for COOK and buying COOK with COOKHOUSE are the same order.
+
+- Name the position by its **NFT mint** (`position`, as on `cookiebox.app/position/<mint>`) or by
+  `pool` (your position in that pool; refused when you hold several). `sell` is the mint to sell (or
+  `"COOK"`); a one-sided position infers it, a position holding both tokens must be told. Selling a
+  token the position no longer holds is refused — that side has already converted.
+- **The NFT never leaves your wallet.** `enable` makes the order PDA the NFT's SPL delegate, and the
+  program lets that delegate do exactly two things: move the trailing edge (one CPI to the CLMM's
+  `reposition_liquidity_v2`, with the received-token deposit capped at 0 so the range can never
+  contain the price again) and `finish` once the whole range has filled. It cannot withdraw
+  elsewhere, widen the range, or top the position up from your wallet.
+- **Starting is owner-paid setup**, idempotent: your payout token accounts and any tick arrays the
+  range spans (~0.002 COOK each, once per pool and range) are created before `enable`. The keeper
+  refuses to fund either — rent it paid for an account you control is rent you could reclaim, and a
+  hostile position could bill it one array per step. A wide range takes a few transactions
+  (`intermediate` steps for an external signer: submit, then call again). Ranges over 200 tick
+  arrays (a full range on the 0.25% tier) are refused.
+- `cranker` defaults to the **Cookiebox keeper** and is pinned into the order. `"anyone"` leaves it
+  unpinned, which the trust model warns against: a hostile cranker passing the old liquidity at
+  every step hands about `1 − 1/minStep` of the order back unconverted (no loss, but no fill).
+  `minStep` (default 1) is how many tick spacings the price must move past the edge before it
+  follows.
+- **Payouts in COOK arrive as native COOK**, never wCOOK (the program routes the native side through
+  a one-instruction transient account). A Token-2022 payout arrives net of its transfer fee; a hook
+  that refuses a payout pauses the order and moves nothing else. No protocol fee.
+- `get_ratchet_orders` reports what each order sells and receives, its range and the current price
+  (as tokenB per tokenA, see `priceUnit`), what the position holds now, who may crank it, and a
+  `status` with the keeper's next move in words: `filling`, `waiting` (price not far enough past the
+  edge, or in the range's last spacing), `fully-filled` (the keeper withdraws and closes next),
+  `paused` (delegation gone, payout account closed, or a tick array missing — stop and start again),
+  `empty`, or `stale` (position account closed; `stop_ratchet` with the order address or NFT mint
+  refunds the rent). Predicted from the program's
+  own edge rule, which `src/core/ratchet/decision.ts` mirrors line for line.
+- `stop_ratchet` closes the order (rent back to its owner) and revokes the delegation; the position
+  and whatever is still in it are untouched. The owner, or whoever holds the NFT now, may stop it.
+  `position` may be the NFT mint, the position account or the order address — a stale order (position
+  already closed) stops too.
+
 **Launchpad** (need `COOKIE_PRIVATE_KEY`, [MomoSwap](https://momoswap.fun)): `deploy_token` launches a
 token on a COOK bonding curve (a logo is **required** — pass `imageBase64` and it is pinned to IPFS, or
 set `noLogo: true` to launch without one; the metadata is immutable, so a logo cannot be added later.

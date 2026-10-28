@@ -43,7 +43,13 @@ import {
 } from "@solana/web3.js";
 
 import limitOrderIdl from "../idl/limit_order.json" with { type: "json" };
-import { COOK_MINT, DEFAULT_SLIPPAGE_BPS, PROGRAM_IDS, explorerTxUrl } from "./config";
+import {
+  COOKIEBOX_KEEPER,
+  COOK_MINT,
+  DEFAULT_SLIPPAGE_BPS,
+  PROGRAM_IDS,
+  explorerTxUrl,
+} from "./config";
 import { quoteAgg } from "./cookiebox";
 import { buildCreateCurveSellVaultIx, curveSellVault } from "./curveSellVault";
 import { CookieMcpError } from "./errors";
@@ -85,7 +91,7 @@ import { requireSigner } from "./wallet";
  * written for. A sale authorization names its delegate, so this is who may fill ours — not a
  * wallet that can take anything: `sell_authorized` pays the payout account pinned by our signature.
  */
-export const LIMIT_ORDER_KEEPER = new PublicKey("9shiCAJ6ZtpKkoNA5WtK81vZFZa9LSq1JX9SBxSWw8to");
+export const LIMIT_ORDER_KEEPER = new PublicKey(COOKIEBOX_KEEPER);
 /** The launchpad's `MAX_SALE_AUTH_DURATION_SECS`: an authorization may not outlive 30 days. */
 export const MAX_SALE_AUTH_SECONDS = 30 * 24 * 60 * 60;
 /** `sha256("global:approve_position_sale")[..8]` — pinned by a test. */

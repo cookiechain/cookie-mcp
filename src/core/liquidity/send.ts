@@ -12,7 +12,7 @@ import { signWithCosigners, type SignContext, type TxSigner } from "../signer";
  * `cosigners` are ephemeral keypairs (position mints, transfer authorities) that sign first. `what`
  * names the action for the "sent but unconfirmed" warning — pass it so a retry-unsafe timeout is
  * unambiguous. With an external signer this stops after the simulation with `SignatureRequired`;
- * `extra` is echoed into it (the marketplace `bazaarLog`).
+ * `extra` is echoed into it (the marketplace `bazaarLog`, a prerequisite `step`, the `summary`).
  */
 export async function signSendConfirm(
   conn: Connection,
@@ -20,7 +20,7 @@ export async function signSendConfirm(
   signer: TxSigner,
   cosigners: Signer[],
   what = "transaction",
-  extra?: Pick<SignContext, "bazaarLog">,
+  extra?: Pick<SignContext, "bazaarLog" | "step" | "summary">,
 ): Promise<string> {
   const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
   tx.recentBlockhash = blockhash;

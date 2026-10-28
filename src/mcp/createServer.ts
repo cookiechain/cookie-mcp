@@ -40,6 +40,13 @@ import {
   getDcaSchedules,
   openDca,
 } from "../core/dca";
+import {
+  getRatchetOrders,
+  MAX_RANGE_TICK_ARRAYS,
+  MIN_STEP_MAX,
+  startRatchet,
+  stopRatchet,
+} from "../core/ratchet";
 import { getStakeInfo, stake, unstake } from "../core/stake";
 import {
   createPool,
@@ -838,6 +845,148 @@ export function createServer(): McpServer {
     tool(async (a: { dca: string; unwrapCook?: boolean; unwrapSol?: boolean }) =>
       closeDca(withNativeFlags(a)),
     ),
+  );
+
+  registerTool(
+    "get_ratchet_orders",
+    {
+      title: "Running Ratchet orders",
+      description:
+        "Ratchet orders (trailing range orders on Cookiebox CLMM positions, program `RTCHidUR…`) " +
+        "running for a wallet — yours by default, or `owner` = any address or .cook name. Read " +
+        "straight from the program; no key needed. A Ratchet turns a one-sided CLMM position into a " +
+        "sell (or, seen from the other token, a buy) that cannot convert back: the Cookiebox keeper " +
+        "keeps moving the range's trailing edge up to the price, and each move pays the part that " +
+        "has filled to the owner's wallet. Each order reports what it sells and receives, its range " +
+        "and the current price (as tokenB per tokenA — see `priceUnit`), what the position holds " +
+        "right now (`inPosition`), who may crank it, and a `status` with the keeper's next move in " +
+        "words: `filling` (edge moves on the next pass), `waiting` (price not far enough past the " +
+        "edge, or inside the last tick spacing), `fully-filled` (the keeper withdraws everything " +
+        "and closes the order next), `paused` (the NFT delegation is gone, a payout account was " +
+        "closed, or a tick array is missing — stop and start again), `empty`, or `stale` (the " +
+        "position is gone; stop_ratchet refunds the order's rent).",
+      inputSchema: {
+        owner: z
+          .string()
+          .min(3)
+          .max(64)
+          .optional()
+          .describe("wallet address or .cook name; defaults to the configured wallet"),
+      },
+    },
+    tool(async (a: { owner?: string }) => getRatchetOrders(a)),
+  );
+
+  registerTool(
+    "start_ratchet",
+    {
+      title: "Start a Ratchet on a CLMM position",
+      description:
+        "Turn one of your Cookiebox CLMM positions into a trailing range order: sell the token the " +
+        "position holds into the other as the price moves through the range, WITHOUT the fill " +
+        "converting back when the price turns. The Cookiebox keeper moves the range's trailing edge " +
+        "to the price one tick spacing at a time (`minStep` spacings, default 1) and pays each " +
+        "filled part — plus the LP fees earned on the way — to your wallet; once the whole range " +
+        "has filled it withdraws the rest and closes the order. The position NFT stays in your " +
+        "wallet: the order is only its SPL delegate, and the program lets that delegate move the " +
+        "edge and finish, nothing else (it cannot withdraw elsewhere, widen the range, or re-buy). " +
+        "Name the position by its NFT mint (`position`, as on cookiebox.app/position/<mint>) or by " +
+        '`pool` (your position in that pool). `sell` is the mint to sell (or "COOK"); a ' +
+        "one-sided position infers it, a position holding both tokens must be told. Refuses a " +
+        "locked or empty position, a position that already has an order, a sell of a token the " +
+        `position no longer holds, and a range wider than ${MAX_RANGE_TICK_ARRAYS} tick arrays. ` +
+        "Starting is owner-paid setup, idempotent: your payout token accounts (~0.002 COOK each) " +
+        "and any tick arrays the range spans (~0.002 COOK each, one-off per pool and range) are " +
+        "created before `enable`; a wide range may take a few transactions (`intermediate` steps " +
+        "for an external signer — call again to continue). `cranker` defaults to the Cookiebox " +
+        "keeper; `anyone` leaves the order unpinned, which a hostile cranker can exploit to hand " +
+        "most of it back unconverted. Payouts in COOK arrive as native COOK, never wCOOK. No " +
+        "protocol fee. Stop any time with stop_ratchet. Simulates first." +
+        SIGNING_NOTE,
+      inputSchema: {
+        position: z
+          .string()
+          .min(32)
+          .max(44)
+          .optional()
+          .describe("the position NFT mint (or the position account). Pass this OR `pool`"),
+        pool: z
+          .string()
+          .min(32)
+          .max(44)
+          .optional()
+          .describe(
+            "a cookiebox-clmm pool address: ratchet your position in it (refused when you hold several — pass `position`)",
+          ),
+        sell: z
+          .string()
+          .min(3)
+          .max(44)
+          .optional()
+          .describe(
+            'mint of the token to SELL (one of the pool\'s two mints, or "COOK"). Optional for a position holding only one token',
+          ),
+        minStep: z
+          .number()
+          .int()
+          .min(1)
+          .max(MIN_STEP_MAX)
+          .optional()
+          .describe(
+            "tick spacings the price must move past the trailing edge before it follows (default 1 = as close as the pool allows; larger = fewer, coarser moves)",
+          ),
+        cranker: z
+          .string()
+          .min(4)
+          .max(44)
+          .optional()
+          .describe(
+            'who may crank the order: omit for the Cookiebox keeper (recommended), "anyone", or a public key you run a keeper with',
+          ),
+      },
+    },
+    tool(
+      async (a: {
+        position?: string;
+        pool?: string;
+        sell?: string;
+        minStep?: number;
+        cranker?: string;
+      }) => startRatchet(a),
+    ),
+  );
+
+  registerTool(
+    "stop_ratchet",
+    {
+      title: "Stop a Ratchet order",
+      description:
+        "Cancel a Ratchet order on one of your positions: closes the order (its rent goes back to " +
+        "the owner) and revokes the delegation on the position NFT. The position and its liquidity " +
+        "are untouched — what has filled so far is already in your wallet, the rest stays in the " +
+        "position exactly as it is (remove_liquidity / claim_fees as usual). The order's owner, or " +
+        "whoever holds the position NFT now, may stop it. Name it by NFT mint, position account " +
+        "or order address (`position`), or by `pool`. A `stale` order (position already closed) " +
+        "stops too and refunds its rent. Simulates first." +
+        SIGNING_NOTE,
+      inputSchema: {
+        position: z
+          .string()
+          .min(32)
+          .max(44)
+          .optional()
+          .describe(
+            "the position NFT mint, the position account, or the order address (get_ratchet_orders `order`). Pass this OR `pool`",
+          ),
+        pool: z
+          .string()
+          .min(32)
+          .max(44)
+          .optional()
+          .describe("a cookiebox-clmm pool address: stop the order on your position in it"),
+      },
+    },
+    tool(async (a: { position?: string; pool?: string }) => stopRatchet(a)),
   );
 
   registerTool(
