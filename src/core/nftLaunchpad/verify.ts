@@ -20,8 +20,14 @@
 // Like the frontend's, this bounds the TOP-LEVEL instruction list. What happens inside the program is
 // the program's to enforce; this makes sure it is asked to do what the user asked, to the accounts the
 // user asked about. The vendored IDL (`src/idl/momo_nft_launchpad.json`) is anchor-launchpad-momoswap
-// main `93c22af` (#96), the same IDL the backend and the frontend carry, Prettier-formatted; its content
-// hash is pinned in `verify.test.ts`. Refresh it with them when the program changes.
+// main `918d12b` (#108, #110–#116; upstream sha256 `ca86a51f…`), Prettier-formatted; its content hash
+// is pinned in `verify.test.ts`. It is a superset of the one the backend carries (momoswap-backend#333,
+// anchor `79973de`): #115 and #116 add `forfeit_creator_escrow`, account fields and errors 6060–6062,
+// and change no instruction cookie-mcp signs. Refresh it with the backend's when the program changes.
+//
+// That IDL is ahead of the deployed `momoDc2L…` binary, and the backend builds for whichever one is
+// live, so a create is accepted in both shapes for one release (`LEGACY_SEED_PATHS`, and the royalty
+// partner after `create_collection`'s accounts, which the live binary ignores).
 import { getAssociatedTokenAddressSync, NATIVE_MINT } from "@solana/spl-token";
 import { PublicKey, type Transaction } from "@solana/web3.js";
 
@@ -58,6 +64,28 @@ interface IdlInstruction {
 }
 
 const INSTRUCTIONS = (nftIdl as { instructions: IdlInstruction[] }).instructions;
+const TYPES = (
+  nftIdl as unknown as {
+    types: { name: string; type: { kind: string; fields?: { name: string; type: unknown }[] } }[];
+  }
+).types;
+
+/**
+ * PDA seeds a program upgrade changed, accepted as they were for ONE release so the program, the
+ * backend and cookie-mcp can switch in any order. Per instruction and account: a seed path as the IDL
+ * has it now → as it was. TEMPORARY, like the frontend's `LEGACY_SEED_PATHS` (momoswap-frontend#449).
+ *
+ * anchor-launchpad-momoswap#111 moved the collection NFT from the creator's token account to the
+ * collection authority's: the backend (momoswap-backend#333) builds the creator's ATA until it sees the
+ * upgraded binary. Remove this entry once #111 is deployed on `momoDc2L…` and `/v1/nft/status` reports
+ * `collectionNftHolder: "program"`.
+ */
+const LEGACY_SEED_PATHS: Readonly<Record<string, Record<string, Record<string, string>>>> = {
+  create_collection: { collection_token_account: { collection_authority: "creator" } },
+};
+
+/** The default pubkey: the program's "no royalty partner". */
+const NO_PARTNER = "11111111111111111111111111111111";
 
 /** The kinds of build cookie-mcp signs on this program. */
 export type NftKind =
@@ -133,8 +161,20 @@ export interface NftExpectation {
   nftMint?: string;
   /** Create: the graduation target the creator chose (raw), or null/absent for sell-out only. */
   graduationTarget?: bigint | null;
-  /** Mint / request-mint: the most `max_cost` (the cost leg alone) may allow. */
+  /**
+   * Mint / request-mint: the user's approved ALL-IN spend (price + fee), the most `max_cost` may be.
+   * From anchor-launchpad-momoswap#112 the program bounds price + fee by `max_cost` and the backend
+   * sends that all-in figure (momoswap-backend#333, at most `maxSpendRaw`). Against the binary deployed
+   * before #112 it bounds the price alone, so the fee can still ride on top of it — never add the fee
+   * here: that would refuse every all-in build.
+   */
   maxCost?: bigint;
+  /**
+   * Create: the royalty partner and share the creator chose (null / 0: none). When set, the build's
+   * `CollectionParams` must carry exactly these.
+   */
+  royaltyPartner?: string | null;
+  partnerShareBps?: number;
   /** Sell: the least `min_proceeds` may accept. */
   minProceeds?: bigint;
 }
@@ -185,6 +225,57 @@ function argBytes(spec: IdlInstruction, data: Uint8Array, name: string): Uint8Ar
     offset += size;
   }
   throw new Error(`${spec.name} has no argument ${name}`);
+}
+
+/**
+ * Borsh-decode an instruction's single struct argument by its IDL field list, each field as a canonical
+ * string (integers in decimal, bools as true/false, byte arrays in hex, pubkeys in base58). Refuses
+ * data cut short, a field type this does not know, or bytes left over.
+ */
+function decodeStruct(
+  spec: IdlInstruction,
+  data: Uint8Array,
+  where: string,
+  no: (detail: string) => CookieMcpError,
+): Map<string, string> {
+  const typeName = (spec.args[0]?.type as { defined?: { name?: string } } | undefined)?.defined
+    ?.name;
+  const fields =
+    spec.args.length === 1 ? TYPES.find((t) => t.name === typeName)?.type.fields : null;
+  if (!fields) throw no(`${where} takes arguments cookie-mcp cannot read`);
+  const out = new Map<string, string>();
+  let o = 8;
+  const take = (n: number, name: string): Uint8Array => {
+    if (o + n > data.length) throw no(`${where}: its data ends inside ${name}`);
+    o += n;
+    return data.subarray(o - n, o);
+  };
+  const uint = (b: Uint8Array): bigint => b.reduceRight((v, x) => (v << 8n) | BigInt(x), 0n);
+  const ints: Record<string, number> = { u8: 1, u16: 2, u32: 4, u64: 8 };
+  for (const f of fields) {
+    const t = f.type;
+    if (t === "string") {
+      const raw = take(Number(uint(take(4, f.name))), f.name);
+      out.set(f.name, Buffer.from(raw).toString("utf8"));
+    } else if (typeof t === "string" && ints[t]) {
+      out.set(f.name, uint(take(ints[t]!, f.name)).toString());
+    } else if (t === "i64") {
+      out.set(f.name, BigInt.asIntN(64, uint(take(8, f.name))).toString());
+    } else if (t === "bool") {
+      const b = take(1, f.name)[0]!;
+      if (b > 1) throw no(`${where}: ${f.name} is not a bool`);
+      out.set(f.name, String(b === 1));
+    } else if (t === "pubkey") {
+      out.set(f.name, new PublicKey(take(32, f.name)).toBase58());
+    } else {
+      const arr = (t as { array?: [unknown, number] })?.array;
+      if (!arr || arr[0] !== "u8")
+        throw no(`${where}: ${f.name} has a type cookie-mcp cannot read`);
+      out.set(f.name, Buffer.from(take(arr[1], f.name)).toString("hex"));
+    }
+  }
+  if (o !== data.length) throw no(`${where} carries ${data.length - o} bytes after its arguments`);
+  return out;
 }
 
 export function instructionByName(name: string): IdlInstruction | undefined {
@@ -245,9 +336,13 @@ export function assertNftBuild(tx: Transaction, kind: NftKind, known: NftExpecta
   }
 
   // Count first: a build for another layout passes a different number of accounts, and every slot
-  // after the first difference would be compared against the wrong name.
+  // after the first difference would be compared against the wrong name. The one exception: a create
+  // whose params name a royalty partner with a share passes that partner after the declared accounts
+  // (anchor-launchpad-momoswap#110), checked below against the params.
   for (const c of calls) {
-    if (c.accounts.length !== c.spec.accounts.length) {
+    const partnerSlot =
+      c.spec.name === "create_collection" && c.accounts.length === c.spec.accounts.length + 1;
+    if (c.accounts.length !== c.spec.accounts.length && !partnerSlot) {
       throw no(
         `instruction ${c.at} (${c.spec.name}) passes ${c.accounts.length} accounts; the program takes ${c.spec.accounts.length}`,
       );
@@ -317,7 +412,21 @@ export function assertNftBuild(tx: Transaction, kind: NftKind, known: NftExpecta
           ? new PublicKey(seedBytes(c, want.pda.program, want.name))
           : new PublicKey(NFT_PROGRAM_ID);
         const [derived] = PublicKey.findProgramAddressSync(seeds, program);
-        if (derived.toBase58() !== got.pubkey) {
+        // TEMPORARY (see LEGACY_SEED_PATHS): the address the same seeds derived before the upgrade.
+        const legacy = LEGACY_SEED_PATHS[spec.name]?.[want.name];
+        const derivedBefore = legacy
+          ? PublicKey.findProgramAddressSync(
+              want.pda.seeds.map((s) =>
+                seedBytes(
+                  c,
+                  s.kind === "account" && legacy[s.path] ? { ...s, path: legacy[s.path]! } : s,
+                  want.name,
+                ),
+              ),
+              program,
+            )[0].toBase58()
+          : undefined;
+        if (derived.toBase58() !== got.pubkey && derivedBefore !== got.pubkey) {
           throw no(`${where}: ${want.name} is ${got.pubkey}, not the address its seeds derive`);
         }
       }
@@ -351,9 +460,42 @@ export function assertNftBuild(tx: Transaction, kind: NftKind, known: NftExpecta
         );
       }
     }
+    if (spec.name === "create_collection") {
+      const params = decodeStruct(spec, c.data, where, no);
+      const partner = params.get("royalty_partner")!;
+      const share = params.get("partner_share_bps")!;
+      if (known.partnerShareBps !== undefined) {
+        const wantPartner = known.royaltyPartner || NO_PARTNER;
+        if (partner !== wantPartner || share !== String(known.partnerShareBps)) {
+          throw no(
+            `${where} names royalty partner ${partner} at ${share} bps, not the ${wantPartner} at ${known.partnerShareBps} bps asked for`,
+          );
+        }
+      }
+      const extra = accounts[spec.accounts.length];
+      if (extra) {
+        // anchor-launchpad-momoswap#110 reads the partner from the first remaining account to check it
+        // is a plain wallet. Only a partner the program writes (set, with a non-zero share) is passed;
+        // it is only read, and the build has no reason to make it sign or be written.
+        if (partner === NO_PARTNER || share === "0") {
+          throw no(
+            `${where} passes an extra account ${extra.pubkey}, but names no royalty partner with a share`,
+          );
+        }
+        if (extra.pubkey !== partner) {
+          throw no(
+            `${where} passes ${extra.pubkey} after its accounts, not the royalty partner ${partner}`,
+          );
+        }
+        if (extra.signer || extra.writable) {
+          throw no(`${where}: the royalty partner it passes has to be read-only`);
+        }
+      }
+    }
     if (spec.name === "buy_nft" || spec.name === "buy_returned" || spec.name === "request_mint") {
       if (known.maxCost === undefined)
         throw no(`${where} has no approved spend to hold its max_cost to`);
+      if (c.data.length < 16) throw no(`${where} carries no max_cost`);
       const maxCost = u64At(c.data, 8);
       if (maxCost > known.maxCost) {
         throw no(

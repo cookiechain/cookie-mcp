@@ -343,7 +343,9 @@ export class NftSimFailure extends CookieMcpError {
 
 /** Advice for the codes an agent can act on; the rest get the program's own message. */
 const CODE_HINTS: Record<number, string> = {
-  6001: "the NFT launchpad is paused for new mints; exits (sell, redeem, claim) still work",
+  6001:
+    "the NFT launchpad is paused for new mints and mint requests; exits (sell, redeem, claim) and " +
+    "refunds still work, and once anchor-launchpad-momoswap#108 is deployed so does settling a queued request",
   6013: "the drop has not opened yet — get_nft_drop shows when it does",
   6014: "the drop's mint window has closed",
   6015: "the drop sold out",
@@ -353,6 +355,18 @@ const CODE_HINTS: Record<number, string> = {
   6019: "the drop is in its allowlist phase and this wallet is not on it",
   6031: "the price moved past the slippage allowed — re-quote with get_nft_drop and retry, or raise slippageBps / maxCookPerItem",
   6054: "the pool holds items sold back earlier, which are sold first — retry, the next build buys one of those",
+  6055: "the drop has already raised more than that graduation target — pick a higher graduationTargetPct, or graduate at sell-out",
+  6056: "this drop's graduation target is already set; only MomoSwap's governance can change it now",
+  6057: "a creator sets the graduation target only as the drop is created (graduationTargetPct on create_nft_drop)",
+  6058: "a royalty partner share needs the partner's plain wallet address (not a program or token account) — fix royaltyPartner, or drop partnerSharePct",
+  6059: "the mint window may run at most 30 days — lower durationHours",
+  6060: "the creator's held-back share is forfeited only past its deadline, or once no unit is left to mint",
+  6061:
+    "the creator's held-back share is due to be forfeited and the program wants forfeit_creator_escrow sent " +
+    "first; cookie-mcp does not build it (any wallet can, the keeper usually does) — retry once it has run",
+  6062:
+    "post-graduation mint requests pause in the last 10 minutes before the creator's held-back share is " +
+    "forfeited — retry after the deadline, once forfeit_creator_escrow has run",
 };
 
 /** Program errors in a failed simulation, as a sentence (pure). */
@@ -568,6 +582,19 @@ export function spendCap(totalRaw: bigint, slippageBps: number): bigint {
   return (totalRaw * BigInt(10_000 + slippageBps) + 9_999n) / 10_000n;
 }
 
+/**
+ * The tolerance to send the API when `maxCookPerItem` is tighter than the one asked for: the most the
+ * quoted all-in cost may rise and still fit the cap, one bp under for the API's rounding. A mint
+ * request's build refuses a stated spend below ITS worst case (the cost-leg cap plus its fee, 409
+ * "the price moved") even while the current price fits, unlike a buy, which it clamps — so the
+ * tolerance has to fit the cap before the build is asked for. Never looser than asked.
+ */
+export function fitSlippage(quotedRaw: bigint, maxSpend: bigint, slippageBps: number): number {
+  if (quotedRaw <= 0n || maxSpend < quotedRaw) return slippageBps;
+  const room = Number(((maxSpend - quotedRaw) * 10_000n) / quotedRaw);
+  return room >= slippageBps ? slippageBps : Math.max(0, room - 1);
+}
+
 function phaseRefusal(c: NftCollection, phase: NftDropPhase, action: string): CookieMcpError {
   const why: Record<NftDropPhase, string> = {
     upcoming: `it opens at ${iso(c.launchTs)}`,
@@ -726,7 +753,7 @@ async function requestMint(
     buyer,
     collectionMint: c.collectionMint,
     maxSpendRaw: maxSpend.toString(),
-    slippageBps,
+    slippageBps: cap === null ? slippageBps : fitSlippage(quoted, maxSpend, slippageBps),
   });
   const signature = await submitNft(
     built,
@@ -1235,6 +1262,13 @@ export interface CreateNftDropArgs {
   dryRun?: boolean;
 }
 
+/**
+ * The longest mint window (`end_ts - launch_ts`) a drop may have: the program's `MAX_SALE_WINDOW_SECS`
+ * (anchor-launchpad-momoswap#113, error 6059) and the backend's `MAX_SALE_WINDOW_SECONDS`. Used when
+ * `/v1/nft/status` does not state `maxSaleWindowSeconds`.
+ */
+export const MAX_SALE_WINDOW_SECS = 30 * 86_400;
+
 /** The launch wizard's defaults. */
 const DEFAULTS = {
   curveMultiple: 4,
@@ -1272,6 +1306,8 @@ export function planNftDrop(
     tradeFeeBps: number;
     maxCreatorRoyaltyBps: number | null;
     maxStartAheadSeconds: number;
+    /** The longest mint window the program accepts (anchor-launchpad-momoswap#113). */
+    maxSaleWindowSeconds: number;
     targetGraduation: boolean;
     targetMaxSupply: number;
   },
@@ -1381,7 +1417,16 @@ export function planNftDrop(
       "durationHours must be between 0.25 and 720",
       "how long minting stays open",
     );
-  const endTs = launchTs + Math.round(hours * 3600);
+  const windowSecs = Math.round(hours * 3600);
+  // The program refuses a longer window (6059 SaleWindowTooLong) and the backend 400s it; say so here.
+  if (windowSecs > terms.maxSaleWindowSeconds) {
+    const maxHours = Math.floor(terms.maxSaleWindowSeconds / 3600);
+    throw new CookieMcpError(
+      `the mint window may run at most ${maxHours} hours (${Math.round((terms.maxSaleWindowSeconds / 86_400) * 10) / 10} days)`,
+      `lower durationHours to ${maxHours} or less`,
+    );
+  }
+  const endTs = launchTs + windowSecs;
 
   const allowlist = [...new Set((args.allowlist ?? []).map((w) => w.trim()).filter(Boolean))];
   let allowlistEndTs = 0;
@@ -1525,6 +1570,7 @@ export async function createNftDrop(args: CreateNftDropArgs) {
       tradeFeeBps: status.tradeFeeBps ?? 0,
       maxCreatorRoyaltyBps: status.maxCreatorRoyaltyBps ?? null,
       maxStartAheadSeconds: status.maxStartAheadSeconds ?? 30 * 86_400,
+      maxSaleWindowSeconds: status.maxSaleWindowSeconds ?? MAX_SALE_WINDOW_SECS,
       targetGraduation: status.targetGraduation ?? false,
       targetMaxSupply: status.targetGraduationLimits?.maxSupply ?? 10_000,
     },
@@ -1650,7 +1696,13 @@ export async function createNftDrop(args: CreateNftDropArgs) {
     signer,
     "NFT drop launch",
     "create",
-    { wallet: creator, collectionMint: drop.mint, graduationTarget: plan.targetRaw },
+    {
+      wallet: creator,
+      collectionMint: drop.mint,
+      graduationTarget: plan.targetRaw,
+      royaltyPartner: plan.partner,
+      partnerShareBps: plan.partnerShareBps,
+    },
     { native: NATIVE_FEE_ALLOWANCE + LAUNCH_RENT_ALLOWANCE },
     { drop: plan.name, items: plan.supply, collection: drop.mint },
   );

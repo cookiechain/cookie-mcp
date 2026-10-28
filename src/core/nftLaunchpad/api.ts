@@ -106,6 +106,10 @@ export interface NftStatus {
   maxCreatorRoyaltyBps?: number | null;
   royaltyHardCapBps?: number;
   maxStartAheadSeconds?: number;
+  /** Longest mint window (`end_ts - launch_ts`) a new drop may have; the program's cap is 30 days (#113). */
+  maxSaleWindowSeconds?: number;
+  /** Whose ATA holds a new drop's collection NFT: the creator's (live binary) or the program's (#111). */
+  collectionNftHolder?: "creator" | "program";
   targetGraduation?: boolean;
   targetGraduationLimits?: { minBps: number; maxBps: number; maxSupply: number };
   storage?: { provider: string; configured: boolean; reachable: boolean | null };
@@ -155,7 +159,10 @@ export interface NftBuiltBuy extends NftBuiltTx {
   totalRaw: string;
   costRaw: string;
   feeRaw: string;
+  /** The cost-leg cap, as the quote states it. Not what the instruction carries. */
   maxCostRaw: string;
+  /** The `max_cost` the instruction carries: the cap plus its fee (momoswap-backend#333), ≤ `maxSpendRaw`. */
+  maxCostAllInRaw?: string;
   maxSpendRaw: string;
   slippageClamped?: true;
   graduatesDrop?: true;
@@ -169,7 +176,10 @@ export interface NftBuiltRequest extends NftBuiltTx {
   costRaw: string;
   feeRaw: string;
   totalRaw: string;
+  /** The cost-leg cap, as the quote states it. Not what the instruction carries. */
   maxCostRaw: string;
+  /** The `max_cost` the instruction carries: the cap plus its fee (momoswap-backend#333), ≤ `maxSpendRaw`. */
+  maxCostAllInRaw?: string;
   maxSpendRaw: string;
   /** Requests already waiting ahead of this one. */
   queueAhead: string;

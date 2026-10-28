@@ -42,8 +42,9 @@
         "On a drop with a `graduation_target`, the buy that brings the raise to the target also",
         "graduates the drop (the same effects as `graduate`, `Graduated` emitted after `Bought`).",
         "",
-        "`max_cost` bounds the price the caller is willing to pay, so a buy that",
-        "lands after someone else's cannot silently fill at a worse price."
+        "`max_cost` bounds everything the buyer pays: the curve price plus the trade fee on it. A buy",
+        "that lands after someone else's cannot fill at a worse price, nor after a fee raise at a",
+        "higher fee than the buyer agreed to (#101)."
       ],
       "discriminator": [96, 0, 28, 190, 49, 107, 83, 222],
       "accounts": [
@@ -278,7 +279,7 @@
         "The other half of `sell_nft`: a unit sold back goes to the next buyer instead of waiting in",
         "the pool. Same price, fee, allowlist, per-wallet cap and anti-snipe window as `buy_nft`, and",
         "the same graduation at the target. Nothing is minted: the unit moves out of the pool's",
-        "custody account, signed by the pool wallet."
+        "custody account, signed by the pool wallet. `max_cost` bounds price plus fee, as on `buy_nft`."
       ],
       "discriminator": [16, 196, 36, 195, 238, 50, 70, 220],
       "accounts": [
@@ -539,7 +540,7 @@
         "The stock Auction House `cancel`, signed by the pool wallet: it revokes the venue's delegate on",
         "the pool's token account and closes the trade state. The unit never left the pool (a delegate",
         "listing is not an escrow), so it is immediately listable again. Gated like",
-        "`list_on_marketplace` on WHO (the creator or the operator, a graduated drop), but not on WHERE:",
+        "`list_on_marketplace` on WHO (the operator, a graduated drop), but not on WHERE:",
         "",
         "- Any house the venue program owns is accepted, not only the pinned one. A listing the live",
         "build placed on some other house has to be removable too, and a cancel signed by the pool",
@@ -574,7 +575,7 @@
         {
           "name": "signer",
           "docs": [
-            "The creator or the protocol operator, checked in the handler exactly as for listing. `mut`",
+            "The protocol operator (#104), checked in the handler exactly as for listing. `mut`",
             "because it receives the listing record's rent when the record is closed."
           ],
           "writable": true,
@@ -846,7 +847,10 @@
       "name": "create_collection",
       "docs": [
         "Create a drop: mints the collection NFT, writes its metadata and master",
-        "edition, seals the fairness commitment and fixes the curve."
+        "edition, seals the fairness commitment and fixes the curve.",
+        "",
+        "A drop with a royalty partner and a non-zero partner share passes the partner's wallet as",
+        "the first remaining account (read-only), so the program can check it is a plain wallet."
       ],
       "discriminator": [156, 251, 92, 54, 233, 2, 16, 82],
       "accounts": [
@@ -907,12 +911,19 @@
         },
         {
           "name": "collection_token_account",
+          "docs": [
+            "Holds the collection NFT: the associated account of `collection_authority`, not of the",
+            "creator. Every item mint verifies into the collection, which needs its metadata and master",
+            "edition to exist, and Token Metadata lets the holder burn both. In the creator's wallet that",
+            "was a switch to stop the drop minting (#103); no instruction here ever moves it out of this",
+            "account. Drops created before this keep theirs in the creator's account."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
               {
                 "kind": "account",
-                "path": "creator"
+                "path": "collection_authority"
               },
               {
                 "kind": "const",
@@ -998,6 +1009,99 @@
         {
           "name": "operator",
           "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "forfeit_creator_escrow",
+      "docs": [
+        "Forfeit what is left of the creator's held-back share (#99): onto the floor for the units that",
+        "exist, or to the platform treasury when none does.",
+        "",
+        "Due once `escrow_deadline` has passed without the rest of the supply minting, or as soon as no",
+        "unit is outstanding or pending (`creator_escrow_forfeit_due`). While it is due, `request_mint`,",
+        "`settle_mint` and `redeem_floor` refuse with `CreatorEscrowForfeitDue`, so the destination is",
+        "decided before any unit can come into existence and before anyone redeems against a floor that",
+        "is about to rise.",
+        "",
+        "- **Units outstanding:** the share goes onto `floor_reserve`. The money is already in",
+        "`payment_vault`, so nothing moves but the accounting.",
+        "- **No unit outstanding:** there is no holder to credit, and a reserve with no unit would be",
+        "handed whole to the next mint, at a price the curve sets alone (`ceil_floor(R, 0) == 0`).",
+        "The share goes to `Config.treasury_payment` instead (the owner's decision), which neither",
+        "the creator nor a minter can reach.",
+        "",
+        "Permissionless and never paused: whoever calls it, the money goes to the holders or the",
+        "treasury. Refused while a post-graduation request is pending, for the same reason sweeps are",
+        "(a pending price must never find the floor above it); a pending request cannot settle while",
+        "the forfeit is due, so it is refunded at once (`refund_mint`) and the queue drains."
+      ],
+      "discriminator": [95, 183, 71, 212, 183, 176, 14, 111],
+      "accounts": [
+        {
+          "name": "collection",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "payment_mint",
+          "relations": ["collection"]
+        },
+        {
+          "name": "payment_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 97, 121, 109, 101, 110, 116, 95, 118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "collection"
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury_payment",
+          "docs": [
+            "Where the share goes when no unit is outstanding (#99). Pinned to Config, as on",
+            "`sweep_platform_fees`: nobody who calls this chooses where the money goes.",
+            "",
+            "Not loaded: only its key is checked here. The floor path never touches it, so a treasury",
+            "account that has been closed (unwrapping wrapped COOK closes it) cannot hold up a forfeit",
+            "onto the floor, and with it every redemption (rugruts' review of #115). The treasury path",
+            "checks it is owned by the token program before paying it, and refuses if not."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program"
         }
       ],
       "args": []
@@ -1246,7 +1350,7 @@
         {
           "name": "payer",
           "docs": [
-            "Pays the trade-state rent, and must be the creator or the protocol operator — checked in the",
+            "Pays the trade-state rent, and must be the protocol operator (#104) — checked in the",
             "handler. This was permissionless on the theory that listing at the graduation price is a",
             "published outcome rather than a privilege, but `price` is a caller argument, so anyone could",
             "list every pool-held item at one base unit and execute the sale against themselves."
@@ -1504,7 +1608,10 @@
         "same `floor_redeemable`, so the last holders out found the reserve gone. Burned, a redeemed",
         "unit cannot be listed, sold or redeemed again, and `floor_redeemable` stays equal to the",
         "number of units still in existence. Pool inventory that CAN be listed is only what holders",
-        "sold back into the curve before graduation, and each of those units still owns its slot."
+        "sold back into the curve before graduation, and each of those units still owns its slot.",
+        "",
+        "Refused (`CreatorEscrowForfeitDue`) while the creator's held-back share is due to be",
+        "forfeited (#99): the forfeit raises the floor, so it runs first."
       ],
       "discriminator": [115, 158, 138, 13, 72, 51, 216, 63],
       "accounts": [
@@ -1725,10 +1832,12 @@
         "Return a request's payment in full, when it can no longer settle. Permissionless, never",
         "paused, and the money can only go to the buyer.",
         "",
-        "One case only, for the oldest pending request (resolution is strictly in order): its",
-        "randomness slot has left `SlotHashes` (about 512 slots, ~4 minutes) without a settle. A",
-        "refund, not a new slot: re-rolling would hand a free second draw to whoever let the first one",
-        "lapse, and a refund is the one outcome that cannot strand the money.",
+        "For the oldest pending request only (resolution is strictly in order), in two cases: its",
+        "randomness slot has left `SlotHashes` (about 512 slots, ~4 minutes) without a settle, or the",
+        "creator's held-back share is due to be forfeited (#99), when no request can settle until the",
+        "forfeit runs and the forfeit waits for the queue to drain. A refund, not a new slot:",
+        "re-rolling would hand a free second draw to whoever let the first one lapse, and a refund is",
+        "the one outcome that cannot strand the money.",
         "",
         "There used to be a second case, a request priced under a floor that had risen since. It let a",
         "buyer who had seen a bad draw cancel it, by lifting the floor with a dust donation and a sweep",
@@ -1879,12 +1988,16 @@
         "next price, exactly as sequential buys would), and the payment (price plus fee) is held in",
         "`payment_vault` as escrow until the request settles or is refunded. The item is drawn later,",
         "from the hash of slot `now + RANDOMNESS_DELAY_SLOTS`, which nobody can know yet.",
+        "`max_cost` bounds that whole payment, price plus fee, as on `buy_nft`.",
         "",
         "The buyer also deposits the rent of the item's four accounts (and Token Metadata's fee), as a",
         "`buy_nft` buyer pays them, so whoever settles is repaid and the buyer gets the rest back.",
         "",
         "One open request per buyer per drop. The first request after graduation opens the queue and",
-        "pays its rent."
+        "pays its rent.",
+        "",
+        "Refused (`CreatorEscrowForfeitDue`) while the creator's held-back share is due to be",
+        "forfeited (#99): send `forfeit_creator_escrow` first."
       ],
       "discriminator": [130, 38, 27, 69, 46, 211, 135, 145],
       "accounts": [
@@ -2295,11 +2408,16 @@
         "rest of the supply then keeps minting on the curve, at random (see `request_mint`). 0 clears",
         "it: graduate at sell-out only, as every drop did before.",
         "",
-        "Creator only, and only while the drop is `Created`, i.e. before its first unit: the target is",
-        "part of what a buyer buys into, so it is fixed from the first mint on. Its own instruction",
-        "rather than a `CollectionParams` field, so `create_collection`'s instruction data, which the",
-        "backend already builds, does not change; send it in the same transaction as `init_vaults`,",
-        "which no buy can precede.",
+        "Creator only, once, and only as the drop is created: the target is part of what a buyer buys",
+        "into, so the creator cannot set, raise, lower or clear it once anyone can see the drop. \"As",
+        "it is created\" is the slot `create_collection` ran in (`created_slot`), with the drop still",
+        "`Created` and nothing minted. The creation transaction always passes, and nothing from the",
+        "next slot on does: not a \"launch now\" drop in its first seconds, nor a scheduled drop before",
+        "it opens, nor a drop created by an older binary (it reads `created_slot` 0). From then on only",
+        "governance moves a target (`set_live_graduation_target`). Its own instruction rather than a",
+        "`CollectionParams` field, so `create_collection`'s instruction data, which the backend already",
+        "builds, does not change; send it in the creation transaction, after `init_vaults`, which no",
+        "buy can precede.",
         "",
         "Bounded to between half and all of the raise at sell-out under this drop's own curve",
         "(`logic::sellout_raise`), computed here from the curve the drop was created with. Below half,",
@@ -2312,6 +2430,68 @@
           "name": "creator",
           "signer": true,
           "relations": ["collection"]
+        },
+        {
+          "name": "collection",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 108, 108, 101, 99, 116, 105, 111, 110]
+              },
+              {
+                "kind": "account",
+                "path": "collection.collection_mint",
+                "account": "Collection"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "graduation_target",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_live_graduation_target",
+      "docs": [
+        "Give a drop that is already selling a graduation target, or change or clear it. Governance",
+        "only, at the creator's request.",
+        "",
+        "`set_graduation_target` is the creator's, once, as the drop is created, because the target is",
+        "part of what a buyer buys into. A creator may still want a selling drop to graduate early (to",
+        "open Baked Bazaar trading sooner); that changes the terms for every holder, so the creator",
+        "announces it and the multisig sets it. Not the creator alone: graduation pays the creator the",
+        "raise above the floor, so a creator who could lower the bar mid-sale could cash out early.",
+        "",
+        "Bounded exactly as at creation (`validate_graduation_target`: half to all of the sell-out",
+        "raise under this drop's own curve, and a supply the post-graduation bitmap can hold), only",
+        "while the drop is still selling (`Created` or `Live`, inside its window), and strictly above",
+        "what it has raised so far, so setting a target never graduates a drop by itself: the buy",
+        "that reaches it does, in that same instruction, as for any target. 0 clears it (sell-out",
+        "only again). Every holder can see the change in `GraduationTargetSet`."
+      ],
+      "discriminator": [171, 68, 208, 12, 82, 104, 70, 155],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": ["config"]
         },
         {
           "name": "collection",
@@ -2458,8 +2638,24 @@
         "creator. The caller pays the item's rent and is repaid from the buyer's deposit.",
         "",
         "Nothing about the floor can make this fail: once the randomness exists, the head request",
-        "settles, and its only other exit is the expiry refund. Nobody, the buyer included, gets to",
-        "choose between the two after seeing the draw."
+        "settles, and its only other exits are the expiry refund and, once the creator's held-back",
+        "share is due to be forfeited (#99), the refund `refund_mint` gives then. Nobody, the buyer",
+        "included, gets to choose between them after seeing the draw: whether a forfeit is due turns",
+        "on the clock and on units outstanding, and a redemption cannot make it due over a pending",
+        "request. What is left is the deadline race, which `request_mint` closes by refusing new",
+        "requests in the last `ESCROW_DEADLINE_MINT_MARGIN_SECS`.",
+        "",
+        "Not gated by `paused`. A settle only completes a trade already paid for, at a fixed price,",
+        "with an outcome fixed by the slot hash. A pause that stopped it would leave every pending",
+        "request to expire into a refund, letting whoever pauses cancel the draws they have already",
+        "seen. `request_mint` stays paused, so a pause still stops new risk.",
+        "",
+        "On a target-graduated drop the settle also releases the next part of the creator's held-back",
+        "share (`Collection::creator_escrow`, #99): an equal part per unit still to mint, so the last",
+        "unit releases the rest. While that share is due to be forfeited (past its deadline), no",
+        "request settles, whenever it was made: the unit would exist ahead of the forfeit and share",
+        "in it. The request is refunded instead, at once (`refund_mint`). Nobody can pick between the",
+        "two after seeing a draw: the deadline is a fixed time, and anyone may settle before it."
       ],
       "discriminator": [201, 168, 164, 233, 170, 82, 40, 96],
       "accounts": [
@@ -2471,6 +2667,9 @@
         },
         {
           "name": "config",
+          "docs": [
+            "Unread since the settle stopped being paused; kept so the instruction's accounts are unchanged."
+          ],
           "pda": {
             "seeds": [
               {
@@ -3028,6 +3227,18 @@
       "discriminator": [181, 49, 200, 156, 19, 167, 178, 91]
     },
     {
+      "name": "CreatorEscrowForfeited",
+      "discriminator": [150, 136, 137, 1, 215, 152, 164, 127]
+    },
+    {
+      "name": "CreatorEscrowReleased",
+      "discriminator": [152, 221, 4, 0, 213, 254, 80, 239]
+    },
+    {
+      "name": "CreatorEscrowed",
+      "discriminator": [36, 170, 128, 250, 50, 101, 251, 139]
+    },
+    {
       "name": "FloorRedeemed",
       "discriminator": [90, 55, 238, 50, 6, 80, 26, 0]
     },
@@ -3367,6 +3578,46 @@
       "code": 6054,
       "name": "InventoryFirst",
       "msg": "The pool holds returned units; buy one of those before a new unit is minted"
+    },
+    {
+      "code": 6055,
+      "name": "GraduationTargetAlreadyMet",
+      "msg": "The drop has already raised that much; a target must be above its raise so far"
+    },
+    {
+      "code": 6056,
+      "name": "GraduationTargetAlreadySet",
+      "msg": "The creator already set this graduation target; only governance can change it now"
+    },
+    {
+      "code": 6057,
+      "name": "GraduationTargetWindowClosed",
+      "msg": "The creator sets a graduation target only as the drop is created; governance can now"
+    },
+    {
+      "code": 6058,
+      "name": "InvalidRoyaltyPartner",
+      "msg": "A partner share needs a royalty partner, passed as the first remaining account, that is a plain system-owned wallet"
+    },
+    {
+      "code": 6059,
+      "name": "SaleWindowTooLong",
+      "msg": "The mint window may run at most 30 days"
+    },
+    {
+      "code": 6060,
+      "name": "CreatorEscrowNotDue",
+      "msg": "The creator's held-back share is forfeited only past its deadline or with no unit left"
+    },
+    {
+      "code": 6061,
+      "name": "CreatorEscrowForfeitDue",
+      "msg": "The creator's held-back share is due to be forfeited; send forfeit_creator_escrow first"
+    },
+    {
+      "code": 6062,
+      "name": "EscrowDeadlineTooClose",
+      "msg": "Post-graduation mints pause in the last 10 minutes before the creator's held-back share is forfeited"
     }
   ],
   "types": [
@@ -3609,7 +3860,9 @@
             "docs": [
               "`sha256(seed ‖ ordered_uris)`, fixed BEFORE the first mint. The",
               "position-to-artwork mapping is sealed here, so nobody — us included — can",
-              "favour a wallet after minting starts."
+              "change which unit is which after minting starts. It is not secret from",
+              "whoever holds the seed before the reveal (the backend, or a creator who",
+              "kept it): they know which index is rare (#106)."
             ],
             "type": {
               "array": ["u8", 32]
@@ -3721,10 +3974,60 @@
             "type": "u64"
           },
           {
+            "name": "created_slot",
+            "docs": [
+              "The slot `create_collection` ran in. The creator's `set_graduation_target` must run in this",
+              "same slot, which in practice means the creation transaction itself (the clients send it there,",
+              "after `init_vaults`). Taken from the padding, so a drop created by an older binary reads 0, a",
+              "slot no transaction runs in: its creator can no longer set a target, and governance still can."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "creator_escrow",
+            "docs": [
+              "The creator's share of a target graduation still held back (#99). A drop that graduates at",
+              "its target with `minted - inventory` of `total_supply` units sold pays the creator that",
+              "fraction of their share at once; the rest stays in `payment_vault` and comes out one equal",
+              "part per post-graduation mint (`settle_mint`), all of it once the supply is minted. Whatever",
+              "is left after `escrow_deadline`, or once no unit is left, is forfeited",
+              "(`forfeit_creator_escrow`): onto the floor, or to the platform treasury when no unit exists.",
+              "Zero at a sell-out, and on every drop graduated by an older binary (from the padding)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "escrow_deadline",
+            "docs": [
+              "When `creator_escrow` stops being released: the later of `end_ts` and a week after",
+              "graduation. Written at graduation."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "trade_fee_cap_bps",
+            "docs": [
+              "The trade fee and its platform share this drop was created under, a ceiling for its whole",
+              "life (#106): every trade pays the lower of these and the current `Config`, so governance can",
+              "lower a live drop's fee but never raise it between a buyer's quote and their buy, nor move the",
+              "creator's side of it to the platform. Set at create; a drop created by an older binary reads",
+              "`fee_cap_set` false and takes `Config`'s values at its first trade from this binary on."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "platform_share_cap_bps",
+            "type": "u16"
+          },
+          {
+            "name": "fee_cap_set",
+            "type": "bool"
+          },
+          {
             "name": "padding",
             "docs": ["Append new fixed-size fields HERE. Strings stay last."],
             "type": {
-              "array": ["u8", 63]
+              "array": ["u8", 34]
             }
           },
           {
@@ -3900,7 +4203,10 @@
           },
           {
             "name": "royalty_partner",
-            "docs": ["Optional second payee sharing the creator's cut. Zero = none."],
+            "docs": [
+              "Optional second payee sharing the creator's cut. Zero = none. A plain system-owned wallet,",
+              "passed as the first remaining account whenever `partner_share_bps` is non-zero."
+            ],
             "type": "pubkey"
           },
           {
@@ -4101,6 +4407,97 @@
       }
     },
     {
+      "name": "CreatorEscrowForfeited",
+      "docs": [
+        "What was left of the creator's held-back share was forfeited: onto the floor for the",
+        "`floor_redeemable` units that exist, or, when none does, to `Config.treasury_payment`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "to_treasury",
+            "docs": ["The share went to the platform treasury, because no unit was outstanding."],
+            "type": "bool"
+          },
+          {
+            "name": "floor_reserve",
+            "type": "u64"
+          },
+          {
+            "name": "floor_redeemable",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CreatorEscrowReleased",
+      "docs": [
+        "A post-graduation mint released its part of the creator's held-back share to the creator side."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "remaining",
+            "docs": ["Still held back."],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CreatorEscrowed",
+      "docs": [
+        "A target graduation held back part of the creator's share (#99): `Graduated.to_creator` is what",
+        "was paid now, for the `minted` of `total_supply` units sold (minted less pool inventory);",
+        "`escrowed` comes out as the rest of the supply mints, and what is left when it is forfeited (after",
+        "`deadline`, or once no unit is left) goes onto the floor, or to the treasury if no unit exists."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "escrowed",
+            "type": "u64"
+          },
+          {
+            "name": "minted",
+            "type": "u64"
+          },
+          {
+            "name": "total_supply",
+            "type": "u64"
+          },
+          {
+            "name": "deadline",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "FloorRedeemed",
       "type": {
         "kind": "struct",
@@ -4170,7 +4567,8 @@
     {
       "name": "GraduationTargetSet",
       "docs": [
-        "The creator set (or cleared, with 0) the raise at which the drop may graduate early."
+        "The creator (before the first unit), or governance on a live drop at the creator's request, set",
+        "(or cleared, with 0) the raise at which the drop may graduate early."
       ],
       "type": {
         "kind": "struct",
@@ -4335,7 +4733,7 @@
             "name": "escrowed",
             "docs": [
               "Payment (price + fee) that pending requests hold inside `payment_vault`. The vault always",
-              "holds at least `floor_reserve + escrowed` after graduation."
+              "holds at least `floor_reserve + escrowed + Collection::creator_escrow` after graduation."
             ],
             "type": "u64"
           },
@@ -4375,8 +4773,9 @@
     {
       "name": "MintRefunded",
       "docs": [
-        "A post-graduation request was refunded in full: its randomness expired, or the floor rose",
-        "above its price before it could settle."
+        "A post-graduation request was refunded in full, for one of two reasons (`forfeit_due` says",
+        "which): its randomness slot left `SlotHashes` before anyone settled, or the creator's held-back",
+        "share was due to be forfeited (#99), when no request settles until the forfeit runs."
       ],
       "type": {
         "kind": "struct",
@@ -4399,11 +4798,16 @@
           },
           {
             "name": "amount",
-            "docs": [
-              "Price plus fee, returned. A refund is always an expiry: the randomness slot left",
-              "`SlotHashes` before anyone settled."
-            ],
+            "docs": ["Price plus fee, returned."],
             "type": "u64"
+          },
+          {
+            "name": "forfeit_due",
+            "docs": [
+              "Refunded because the forfeit was due, with the randomness still available; `false` means",
+              "the randomness expired (whether or not a forfeit was due as well)."
+            ],
+            "type": "bool"
           }
         ]
       }
