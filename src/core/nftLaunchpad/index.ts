@@ -50,6 +50,7 @@ import {
   buildNftGraduateTx,
   buildNftRedeemTx,
   buildNftRefundTx,
+  buildNftRequestMintManyTx,
   buildNftRequestMintTx,
   buildNftRevealTx,
   buildNftSellTx,
@@ -68,6 +69,7 @@ import {
   uploadNftArt,
   type NftBuiltRefund,
   type NftBuiltRequest,
+  type NftBuiltRequestItem,
   type NftBuiltSettle,
   type NftBuiltTx,
   type NftCollection,
@@ -77,6 +79,7 @@ import {
   type SealedDrop,
 } from "./api";
 import { readArtDir, readOneImage, readPiece, type ArtPiece } from "./art";
+import { readCreatorEscrow } from "./chain";
 import {
   MAX_FLOOR_LOCK_BPS,
   MAX_TARGET_BPS,
@@ -92,6 +95,7 @@ import {
 } from "./curve";
 import {
   assertNftBuild,
+  MAX_OPEN_REQUESTS,
   NFT_PROGRAM_ID,
   nftProgramError,
   type NftExpectation,
@@ -274,6 +278,11 @@ export async function getNftDrop(args: { collection: string; count?: number; own
 
   const g = c.graduation;
   const isCreator = ownerKey !== null && ownerKey === c.creator;
+  // A target graduation holds part of the creator's share back (anchor #115); the API does not say how much.
+  const escrow =
+    isCreator && g?.model === "target" && c.state === "graduated"
+      ? await readCreatorEscrow(getConnection(), c.address).catch(() => null)
+      : null;
   return {
     ...mapDropSummary(c, now),
     creator: c.creator,
@@ -325,6 +334,18 @@ export async function getNftDrop(args: { collection: string; count?: number; own
           ...(BigInt(c.creatorProceedsRaw ?? "0") > 0n
             ? { creatorAction: "claim the proceeds with nft_drop_claim" }
             : {}),
+          ...(escrow && escrow.heldRaw > 0n
+            ? {
+                creatorHeldBack: {
+                  cook: cook(escrow.heldRaw),
+                  forfeitedAfter: iso(escrow.deadline),
+                  note:
+                    "the target graduation held this part of your share back: each post-graduation mint " +
+                    "releases a part of it into your claimable proceeds, and what is still held at " +
+                    "forfeitedAfter (or once nothing is left to mint) is forfeited",
+                },
+              }
+            : {}),
         }
       : {}),
   };
@@ -367,6 +388,9 @@ const CODE_HINTS: Record<number, string> = {
   6062:
     "post-graduation mint requests pause in the last 10 minutes before the creator's held-back share is " +
     "forfeited — retry after the deadline, once forfeit_creator_escrow has run",
+  6063:
+    "every one of this wallet's request slots on the drop is taken — wait for a request to settle " +
+    "(nft_drop_settle pushes the queue), then request again",
 };
 
 /** Program errors in a failed simulation, as a sentence (pure). */
@@ -560,16 +584,64 @@ export function refundBudget(ownAmount: bigint | null): SpendBudget {
   };
 }
 
-/** A wallet's mint-request account on a drop: one per buyer per drop, reused by each request. Pure. */
-export function mintRequestPda(collectionAddress: string, buyer: string): string {
+/**
+ * A wallet's mint-request account on a drop, in request slot `slot` (0..9, anchor #117), each reused
+ * once its request resolves. `null`: the one unslotted address requests had before the slots, which
+ * a request opened then still sits at until it settles or is refunded. Pure.
+ */
+export function mintRequestPda(
+  collectionAddress: string,
+  buyer: string,
+  slot: number | null,
+): string {
   return PublicKey.findProgramAddressSync(
     [
       Buffer.from("mint_request"),
       new PublicKey(collectionAddress).toBuffer(),
       new PublicKey(buyer).toBuffer(),
+      ...(slot === null ? [] : [Buffer.from([slot])]),
     ],
     new PublicKey(NFT_PROGRAM_ID),
   )[0].toBase58();
+}
+
+/** Every address a wallet's requests on a drop can sit at: the ten slots, then the unslotted one. Pure. */
+export function mintRequestAddresses(collectionAddress: string, buyer: string): string[] {
+  return [
+    ...Array.from({ length: MAX_OPEN_REQUESTS }, (_, k) =>
+      mintRequestPda(collectionAddress, buyer, k),
+    ),
+    mintRequestPda(collectionAddress, buyer, null),
+  ];
+}
+
+/**
+ * The wallet's requests still being drawn on a drop: a request account exists only while its request
+ * is open (settling or refunding closes it).
+ */
+async function openMintRequests(c: NftCollection, wallet: string): Promise<string[]> {
+  const addresses = mintRequestAddresses(c.address, wallet);
+  const infos = await getConnection().getMultipleAccountsInfo(
+    addresses.map((a) => new PublicKey(a)),
+  );
+  return addresses.filter((_, k) => (infos[k]?.data.length ?? 0) > 0);
+}
+
+/**
+ * Split a batch quote into each request's all-in price: its curve cost plus its share of the fee,
+ * rounded up so the share never undercounts. Pure.
+ */
+export function requestUnitTotals(
+  unitCostsRaw: string[],
+  costRaw: string,
+  feeRaw: string,
+): bigint[] {
+  const cost = BigInt(costRaw);
+  const fee = BigInt(feeRaw);
+  return unitCostsRaw.map((u) => {
+    const c = BigInt(u);
+    return c + (cost > 0n ? (c * fee + cost - 1n) / cost : 0n);
+  });
 }
 
 /** The creator's own share of a claim: the vault minus the royalty partner's floored share. */
@@ -649,13 +721,15 @@ export async function mintNftDrop(args: {
   const c = await resolveDrop(args.collection);
   const phase = dropPhase(c, Math.floor(Date.now() / 1000));
   if (phase === "minting") {
-    if (count > 1) {
+    if (count === 1) return requestMint(signer, c, cap, slippageBps);
+    const batch = (await fetchNftStatus().catch(() => null))?.requestBatch ?? 1;
+    if (batch < count) {
       throw new CookieMcpError(
-        `"${c.name}" graduated at its target: each remaining item is a request a keeper settles, one at a time per wallet`,
-        "call nft_drop_mint with count 1 (or leave it out), then again once it settles",
+        `"${c.name}" graduated at its target: each remaining item is a request a keeper settles, and a wallet may hold ${batch} open at once right now`,
+        `call nft_drop_mint with count ${batch === 1 ? "1 (or leave it out), then again once it settles" : `up to ${batch}`}`,
       );
     }
-    return requestMint(signer, c, cap, slippageBps);
+    return requestMints(signer, c, cap, slippageBps, count);
   }
   if (phase !== "live") throw phaseRefusal(c, phase, "mint from");
 
@@ -805,6 +879,148 @@ async function requestMint(
       "paid and queued: a keeper settles it with a random remaining item, normally within seconds. " +
       "get_nft_drop lists your items once it lands. If it is still pending after a minute, nft_drop_settle " +
       "settles it yourself; once its randomness expires (~3 minutes) the same tool refunds it.",
+  };
+}
+
+/**
+ * Several post-graduation requests at once (anchor #117: up to ten open per wallet, one slot each).
+ * The API builds one transaction per request, request k priced one unit further along the path. Each
+ * is independent of the others on chain (its own slot, its own `max_cost`), so each one simulates on
+ * its own against the current state before it is signed, and they go out in order. A later request
+ * failing keeps what already landed, as a curve mint does.
+ */
+async function requestMints(
+  signer: TxSigner,
+  c: NftCollection,
+  cap: bigint | null,
+  slippageBps: number,
+  count: number,
+) {
+  const buyer = signer.publicKey.toBase58();
+  const quote = await fetchNftRequestQuote(c.collectionMint, slippageBps, count);
+  const totals = requestUnitTotals(
+    quote.unitCostsRaw ?? [quote.costRaw],
+    quote.costRaw,
+    quote.feeRaw,
+  );
+  const spends = totals.map((t) => cap ?? spendCap(t, slippageBps));
+  if (totals[0]! > spends[0]!) {
+    throw new CookieMcpError(
+      `a mint request costs ${cook(totals[0]!)} ${COOK_SYMBOL} (fee included), above maxCookPerItem ${cook(spends[0]!)}`,
+      "raise maxCookPerItem",
+    );
+  }
+  // With a cap, stop at the first request it no longer covers: each costs a little more than the last.
+  const affordable = spends.filter((spend, k) => totals[k]! <= spend);
+  const built = await buildNftRequestMintManyTx({
+    buyer,
+    collectionMint: c.collectionMint,
+    maxSpendRaw: affordable.map(String),
+  });
+
+  const placed: { item: NftBuiltRequestItem; signature: string }[] = [];
+  let stoppedEarly: string | null = null;
+  for (const [k, item] of built.items.entries()) {
+    const maxSpend = BigInt(item.maxSpendRaw);
+    if (maxSpend > (affordable[k] ?? 0n)) {
+      stoppedEarly = `the build for request ${k + 1} would spend ${cook(maxSpend)} ${COOK_SYMBOL}, more than the ${cook(affordable[k] ?? 0n)} asked for`;
+      break;
+    }
+    try {
+      const signature = await submitNft(
+        item,
+        signer,
+        "NFT mint request",
+        "request-mint",
+        { wallet: buyer, collectionMint: c.collectionMint, maxCost: maxSpend },
+        // The queue's rent is paid once, by the first request; each request opens its own account.
+        requestBudget(
+          maxSpend,
+          k === 0 || !built.deposits
+            ? built.deposits
+            : { ...built.deposits, queueRentLamports: "0" },
+        ),
+        {
+          drop: c.name,
+          collection: c.collectionMint,
+          request: k + 1,
+          of: built.items.length,
+          maxCook: cook(maxSpend),
+          random: true,
+        },
+      );
+      placed.push({ item, signature });
+    } catch (e) {
+      // The first request failing is the call failing. A later one keeps what already landed.
+      if (placed.length === 0) throw e;
+      stoppedEarly = e instanceof Error ? e.message : String(e);
+      break;
+    }
+  }
+
+  // The keeper settles within seconds; wait a little so the usual answer names the items.
+  const deadline = Date.now() + SETTLE_WAIT_MS;
+  const views = new Map<string, Awaited<ReturnType<typeof fetchNftMintRequest>>>();
+  const resolved = (r: string) => {
+    const st = views.get(r)?.status;
+    return st === "settled" || st === "refunded";
+  };
+  while (Date.now() < deadline && !placed.every((p) => resolved(p.item.request))) {
+    for (const p of placed) {
+      if (resolved(p.item.request)) continue;
+      const v = await fetchNftMintRequest(p.item.request, p.item.minNonce).catch(() => null);
+      if (v) views.set(p.item.request, v);
+    }
+    if (!placed.every((p) => resolved(p.item.request)))
+      await new Promise((r) => setTimeout(r, 1_500));
+  }
+
+  const requests = placed.map(({ item, signature }) => {
+    const v = views.get(item.request);
+    const base = {
+      request: item.request,
+      slot: item.slot,
+      signature,
+      explorerUrl: explorerTxUrl(signature),
+      paidCook: cook(item.totalRaw),
+    };
+    if (v?.status === "settled") return { ...base, status: "settled", nftMint: v.itemMint ?? null };
+    if (v?.status === "refunded") {
+      return { ...base, status: "refunded", refundedCook: v.amountRaw ? cook(v.amountRaw) : null };
+    }
+    return { ...base, status: "pending" };
+  });
+  const spent = placed.reduce((sum, p) => sum + BigInt(p.item.totalRaw), 0n);
+  const short =
+    built.items.length < count
+      ? {
+          "sold-out": "every remaining unit is minted or requested",
+          "requests-open": "this wallet's other request slots are still taken",
+          "wallet-cap": "the drop's per-wallet limit",
+          "price-moved": "the price moved past what the later requests were allowed",
+        }[built.cutShort ?? "price-moved"]
+      : null;
+  return {
+    drop: c.name,
+    collectionMint: c.collectionMint,
+    requested: count,
+    placed: placed.length,
+    requests,
+    spent: { amount: cook(spent), symbol: COOK_SYMBOL },
+    ...(affordable.length < count
+      ? { capped: `maxCookPerItem covers ${affordable.length} of ${count}` }
+      : {}),
+    ...(short && affordable.length === count ? { cutShort: short } : {}),
+    ...(stoppedEarly ? { stoppedEarly } : {}),
+    links: { drop: nftDropUrl(c.collectionMint) },
+    ...(requests.some((r) => r.status === "pending")
+      ? {
+          note:
+            "pending requests are queued: a keeper settles each with a random remaining item, normally " +
+            "within seconds. If one is still pending after a minute, nft_drop_settle settles it yourself; " +
+            "once its randomness expires (~3 minutes) the same tool refunds it.",
+        }
+      : {}),
   };
 }
 
@@ -989,9 +1205,10 @@ export interface NftQueueStep {
 }
 
 /**
- * Push a drop's mint queue to this wallet's pending request: settle each head whose randomness is
- * ready, refund each whose randomness expired. The queue is FIFO and only its head can move, so a
- * request behind others needs those settled (or refunded) first — to their own buyers, never to us.
+ * Push a drop's mint queue through this wallet's pending requests (up to ten, one per request slot):
+ * settle each head whose randomness is ready, refund each whose randomness expired. The queue is FIFO
+ * and only its head can move, so a request behind others needs those settled (or refunded) first — to
+ * their own buyers, never to us.
  */
 export async function settleNftDropQueue(args: { collection: string }) {
   const signer = requireSigner();
@@ -1003,23 +1220,27 @@ export async function settleNftDropQueue(args: { collection: string }) {
       "get_nft_drop shows the drop's phase",
     );
   }
-  const pda = mintRequestPda(c.address, wallet);
-  const mine = await fetchNftMintRequest(pda);
-  if (mine.status !== "pending") {
+  const open = await openMintRequests(c, wallet);
+  const views = await Promise.all(open.map((pda) => fetchNftMintRequest(pda).catch(() => null)));
+  // Pending by the account, but the indexer may lag: keep it, with no place known yet.
+  const mine = open.map((pda, k) => ({
+    pda,
+    nonce: views[k]?.nonce,
+    view: views[k] ?? { request: pda, status: "pending" as const },
+  }));
+  if (mine.length === 0) {
     throw new CookieMcpError(
       `this wallet has no pending mint request on "${c.name}"`,
-      mine.status === "settled"
-        ? `its last request already settled${mine.itemMint ? ` (item ${mine.itemMint})` : ""}`
-        : mine.status === "refunded"
-          ? "its last request was already refunded"
-          : "nft_drop_mint places one",
+      "nft_drop_mint places one; get_nft_drop lists the items your settled requests drew",
     );
   }
   const steps: NftQueueStep[] = [];
-  const limit = Math.min(MAX_SETTLE_STEPS, (mine.queuePosition ?? 0) + 1);
-  let view = mine;
+  // Far enough to reach the last of ours, at most MAX_SETTLE_STEPS per call.
+  const furthest = Math.max(...mine.map((m) => m.view.queuePosition ?? 0));
+  const limit = Math.min(MAX_SETTLE_STEPS, furthest + 1);
+  const pending = () => mine.some((m) => m.view.status === "pending");
   let stoppedEarly: string | null = null;
-  for (let i = 0; i < limit && view.status === "pending"; i++) {
+  for (let i = 0; i < limit && pending(); i++) {
     try {
       steps.push(await pushQueueHead(signer, c, wallet));
     } catch (e) {
@@ -1028,25 +1249,38 @@ export async function settleNftDropQueue(args: { collection: string }) {
       stoppedEarly = e instanceof Error ? e.message : String(e);
       break;
     }
-    view = await fetchNftMintRequest(pda, mine.nonce).catch(() => view);
+    await Promise.all(
+      mine.map(async (m) => {
+        if (m.view.status !== "pending") return;
+        m.view = await fetchNftMintRequest(m.pda, m.nonce).catch(() => m.view);
+      }),
+    );
   }
 
-  const yours =
+  const yourRequests = mine.map(({ pda, view }) =>
     view.status === "settled"
-      ? { status: "settled", nftMint: view.itemMint ?? null, index: view.index ?? null }
+      ? {
+          request: pda,
+          status: "settled",
+          nftMint: view.itemMint ?? null,
+          index: view.index ?? null,
+        }
       : view.status === "refunded"
-        ? { status: "refunded", refundedCook: view.amountRaw ? cook(view.amountRaw) : null }
-        : {
-            status: "pending",
-            queuePosition: view.queuePosition ?? null,
-            note: "still queued behind other requests — call nft_drop_settle again",
-          };
+        ? {
+            request: pda,
+            status: "refunded",
+            refundedCook: view.amountRaw ? cook(view.amountRaw) : null,
+          }
+        : { request: pda, status: "pending", queuePosition: view.queuePosition ?? null },
+  );
   return {
     drop: c.name,
     collectionMint: c.collectionMint,
-    request: pda,
     steps,
-    yourRequest: yours,
+    yourRequests,
+    ...(yourRequests.some((r) => r.status === "pending")
+      ? { note: "still queued behind other requests — call nft_drop_settle again" }
+      : {}),
     ...(stoppedEarly ? { stoppedEarly } : {}),
     links: { drop: nftDropUrl(c.collectionMint) },
   };

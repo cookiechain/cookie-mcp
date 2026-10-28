@@ -50,11 +50,11 @@ describe("the vendored IDL", () => {
     expect(NFT_PROGRAM_ID).toBe("momoDc2LHwe2Eymo4gK1jg5gAJcjjLGWW1hAaSKAGHb");
   });
 
-  it("is the IDL anchor main carries (918d12b, upstream sha256 ca86a51f…), a superset of the backend's (79973de)", () => {
+  it("is the IDL anchor main carries (08c149c, upstream sha256 0184a6d8…: request slots, #117)", () => {
     // Over the parsed content, so formatting is free but any change to an instruction, account,
     // seed or error is not. A deliberate refresh updates this hash.
     expect(createHash("sha256").update(JSON.stringify(nftIdl)).digest("hex")).toBe(
-      "f7621611ba1edb87082ad5686c3d846aefe3e49fa98e56688a61b68da91ffaf7",
+      "71beea10c91697a34c1b8507d53a57a5f540aeb9a35814051a771bf12e6c3c9c",
     );
   });
 
@@ -277,16 +277,22 @@ describe("assertNftBuild — upkeep built from the IDL", () => {
         [TOKEN, false, false],
       ]),
     );
-  const ownRequest = new PublicKey(mintRequestPda(collection.toBase58(), buyer.toBase58()));
+  const ownRequest = new PublicKey(mintRequestPda(collection.toBase58(), buyer.toBase58(), 0));
 
-  it("accepts a refund of another buyer's request that we pay for, at the request PDA we derive", () => {
+  it("accepts a refund of another buyer's request that we pay for", () => {
     expect(assertNftBuild(refundTx(caller, ownRequest), "refund", known)).toEqual(["refund_mint"]);
   });
 
-  it("refuses a refund at a request address the seeds do not derive", () => {
-    expect(() =>
-      assertNftBuild(refundTx(caller, Keypair.generate().publicKey), "refund", known),
-    ).toThrow(/request is \w+, not the address its seeds derive/);
+  it("takes the request by account (anchor #117): a slotted, unslotted or any request address", () => {
+    // The program pins it by `has_one` (collection, buyer), not by seeds, so the build's own request
+    // is the program's to check; a request of another drop or buyer fails on chain.
+    for (const request of [
+      new PublicKey(mintRequestPda(collection.toBase58(), buyer.toBase58(), 9)),
+      new PublicKey(mintRequestPda(collection.toBase58(), buyer.toBase58(), null)),
+      Keypair.generate().publicKey,
+    ]) {
+      expect(assertNftBuild(refundTx(caller, request), "refund", known)).toEqual(["refund_mint"]);
+    }
   });
 
   it("refuses a refund someone else authorises", () => {
@@ -587,12 +593,8 @@ describe("assertNftBuild — a create for the upgraded program (anchor #110, #11
     expect(ix.keys[5]!.pubkey.toBase58()).toBe(programAta.toBase58());
   });
 
-  it("accepts the collection NFT in the program's ATA (upgraded binary) or the creator's (live, for one release)", () => {
+  it("accepts the collection NFT in the program's ATA", () => {
     expect(assertNftBuild(createTx({ tokenAccount: programAta }), "create", known())).toEqual([
-      "create_collection",
-      "init_vaults",
-    ]);
-    expect(assertNftBuild(createTx({ tokenAccount: creatorAta }), "create", known())).toEqual([
       "create_collection",
       "init_vaults",
     ]);
@@ -600,6 +602,8 @@ describe("assertNftBuild — a create for the upgraded program (anchor #110, #11
 
   it("refuses the collection NFT anywhere else", () => {
     for (const tokenAccount of [
+      // The creator's ATA: where the collection NFT went before anchor #111, now deployed.
+      creatorAta,
       getAssociatedTokenAddressSync(collectionMint, STRANGER),
       Keypair.generate().publicKey,
     ]) {
@@ -699,6 +703,10 @@ describe("assertNftBuild — max_cost is the all-in spend (anchor #112, backend 
   const POOL_UNIT = Keypair.generate().publicKey;
   const COST_LEG = 150_000_000_000n; // what the backend sent before #333: the price cap alone
   const known = { wallet: buyer.toBase58(), collectionMint: collectionMint.toBase58() };
+  const collection = PublicKey.findProgramAddressSync(
+    [Buffer.from("collection"), collectionMint.toBuffer()],
+    new PublicKey(NFT_PROGRAM_ID),
+  )[0];
   const buyIx = (name: "buy_returned" | "request_mint", maxCost: bigint) =>
     idlIx(
       name,
@@ -706,6 +714,7 @@ describe("assertNftBuild — max_cost is the all-in spend (anchor #112, backend 
       {
         buyer,
         nft_mint: POOL_UNIT,
+        request: new PublicKey(mintRequestPda(collection.toBase58(), buyer.toBase58(), 0)),
         payment_mint: new PublicKey("So11111111111111111111111111111111111111112"),
         buyer_payment_account: getAssociatedTokenAddressSync(
           new PublicKey("So11111111111111111111111111111111111111112"),
@@ -713,7 +722,8 @@ describe("assertNftBuild — max_cost is the all-in spend (anchor #112, backend 
         ),
         token_program: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
       },
-      Buffer.concat([u64(maxCost), Buffer.alloc(4)]), // + an empty allowlist proof
+      // + an empty allowlist proof, and for a request its slot (0)
+      Buffer.concat([u64(maxCost), Buffer.alloc(4), Buffer.alloc(name === "request_mint" ? 1 : 0)]),
     );
   const realBuy = (maxCost: bigint) => {
     const tx = buy();
@@ -757,5 +767,92 @@ describe("assertNftBuild — max_cost is the all-in spend (anchor #112, backend 
     const ix = tx.instructions.find((i) => i.programId.toBase58() === NFT_PROGRAM_ID)!;
     ix.data = ix.data.subarray(0, 8);
     expect(() => assertNftBuild(tx, "mint", buyKnown)).toThrow(/carries no max_cost/);
+  });
+});
+
+describe("assertNftBuild — request slots (anchor #117)", () => {
+  const buyer = Keypair.generate().publicKey;
+  const collectionMint = Keypair.generate().publicKey;
+  const SPEND = 50_000_000_000n;
+  const collection = PublicKey.findProgramAddressSync(
+    [Buffer.from("collection"), collectionMint.toBuffer()],
+    new PublicKey(NFT_PROGRAM_ID),
+  )[0];
+  const known = {
+    wallet: buyer.toBase58(),
+    collectionMint: collectionMint.toBase58(),
+    maxCost: SPEND,
+  };
+  const wcook = new PublicKey("So11111111111111111111111111111111111111112");
+  const proofOf = (n: number) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32LE(n);
+    return Buffer.concat([
+      len,
+      ...Array.from({ length: n }, () => Keypair.generate().publicKey.toBuffer()),
+    ]);
+  };
+  const requestTx = (opts: {
+    slot: number | null;
+    at?: number | null;
+    proof?: number;
+    tail?: Buffer;
+  }) =>
+    unsignedTx(
+      buyer,
+      idlIx(
+        "request_mint",
+        collectionMint,
+        {
+          buyer,
+          request: new PublicKey(
+            mintRequestPda(
+              collection.toBase58(),
+              buyer.toBase58(),
+              opts.at === undefined ? opts.slot : opts.at,
+            ),
+          ),
+          payment_mint: wcook,
+          buyer_payment_account: getAssociatedTokenAddressSync(wcook, buyer),
+          token_program: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+        },
+        Buffer.concat([
+          u64(SPEND),
+          proofOf(opts.proof ?? 0),
+          opts.slot === null ? Buffer.alloc(0) : Buffer.from([opts.slot]),
+          opts.tail ?? Buffer.alloc(0),
+        ]),
+      ),
+    );
+
+  it("accepts a request in any of the ten slots, with or without an allowlist proof", () => {
+    for (const slot of [0, 3, 9]) {
+      for (const proof of [0, 2]) {
+        expect(assertNftBuild(requestTx({ slot, proof }), "request-mint", known)).toEqual([
+          "request_mint",
+        ]);
+      }
+    }
+  });
+
+  it("refuses a request at another slot's address than its argument names", () => {
+    expect(() =>
+      assertNftBuild(requestTx({ slot: 2, at: 3, proof: 1 }), "request-mint", known),
+    ).toThrow(/request is \w+, not the address its seeds derive/);
+  });
+
+  it("refuses the unslotted shape the program had before #117", () => {
+    expect(() => assertNftBuild(requestTx({ slot: null }), "request-mint", known)).toThrow(
+      /refusing to sign/,
+    );
+  });
+
+  it("refuses a slot the program does not have, and bytes after the slot", () => {
+    expect(() => assertNftBuild(requestTx({ slot: 10 }), "request-mint", known)).toThrow(
+      /request slot 10; the program has 10/,
+    );
+    expect(() =>
+      assertNftBuild(requestTx({ slot: 1, tail: Buffer.from([0]) }), "request-mint", known),
+    ).toThrow(/carries \d+ bytes of data, expected \d+/);
   });
 });

@@ -20,14 +20,11 @@
 // Like the frontend's, this bounds the TOP-LEVEL instruction list. What happens inside the program is
 // the program's to enforce; this makes sure it is asked to do what the user asked, to the accounts the
 // user asked about. The vendored IDL (`src/idl/momo_nft_launchpad.json`) is anchor-launchpad-momoswap
-// main `918d12b` (#108, #110–#116; upstream sha256 `ca86a51f…`), Prettier-formatted; its content hash
-// is pinned in `verify.test.ts`. It is a superset of the one the backend carries (momoswap-backend#333,
-// anchor `79973de`): #115 and #116 add `forfeit_creator_escrow`, account fields and errors 6060–6062,
-// and change no instruction cookie-mcp signs. Refresh it with the backend's when the program changes.
-//
-// That IDL is ahead of the deployed `momoDc2L…` binary, and the backend builds for whichever one is
-// live, so a create is accepted in both shapes for one release (`LEGACY_SEED_PATHS`, and the royalty
-// partner after `create_collection`'s accounts, which the live binary ignores).
+// main `08c149c` (#108, #110–#120; upstream sha256 `0184a6d8…`), Prettier-formatted; its content hash
+// is pinned in `verify.test.ts`. #117 (deployed; `/v1/nft/status` reports `requestBatch: 10`) gave
+// `request_mint` a trailing `request_slot: u8` that seeds the request address, and `settle_mint` /
+// `refund_mint` now take the request by account, not by seeds. Refresh it with the backend's when the
+// program changes.
 import { getAssociatedTokenAddressSync, NATIVE_MINT } from "@solana/spl-token";
 import { PublicKey, type Transaction } from "@solana/web3.js";
 
@@ -41,6 +38,9 @@ const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const SYSTEM_PROGRAM = "11111111111111111111111111111111";
 
 export const NFT_PROGRAM_ID = PROGRAM_IDS.momoNftLaunchpad;
+
+/** Mint requests one wallet may hold open on a drop: `request_mint`'s slots (anchor #117). */
+export const MAX_OPEN_REQUESTS = 10;
 
 type IdlSeed =
   | { kind: "const"; value: number[] }
@@ -69,20 +69,6 @@ const TYPES = (
     types: { name: string; type: { kind: string; fields?: { name: string; type: unknown }[] } }[];
   }
 ).types;
-
-/**
- * PDA seeds a program upgrade changed, accepted as they were for ONE release so the program, the
- * backend and cookie-mcp can switch in any order. Per instruction and account: a seed path as the IDL
- * has it now → as it was. TEMPORARY, like the frontend's `LEGACY_SEED_PATHS` (momoswap-frontend#449).
- *
- * anchor-launchpad-momoswap#111 moved the collection NFT from the creator's token account to the
- * collection authority's: the backend (momoswap-backend#333) builds the creator's ATA until it sees the
- * upgraded binary. Remove this entry once #111 is deployed on `momoDc2L…` and `/v1/nft/status` reports
- * `collectionNftHolder: "program"`.
- */
-const LEGACY_SEED_PATHS: Readonly<Record<string, Record<string, Record<string, string>>>> = {
-  create_collection: { collection_token_account: { collection_authority: "creator" } },
-};
 
 /** The default pubkey: the program's "no royalty partner". */
 const NO_PARTNER = "11111111111111111111111111111111";
@@ -215,16 +201,50 @@ function argSize(type: unknown): number | null {
   return arr && arr[0] === "u8" ? arr[1] : null;
 }
 
-/** An argument's bytes in the instruction data: after the discriminator and every argument before it. */
-function argBytes(spec: IdlInstruction, data: Uint8Array, name: string): Uint8Array {
+/**
+ * Bytes a vec of fixed-size elements takes at `offset` (its u32 length, then the elements), or null
+ * for a type that is not one.
+ */
+function vecSize(type: unknown, data: Uint8Array, offset: number): number | null {
+  const el = argSize((type as { vec?: unknown })?.vec);
+  if (el === null || offset + 4 > data.length) return null;
+  const len = Buffer.from(data.subarray(offset, offset + 4)).readUInt32LE(0);
+  return 4 + len * el;
+}
+
+/**
+ * Where each argument's bytes start in the instruction data, and where the last one ends. A vec of
+ * fixed-size elements (`request_mint`'s allowlist proof) is sized by its own length prefix.
+ */
+function argLayout(
+  spec: IdlInstruction,
+  data: Uint8Array,
+  upTo?: string,
+): { at: Map<string, number>; end: number } {
+  const at = new Map<string, number>();
   let offset = 8;
   for (const a of spec.args) {
-    const size = argSize(a.type);
-    if (size === null) throw new Error(`${spec.name}: ${name} sits after a variable-size argument`);
-    if (a.name === name) return data.slice(offset, offset + size);
+    if (a.name === upTo) {
+      at.set(a.name, offset);
+      return { at, end: offset };
+    }
+    const size = argSize(a.type) ?? vecSize(a.type, data, offset);
+    if (size === null) throw new Error(`${spec.name}: ${a.name} has a size cookie-mcp cannot read`);
+    at.set(a.name, offset);
     offset += size;
   }
-  throw new Error(`${spec.name} has no argument ${name}`);
+  return { at, end: offset };
+}
+
+/** An argument's bytes in the instruction data: after the discriminator and every argument before it. */
+function argBytes(spec: IdlInstruction, data: Uint8Array, name: string): Uint8Array {
+  const arg = spec.args.find((a) => a.name === name);
+  if (!arg) throw new Error(`${spec.name} has no argument ${name}`);
+  const size = argSize(arg.type);
+  if (size === null) throw new Error(`${spec.name}: ${name} is not a fixed-size argument`);
+  const offset = argLayout(spec, data, name).at.get(name)!;
+  if (offset + size > data.length) throw new Error(`${spec.name}: its data ends inside ${name}`);
+  return data.slice(offset, offset + size);
 }
 
 /**
@@ -412,21 +432,7 @@ export function assertNftBuild(tx: Transaction, kind: NftKind, known: NftExpecta
           ? new PublicKey(seedBytes(c, want.pda.program, want.name))
           : new PublicKey(NFT_PROGRAM_ID);
         const [derived] = PublicKey.findProgramAddressSync(seeds, program);
-        // TEMPORARY (see LEGACY_SEED_PATHS): the address the same seeds derived before the upgrade.
-        const legacy = LEGACY_SEED_PATHS[spec.name]?.[want.name];
-        const derivedBefore = legacy
-          ? PublicKey.findProgramAddressSync(
-              want.pda.seeds.map((s) =>
-                seedBytes(
-                  c,
-                  s.kind === "account" && legacy[s.path] ? { ...s, path: legacy[s.path]! } : s,
-                  want.name,
-                ),
-              ),
-              program,
-            )[0].toBase58()
-          : undefined;
-        if (derived.toBase58() !== got.pubkey && derivedBefore !== got.pubkey) {
+        if (derived.toBase58() !== got.pubkey) {
           throw no(`${where}: ${want.name} is ${got.pubkey}, not the address its seeds derive`);
         }
       }
@@ -501,6 +507,24 @@ export function assertNftBuild(tx: Transaction, kind: NftKind, known: NftExpecta
         throw no(
           `${where} accepts a cost of up to ${maxCost}, more than the ${known.maxCost} approved`,
         );
+      }
+    }
+    if (spec.name === "request_mint") {
+      // The proof is a length-prefixed vec, so the slot's place depends on it: the data has to end
+      // exactly after the slot, and the slot has to be one the program has (it re-derives the
+      // request address from it above).
+      let end: number;
+      try {
+        end = argLayout(spec, c.data).end;
+      } catch (e) {
+        throw no(`${where}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      if (c.data.length !== end) {
+        throw no(`${where} carries ${c.data.length} bytes of data, expected ${end}`);
+      }
+      const slotByte = argBytes(spec, c.data, "request_slot")[0]!;
+      if (slotByte >= MAX_OPEN_REQUESTS) {
+        throw no(`${where} takes request slot ${slotByte}; the program has ${MAX_OPEN_REQUESTS}`);
       }
     }
     if (spec.name === "sell_nft" && known.minProceeds !== undefined) {

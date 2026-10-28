@@ -35,6 +35,9 @@ import {
   buildWithdrawIx,
   type Creator,
 } from "./auctionHouse";
+import { buildNftListTx } from "../nftLaunchpad/api";
+import { readNftFeeWallet } from "../nftLaunchpad/chain";
+import { verifyMomoListing } from "./momoListing";
 import {
   fetchListings,
   fetchNft,
@@ -374,10 +377,14 @@ export interface NftTxResult {
 }
 
 /** List an NFT you own for sale at `price` COOK. */
-export async function listNft(args: {
-  mint: string;
-  price: string | number;
-}): Promise<NftTxResult> {
+export async function listNft(args: { mint: string; price: string | number }): Promise<
+  NftTxResult & {
+    via?: "momoswap";
+    listingFee?: { amount: string; symbol: string };
+    youReceive?: { amount: string; symbol: string };
+    note?: string;
+  }
+> {
   const signer = requireSigner();
   const seller = signer.publicKey;
   const conn = getConnection();
@@ -386,20 +393,96 @@ export async function listNft(args: {
 
   const sellerTokenAccount = nftTokenAccount(mint, seller);
   const sell = buildSellIx({ seller, sellerTokenAccount, nftMint: mint, price: priceLamports });
-  const signature = await sendNftTx(conn, [sell], signer, {
-    type: "list",
-    nftMint: args.mint,
-    price: priceLamports.toString(),
-  });
+  const log: BazaarLog = { type: "list", nftMint: args.mint, price: priceLamports.toString() };
 
+  // Direct first: Auction House's own `sell`, no fee. Only when it would fail is MomoSwap's listing
+  // (the same `sell` behind its listing fee) tried, for a MomoSwap drop's item.
+  const directFailure = await simulationFailure(conn, [sell], seller);
+  if (directFailure === null) {
+    const signature = await sendNftTx(conn, [sell], signer, log);
+    return listed(signature, args.mint, priceLamports);
+  }
+  const momo = await listThroughMomoSwap(conn, signer, mint, priceLamports, log, directFailure);
+  return {
+    ...listed(momo.signature, args.mint, priceLamports),
+    via: "momoswap",
+    listingFee: { amount: cookUi(momo.feeRaw), symbol: COOK_SYMBOL },
+    ...(momo.youReceiveRaw
+      ? { youReceive: { amount: cookUi(momo.youReceiveRaw), symbol: COOK_SYMBOL } }
+      : {}),
+    note: `the direct Baked Bazaar listing would have failed (${directFailure}), so it was listed through MomoSwap, which charges a listing fee`,
+  };
+}
+
+function listed(signature: string, mint: string, price: bigint): NftTxResult {
   return {
     signature,
     action: "list",
-    mint: args.mint,
-    price: { amount: cookUi(priceLamports), symbol: COOK_SYMBOL },
+    mint,
+    price: { amount: cookUi(price), symbol: COOK_SYMBOL },
     explorerUrl: explorerTxUrl(signature),
-    url: listingUrl(args.mint),
+    url: listingUrl(mint),
   };
+}
+
+/** Why `ixs` would fail if sent now, or null when they simulate. Nothing is signed. */
+async function simulationFailure(
+  conn: Connection,
+  ixs: TransactionInstruction[],
+  payer: PublicKey,
+): Promise<string | null> {
+  const tx = new Transaction().add(...ixs);
+  tx.recentBlockhash = (await conn.getLatestBlockhash("confirmed")).blockhash;
+  tx.feePayer = payer;
+  const sim = await conn.simulateTransaction(tx);
+  if (!sim.value.err) return null;
+  const logs = sim.value.logs ?? [];
+  return logs.length ? logs.slice(-2).join(" | ") : JSON.stringify(sim.value.err);
+}
+
+/**
+ * List through MomoSwap's `/v1/nft/tx/list`: its build is verified against our own `sell` and a fee
+ * bounded by MomoSwap's default, paid to the NFT program's fee wallet as the chain names it, then
+ * rebuilt from our own instructions and sent like any listing (simulated first).
+ */
+async function listThroughMomoSwap(
+  conn: Connection,
+  signer: TxSigner,
+  mint: PublicKey,
+  price: bigint,
+  log: BazaarLog,
+  directFailure: string,
+): Promise<{ signature: string; feeRaw: bigint; youReceiveRaw: string | null }> {
+  const seller = signer.publicKey;
+  let built;
+  try {
+    built = await buildNftListTx({
+      wallet: seller.toBase58(),
+      nftMint: mint.toBase58(),
+      priceRaw: price.toString(),
+    });
+  } catch (e) {
+    throw new CookieMcpError(
+      `listing would fail on Baked Bazaar (${directFailure}), and MomoSwap's listing is not available for it either (${e instanceof Error ? e.message : String(e)})`,
+      "check that this wallet holds the NFT in its main token account and it is not already listed; nothing was sent",
+    );
+  }
+  const feeWallet = await readNftFeeWallet(conn);
+  if (!feeWallet) {
+    throw new CookieMcpError(
+      `listing would fail on Baked Bazaar (${directFailure}), and MomoSwap's fee wallet could not be read to check its listing`,
+      "retry later; nothing was sent",
+    );
+  }
+  let tx: Transaction;
+  try {
+    tx = Transaction.from(Buffer.from(built.transactionBase64, "base64"));
+  } catch {
+    throw new CookieMcpError("the listing transaction MomoSwap returned was malformed", "retry");
+  }
+  const verified = verifyMomoListing(tx, { seller, mint, price, feeWallet });
+  const signature = await sendNftTx(conn, verified.ixs, signer, log);
+  return { signature, feeRaw: verified.feeRaw, youReceiveRaw: built.youReceiveRaw ?? null };
 }
 
 /** Cancel your active listing for an NFT. */

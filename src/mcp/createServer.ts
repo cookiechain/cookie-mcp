@@ -1442,7 +1442,9 @@ export function createServer(): McpServer {
         "(fee included, price per item), the post-graduation request price, floor and wind-down refund, " +
         "graduation target, royalty — and, for `owner` (default: this wallet), the items held, what " +
         "selling one back would pay now, and the exit that applies in this phase. If the wallet " +
-        "created the drop, its unclaimed proceeds. Read-only.",
+        "created the drop, its unclaimed proceeds and, after a target graduation, the part of its " +
+        "share still held back (`creatorHeldBack`: released as items mint, forfeited after its " +
+        "deadline). Read-only.",
       inputSchema: {
         collection: z.string().min(32).max(44).describe(DROP_REF),
         count: z
@@ -1472,7 +1474,9 @@ export function createServer(): McpServer {
         "capped at `maxCookPerItem` (fee included) — or, without it, the current price plus " +
         "`slippageBps` (default 100 = 1%) — and the program refuses to charge more. After a drop " +
         "graduates at its target, a mint is a REQUEST: you pay now and a keeper settles a random " +
-        "remaining item within seconds (count must be 1). The art stays hidden until the sale ends." +
+        "remaining item within seconds. A wallet may hold up to 10 requests open per drop, so `count` " +
+        "places that many, one transaction each (an external signer places one per call). The art " +
+        "stays hidden until the sale ends." +
         SIGNING_NOTE,
       inputSchema: {
         collection: z.string().min(32).max(44).describe(DROP_REF),
@@ -1588,13 +1592,14 @@ export function createServer(): McpServer {
       description:
         "After a drop graduates at its target, each mint is a request a keeper settles with a random " +
         "item. When nft_drop_mint returned `pending` and the item still hasn't arrived, this pushes " +
-        "the drop's FIFO mint queue up to this wallet's request: each head whose randomness is ready " +
+        "the drop's FIFO mint queue through this wallet's open requests (up to 10 per drop, all reported " +
+        "in `yourRequests`): each head whose randomness is ready " +
         "is settled (its buyer gets the drawn item), each whose randomness expired (~3 minutes) is " +
         "refunded (its buyer gets price + fee back). Requests ahead of yours go to THEIR buyers, never " +
         "to you; you pay only network fees (a settle's rent is repaid in the same transaction, a refund " +
         "may open the buyer's wCOOK account). Up to " +
         MAX_SETTLE_STEPS +
-        " heads per call; call again if `yourRequest.status` is still pending." +
+        " heads per call; call again while any of `yourRequests` is still pending." +
         SIGNING_NOTE,
       inputSchema: {
         collection: z.string().min(32).max(44).describe(DROP_REF),
@@ -2055,7 +2060,10 @@ export function createServer(): McpServer {
       description:
         "List an NFT you own for sale on Baked Bazaar at `price` COOK (creates the auction-house sell " +
         "order). Simulates before sending; signs locally. Requires COOKIE_PRIVATE_KEY. The 1% " +
-        "marketplace fee and creator royalties are taken from the sale proceeds when it sells.",
+        "marketplace fee and creator royalties are taken from the sale proceeds when it sells. If the " +
+        "direct listing would fail and the NFT is a MomoSwap drop's item, it is listed through " +
+        'MomoSwap instead (`via: "momoswap"`): the same Baked Bazaar listing, plus MomoSwap\'s listing ' +
+        "fee paid now (1% of the price, at least 0.001 COOK, never more), reported as `listingFee`.",
       inputSchema: {
         mint: z.string().min(32).max(44).describe("the NFT mint you own"),
         price: z

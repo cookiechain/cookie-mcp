@@ -26,12 +26,14 @@ src/
     launchpad/         #   MomoSwap launchpad: api (HTTP client) + curve (quote math) + positions (PDAs)
                        #   + program (which deployment: PDA scope + error-code build)
     nftLaunchpad/      #   MomoSwap NFT drops: api + verify (builds held to the vendored IDL) + curve
-                       #   (drop design + graduation target) + art (local art folder) + index (tools)
+                       #   (drop design + graduation target) + art (local art folder) + chain (escrow,
+                       #   fee wallet read from program accounts) + index (tools)
     domains/           #   CookOven `.cook` names: names (rules + pricing) + program (ixs/PDAs/decode)
                        #   + marketplace (market.cookoven.xyz ixs/PDAs/decode) + market (listings, buy/
                        #   sell ops) + shared (reads both halves need — escrow awareness lives here)
     liquidity/         #   create/add/remove/lock/claim across damm, cpAmm, clmm, cookieswap
-    nft/               #   Baked Bazaar: auctionHouse (writes) + bazaar (reads)
+    nft/               #   Baked Bazaar: auctionHouse (writes) + bazaar (reads) + momoListing (MomoSwap's
+                       #   listing build, verified, as list_nft's fallback)
   idl/                 # committed IDLs (cp_amm, whirlpool, cookie_domains, momo_nft_launchpad, …)
 scripts/               # smoke.ts (boots server, asserts tool count) + verify-*.ts (live checks)
 ```

@@ -1,3 +1,4 @@
+import { PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
 import type { NftCollection } from "./api";
@@ -9,10 +10,13 @@ import {
   fitSlippage,
   holderExit,
   mapDropSummary,
+  mintRequestAddresses,
+  mintRequestPda,
   nftSimError,
   planNftDrop,
   refundBudget,
   requestBudget,
+  requestUnitTotals,
   settleBudget,
   spendCap,
 } from "./index";
@@ -331,5 +335,41 @@ describe("planNftDrop", () => {
     expect(() => planNftDrop({ ...base, durationHours: 169 }, 10, week, NOW)).toThrow(
       /mint window may run at most 168 hours \(7 days\)/,
     );
+  });
+});
+
+describe("request slots (anchor #117)", () => {
+  const COLLECTION = "Ez1qjJ32rdhUcXNAhuajPHKQswCcjJ93KhEaJRYEfPYw";
+  const BUYER = "4GGk4vTDd1FCA4NHd62xcwcab86KAm6dFtG7zrGKSGUx";
+
+  it("seeds a slotted request with its slot as one byte, and keeps the unslotted address apart", () => {
+    const program = new PublicKey("momoDc2LHwe2Eymo4gK1jg5gAJcjjLGWW1hAaSKAGHb");
+    const seeds = [
+      Buffer.from("mint_request"),
+      new PublicKey(COLLECTION).toBuffer(),
+      new PublicKey(BUYER).toBuffer(),
+    ];
+    expect(mintRequestPda(COLLECTION, BUYER, 7)).toBe(
+      PublicKey.findProgramAddressSync([...seeds, Buffer.from([7])], program)[0].toBase58(),
+    );
+    expect(mintRequestPda(COLLECTION, BUYER, null)).toBe(
+      PublicKey.findProgramAddressSync(seeds, program)[0].toBase58(),
+    );
+  });
+
+  it("looks for a wallet's requests at all ten slots and the unslotted address", () => {
+    const all = mintRequestAddresses(COLLECTION, BUYER);
+    expect(all).toHaveLength(11);
+    expect(new Set(all).size).toBe(11);
+    expect(all[0]).toBe(mintRequestPda(COLLECTION, BUYER, 0));
+    expect(all[10]).toBe(mintRequestPda(COLLECTION, BUYER, null));
+  });
+
+  it("splits a batch quote's fee over its requests, never undercounting one", () => {
+    // 2% fee on 100 + 101 + 102 = 303 → 6.06, quoted floored as 6.
+    const totals = requestUnitTotals(["100", "101", "102"], "303", "6");
+    expect(totals).toEqual([102n, 103n, 105n]);
+    expect(totals.reduce((a, b) => a + b, 0n)).toBeGreaterThanOrEqual(309n);
+    expect(requestUnitTotals(["5"], "0", "0")).toEqual([5n]);
   });
 });

@@ -1894,29 +1894,14 @@
         },
         {
           "name": "buyer",
-          "docs": ["of the request back."],
+          "docs": ["request back."],
           "writable": true,
           "relations": ["request"]
         },
         {
           "name": "request",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [109, 105, 110, 116, 95, 114, 101, 113, 117, 101, 115, 116]
-              },
-              {
-                "kind": "account",
-                "path": "collection"
-              },
-              {
-                "kind": "account",
-                "path": "buyer"
-              }
-            ]
-          }
+          "docs": ["By account, not by seeds, as on `SettleMint`."],
+          "writable": true
         },
         {
           "name": "minter",
@@ -1993,8 +1978,9 @@
         "The buyer also deposits the rent of the item's four accounts (and Token Metadata's fee), as a",
         "`buy_nft` buyer pays them, so whoever settles is repaid and the buyer gets the rest back.",
         "",
-        "One open request per buyer per drop. The first request after graduation opens the queue and",
-        "pays its rent.",
+        "Up to `MAX_OPEN_REQUESTS` open requests per buyer per drop, one per `request_slot`; a",
+        "request slot is free again once its request settles or is refunded. The first request after",
+        "graduation opens the queue and pays its rent.",
         "",
         "Refused (`CreatorEscrowForfeitDue`) while the creator's held-back share is due to be",
         "forfeited (#99): send `forfeit_creator_escrow` first."
@@ -2058,7 +2044,8 @@
         {
           "name": "request",
           "docs": [
-            "`init`, not `init_if_needed`: a buyer with a pending request must wait for it to resolve."
+            "`init`, not `init_if_needed`: a request slot with a pending request is taken until it",
+            "resolves. The handler bounds `request_slot` to `0..MAX_OPEN_REQUESTS`."
           ],
           "writable": true,
           "pda": {
@@ -2074,6 +2061,10 @@
               {
                 "kind": "account",
                 "path": "buyer"
+              },
+              {
+                "kind": "arg",
+                "path": "request_slot"
               }
             ]
           }
@@ -2145,6 +2136,10 @@
               "array": ["u8", 32]
             }
           }
+        },
+        {
+          "name": "request_slot",
+          "type": "u8"
         }
       ]
     },
@@ -2714,29 +2709,20 @@
         },
         {
           "name": "buyer",
-          "docs": ["the unspent part of the deposit."],
+          "docs": ["unspent part of the deposit."],
           "writable": true,
           "relations": ["request"]
         },
         {
           "name": "request",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [109, 105, 110, 116, 95, 114, 101, 113, 117, 101, 115, 116]
-              },
-              {
-                "kind": "account",
-                "path": "collection"
-              },
-              {
-                "kind": "account",
-                "path": "buyer"
-              }
-            ]
-          }
+          "docs": [
+            "By account, not by seeds: a `MintRequest` only ever comes into existence at one of this",
+            "program's request addresses, and `has_one` pins whose it is (`collection`: a request of",
+            "another drop is refused even when both queues stand at the same nonce). Seeds would say which",
+            "request slot it is in, which nothing here needs, and would strand a request opened before the",
+            "request-slot seed existed."
+          ],
+          "writable": true
         },
         {
           "name": "slot_hashes",
@@ -3618,6 +3604,11 @@
       "code": 6062,
       "name": "EscrowDeadlineTooClose",
       "msg": "Post-graduation mints pause in the last 10 minutes before the creator's held-back share is forfeited"
+    },
+    {
+      "code": 6063,
+      "name": "RequestSlotOutOfRange",
+      "msg": "A request slot is 0 to 9: a wallet holds at most 10 open mint requests on a drop"
     }
   ],
   "types": [
@@ -4815,9 +4806,11 @@
     {
       "name": "MintRequest",
       "docs": [
-        "One buyer's pending post-graduation mint. Seeds: `[\"mint_request\", collection, buyer]`, so a",
-        "buyer has at most one at a time. Created by `request_mint`, closed by `settle_mint` or",
-        "`refund_mint`."
+        "One of a buyer's pending post-graduation mints. Seeds: `[\"mint_request\", collection, buyer,",
+        "request_slot]` with `request_slot` in `0..MAX_OPEN_REQUESTS`, so a buyer has at most that many",
+        "open at a time (one more while a request from before the request-slot seed, at `[\"mint_request\",",
+        "collection, buyer]`, is still pending). Created by `request_mint`, closed by `settle_mint` or",
+        "`refund_mint`, which take it by account."
       ],
       "type": {
         "kind": "struct",

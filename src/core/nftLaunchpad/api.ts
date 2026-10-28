@@ -112,6 +112,8 @@ export interface NftStatus {
   collectionNftHolder?: "creator" | "program";
   targetGraduation?: boolean;
   targetGraduationLimits?: { minBps: number; maxBps: number; maxSupply: number };
+  /** Post-graduation requests one wallet may hold open, and so build at once: 10 with slots (#117), else 1. */
+  requestBatch?: number;
   storage?: { provider: string; configured: boolean; reachable: boolean | null };
 }
 
@@ -169,8 +171,13 @@ export interface NftBuiltBuy extends NftBuiltTx {
 }
 
 export interface NftBuiltRequest extends NftBuiltTx {
-  /** The buyer's `MintRequest` PDA, reused for every request this wallet makes on this drop. */
+  /** The buyer's `MintRequest` PDA for the slot this request takes. */
   request: string;
+  /**
+   * Which of the buyer's request slots it takes (0..9, anchor #117): the first free one. Null from a
+   * backend building for the binary before slots, which had one request per buyer per drop.
+   */
+  slot?: number | null;
   /** The nonce this request gets is at least this; it picks the request out of the PDA's history. */
   minNonce: string;
   costRaw: string;
@@ -212,6 +219,30 @@ export interface NftBuiltCreate extends NftBuiltTx {
   mint: string;
   collection: string;
   graduationTarget: { targetRaw: string; bps: number; selloutRaiseRaw: string } | null;
+}
+
+/** One request of a `/tx/request-mint-many` batch: its own transaction, slot and spend. */
+export interface NftBuiltRequestItem extends NftBuiltTx {
+  request: string;
+  slot: number;
+  minNonce: string;
+  costRaw: string;
+  feeRaw: string;
+  totalRaw: string;
+  maxCostRaw: string;
+  /** The `max_cost` its instruction carries, at most `maxSpendRaw`. */
+  maxCostArgRaw: string;
+  maxSpendRaw: string;
+  queueAhead: string;
+}
+
+/** `/tx/request-mint-many`: up to ten requests, to be sent in order. */
+export interface NftBuiltRequestMany {
+  items: NftBuiltRequestItem[];
+  /** Why fewer were built than asked for. */
+  cutShort?: "sold-out" | "requests-open" | "wallet-cap" | "price-moved";
+  remaining: string;
+  deposits?: NftBuiltRequest["deposits"];
 }
 
 /** The queue head a settle build acts on, and the item drawn for it. */
@@ -384,10 +415,16 @@ export async function fetchNftSellQuote(
   );
 }
 
-/** After a target graduation: what one `request_mint` charges now (curve, floor and lock bounds). */
+/**
+ * After a target graduation: what `count` requests charge now (curve, floor and lock bounds), request k
+ * priced one unit further along the path, as a batch landing in order is. `units` may be fewer than
+ * asked: at most the deployed program's open-request limit and what is left.
+ */
 export interface NftRequestQuote {
   side: "request";
-  units: 1;
+  units: number;
+  /** Each request's price, fee excluded. */
+  unitCostsRaw?: string[];
   costRaw: string;
   feeRaw: string;
   totalRaw: string;
@@ -400,8 +437,10 @@ export interface NftRequestQuote {
 export async function fetchNftRequestQuote(
   collectionMint: string,
   slippageBps?: number,
+  count = 1,
 ): Promise<NftRequestQuote> {
   const q = new URLSearchParams({ side: "request" });
+  if (count > 1) q.set("count", String(count));
   if (slippageBps !== undefined) q.set("slippageBps", String(slippageBps));
   return get<NftRequestQuote>(
     `/collection/${encodeURIComponent(collectionMint)}/quote?${q}`,
@@ -458,6 +497,38 @@ export async function buildNftRequestMintTx(body: {
   slippageBps?: number;
 }): Promise<NftBuiltRequest> {
   return post<NftBuiltRequest>("/tx/request-mint", body, "NFT mint request build");
+}
+
+/**
+ * Several post-graduation requests for one wallet, one transaction each, each in its own request slot
+ * (anchor #117). `maxSpendRaw` lists one all-in spend per request, in order.
+ */
+export async function buildNftRequestMintManyTx(body: {
+  buyer: string;
+  collectionMint: string;
+  maxSpendRaw: string[];
+}): Promise<NftBuiltRequestMany> {
+  return post<NftBuiltRequestMany>("/tx/request-mint-many", body, "NFT mint requests build");
+}
+
+/** `/tx/list`: MomoSwap's Baked Bazaar listing, its listing fee and Auction House's `sell` in one transaction. */
+export interface NftBuiltListing extends NftBuiltTx {
+  priceRaw: string;
+  feeRaw: string;
+  feeWallet: string;
+  venueFeeBps: number;
+  royaltyBps: number;
+  /** What a sale at the price pays the seller, after the royalty and the house fee. */
+  youReceiveRaw: string;
+  tradeState: string;
+}
+
+export async function buildNftListTx(body: {
+  wallet: string;
+  nftMint: string;
+  priceRaw: string;
+}): Promise<NftBuiltListing> {
+  return post<NftBuiltListing>("/tx/list", body, "MomoSwap listing build");
 }
 
 export async function buildNftSellTx(body: {

@@ -386,9 +386,10 @@ until the sale ends.
 
 - `nft_drop_mint` mints 1–10 items, one transaction each, each capped at `maxCookPerItem` (fee
   included) or the quote plus `slippageBps` (default 1%). After a drop graduates at its target, a mint
-  is a request a keeper settles with a random remaining item.
-- `nft_drop_settle` is for when that request stays `pending`: it pushes the drop's FIFO mint queue up
-  to your request, settling each head whose randomness is ready and refunding each whose randomness
+  is a request a keeper settles with a random remaining item; a wallet may hold up to 10 open per drop,
+  so `count` places that many.
+- `nft_drop_settle` is for when a request stays `pending`: it pushes the drop's FIFO mint queue through
+  all of your open requests, settling each head whose randomness is ready and refunding each whose randomness
   expired (~3 minutes). Requests ahead of yours pay out to their own buyers; you pay only the fee.
 - `nft_drop_sell` sells an item back to the curve while the drop is live (the guaranteed exit).
 - `nft_drop_redeem` burns an item for the permanent floor after graduation, or for the pro-rata refund
@@ -419,7 +420,8 @@ full-range position by default.
 **NFT marketplace** (need `COOKIE_PRIVATE_KEY`, [Baked Bazaar](https://bakedbazaar.art)): `buy_nft`,
 `list_nft`, `cancel_listing`, `make_offer`, `accept_offer`, `cancel_offer`. Built on the Cookie Chain
 Metaplex Auction House (1% marketplace fee + creator royalties); every action is built and signed
-locally.
+locally. If a direct listing would fail and the NFT is a MomoSwap drop's item, `list_nft` lists it
+through MomoSwap instead, which adds its listing fee (1%, at least 0.001 COOK; checked before signing).
 
 **Lending** ([Aera](https://aera.cook), the overcollateralised COOK money market): `get_lending_markets`
 (every reserve: supplied / borrowed / available, supply and borrow APR, caps, collateral terms, oracle

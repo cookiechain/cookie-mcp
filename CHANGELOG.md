@@ -17,6 +17,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   refuses locked, empty, already-ratcheted or over-wide positions and a sell of a token the position
   no longer holds. Every order's status predicts the keeper's next move from the program's own edge
   rule. Also importable from the library entry (`cookie-mcp`).
+- **Several post-graduation NFT mint requests at once.** MomoSwap's NFT program now lets a wallet hold
+  up to 10 requests open per drop (anchor-launchpad-momoswap#117), so `nft_drop_mint` with `count` > 1
+  on a target-graduated drop places that many through `/v1/nft/tx/request-mint-many`, one transaction
+  each, each verified and simulated on its own before it is signed.
+- **`list_nft` falls back to MomoSwap's own listing.** When the direct Baked Bazaar listing would fail
+  and the NFT is a MomoSwap drop's item, it is listed through MomoSwap (`/v1/nft/tx/list`): the same
+  Auction House `sell` plus MomoSwap's listing fee. The build is held to our own `sell` and a fee of at
+  most 1% (0.001 COOK minimum) paid to the NFT program's fee wallet as the chain names it, then rebuilt
+  from our own instructions. The result says `via: "momoswap"` and the fee paid.
+- **`get_nft_drop` shows a creator's held-back share.** After a target graduation the program holds
+  part of the creator's share back (anchor-launchpad-momoswap#115), releasing it as items mint and
+  forfeiting what is left after a deadline; the creator's view reports both as `creatorHeldBack`.
 
 - **MomoSwap NFT launchpad.** Eight tools for NFT drops on a COOK bonding curve: `get_nft_drops` and
   `get_nft_drop` (reads), `nft_drop_mint` (curve mints, or a random request after a target
@@ -41,6 +53,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Post-graduation NFT mints, settles and refunds work with MomoSwap's request slots.** The deployed
+  NFT program (anchor-launchpad-momoswap#117) gives `request_mint` a request slot that seeds the
+  request address, and takes the request by account on `settle_mint` / `refund_mint`. The IDL is
+  refreshed to anchor main `08c149c`, so the slotted builds the API now returns are verified instead of
+  refused, and `nft_drop_settle` finds this wallet's requests in all ten slots (and the old unslotted
+  address) and pushes the queue through every one. Error 6063 gets a hint. The temporary acceptance of
+  the creator's token account for a new drop's collection NFT is removed: `/v1/nft/status` reports
+  `collectionNftHolder: "program"`.
 - **MomoSwap launch with a dev buy works again.** MomoSwap moved both launchpad treasury fields to its
   Squads vault, so the pinned create-pool lookup table `CawUNM…` no longer matched the live Config and
   every create + dev-buy build was refused. The pin is now the frozen table `9vExLr84…`, whose keys [3]
