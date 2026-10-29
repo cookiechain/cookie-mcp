@@ -70,6 +70,7 @@ import {
   type NftBuiltRefund,
   type NftBuiltRequest,
   type NftBuiltRequestItem,
+  type NftBuiltRequestMany,
   type NftBuiltSettle,
   type NftBuiltTx,
   type NftCollection,
@@ -991,15 +992,6 @@ async function requestMints(
     return { ...base, status: "pending" };
   });
   const spent = placed.reduce((sum, p) => sum + BigInt(p.item.totalRaw), 0n);
-  const short =
-    built.items.length < count
-      ? {
-          "sold-out": "every remaining unit is minted or requested",
-          "requests-open": "this wallet's other request slots are still taken",
-          "wallet-cap": "the drop's per-wallet limit",
-          "price-moved": "the price moved past what the later requests were allowed",
-        }[built.cutShort ?? "price-moved"]
-      : null;
   return {
     drop: c.name,
     collectionMint: c.collectionMint,
@@ -1007,10 +999,13 @@ async function requestMints(
     placed: placed.length,
     requests,
     spent: { amount: cook(spent), symbol: COOK_SYMBOL },
-    ...(affordable.length < count
-      ? { capped: `maxCookPerItem covers ${affordable.length} of ${count}` }
-      : {}),
-    ...(short && affordable.length === count ? { cutShort: short } : {}),
+    ...requestShortfall({
+      count,
+      quoted: totals.length,
+      affordable: affordable.length,
+      built: built.items.length,
+      cutShort: built.cutShort,
+    }),
     ...(stoppedEarly ? { stoppedEarly } : {}),
     links: { drop: nftDropUrl(c.collectionMint) },
     ...(requests.some((r) => r.status === "pending")
@@ -1022,6 +1017,37 @@ async function requestMints(
         }
       : {}),
   };
+}
+
+/**
+ * Why a batch of requests is shorter than asked, from the stage that cut it: the quote (fewer units
+ * than asked: the drop has fewer left, or a backend that quotes one at a time), `maxCookPerItem`
+ * (each request costs a little more than the last), or the build. Pure.
+ */
+export function requestShortfall(n: {
+  count: number;
+  quoted: number;
+  affordable: number;
+  built: number;
+  cutShort?: NftBuiltRequestMany["cutShort"];
+}): { capped?: string; cutShort?: string } {
+  const reasons = {
+    "sold-out": "every remaining unit is minted or requested",
+    "requests-open": "this wallet's other request slots are still taken",
+    "wallet-cap": "the drop's per-wallet limit",
+    "price-moved": "the price moved past what the later requests were allowed",
+  };
+  if (n.quoted < n.count) {
+    return {
+      cutShort: `the quote covers ${n.quoted} of ${n.count}: ${n.cutShort ? reasons[n.cutShort] : "fewer are left to request"}`,
+    };
+  }
+  // Without a cap every quoted request is affordable by construction (its spend is its own total
+  // plus the slippage), so a shortfall here is the cap's.
+  if (n.affordable < n.count)
+    return { capped: `maxCookPerItem covers ${n.affordable} of ${n.count}` };
+  if (n.built < n.count) return { cutShort: reasons[n.cutShort ?? "price-moved"] };
+  return {};
 }
 
 // ── sell back / redeem ───────────────────────────────────────────────────────

@@ -33,7 +33,7 @@ src/
                        #   sell ops) + shared (reads both halves need — escrow awareness lives here)
     liquidity/         #   create/add/remove/lock/claim across damm, cpAmm, clmm, cookieswap
     nft/               #   Baked Bazaar: auctionHouse (writes) + bazaar (reads) + momoListing (MomoSwap's
-                       #   listing build, verified, as list_nft's fallback)
+                       #   listing build, verified, list_nft's `via: "momoswap"`)
   idl/                 # committed IDLs (cp_amm, whirlpool, cookie_domains, momo_nft_launchpad, …)
 scripts/               # smoke.ts (boots server, asserts tool count) + verify-*.ts (live checks)
 ```

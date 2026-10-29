@@ -1,5 +1,5 @@
-// MomoSwap's own Baked Bazaar listing (`POST /v1/nft/tx/list`), the fallback `list_nft` takes when the
-// direct Auction House `sell` does not simulate. MomoSwap builds the same `sell` behind a listing fee
+// MomoSwap's own Baked Bazaar listing (`POST /v1/nft/tx/list`), what `list_nft` takes on request
+// (`via: "momoswap"`), never on its own. MomoSwap builds the same `sell` behind a listing fee
 // paid to the NFT program's fee wallet, in one transaction: momoswap-backend `listing-tx.ts` (the fee is
 // `NFT_LISTING_FEE_BPS` of the price, default 1%, at least 0.001 COOK).
 //

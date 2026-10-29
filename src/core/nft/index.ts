@@ -376,13 +376,21 @@ export interface NftTxResult {
   url: string;
 }
 
-/** List an NFT you own for sale at `price` COOK. */
-export async function listNft(args: { mint: string; price: string | number }): Promise<
+/**
+ * List an NFT you own for sale at `price` COOK: Auction House's own `sell`, no fee. With
+ * `via: "momoswap"`, MomoSwap's listing of a drop's item instead (`/v1/nft/tx/list`): the same `sell`
+ * behind MomoSwap's listing fee, which is paid now. The two listings are the same instruction, so the
+ * venue route is never taken on its own: it cannot rescue a listing that fails, only add the fee.
+ */
+export async function listNft(args: {
+  mint: string;
+  price: string | number;
+  via?: "momoswap";
+}): Promise<
   NftTxResult & {
     via?: "momoswap";
     listingFee?: { amount: string; symbol: string };
     youReceive?: { amount: string; symbol: string };
-    note?: string;
   }
 > {
   const signer = requireSigner();
@@ -390,28 +398,23 @@ export async function listNft(args: { mint: string; price: string | number }): P
   const conn = getConnection();
   const mint = new PublicKey(args.mint);
   const priceLamports = toLamports(args.price, "price");
-
-  const sellerTokenAccount = nftTokenAccount(mint, seller);
-  const sell = buildSellIx({ seller, sellerTokenAccount, nftMint: mint, price: priceLamports });
   const log: BazaarLog = { type: "list", nftMint: args.mint, price: priceLamports.toString() };
 
-  // Direct first: Auction House's own `sell`, no fee. Only when it would fail is MomoSwap's listing
-  // (the same `sell` behind its listing fee) tried, for a MomoSwap drop's item.
-  const directFailure = await simulationFailure(conn, [sell], seller);
-  if (directFailure === null) {
-    const signature = await sendNftTx(conn, [sell], signer, log);
-    return listed(signature, args.mint, priceLamports);
+  if (args.via === "momoswap") {
+    const momo = await listThroughMomoSwap(conn, signer, mint, priceLamports, log);
+    return {
+      ...listed(momo.signature, args.mint, priceLamports),
+      via: "momoswap",
+      listingFee: { amount: cookUi(momo.feeRaw), symbol: COOK_SYMBOL },
+      ...(momo.youReceiveRaw
+        ? { youReceive: { amount: cookUi(momo.youReceiveRaw), symbol: COOK_SYMBOL } }
+        : {}),
+    };
   }
-  const momo = await listThroughMomoSwap(conn, signer, mint, priceLamports, log, directFailure);
-  return {
-    ...listed(momo.signature, args.mint, priceLamports),
-    via: "momoswap",
-    listingFee: { amount: cookUi(momo.feeRaw), symbol: COOK_SYMBOL },
-    ...(momo.youReceiveRaw
-      ? { youReceive: { amount: cookUi(momo.youReceiveRaw), symbol: COOK_SYMBOL } }
-      : {}),
-    note: `the direct Baked Bazaar listing would have failed (${directFailure}), so it was listed through MomoSwap, which charges a listing fee`,
-  };
+  const sellerTokenAccount = nftTokenAccount(mint, seller);
+  const sell = buildSellIx({ seller, sellerTokenAccount, nftMint: mint, price: priceLamports });
+  const signature = await sendNftTx(conn, [sell], signer, log);
+  return listed(signature, args.mint, priceLamports);
 }
 
 function listed(signature: string, mint: string, price: bigint): NftTxResult {
@@ -425,25 +428,11 @@ function listed(signature: string, mint: string, price: bigint): NftTxResult {
   };
 }
 
-/** Why `ixs` would fail if sent now, or null when they simulate. Nothing is signed. */
-async function simulationFailure(
-  conn: Connection,
-  ixs: TransactionInstruction[],
-  payer: PublicKey,
-): Promise<string | null> {
-  const tx = new Transaction().add(...ixs);
-  tx.recentBlockhash = (await conn.getLatestBlockhash("confirmed")).blockhash;
-  tx.feePayer = payer;
-  const sim = await conn.simulateTransaction(tx);
-  if (!sim.value.err) return null;
-  const logs = sim.value.logs ?? [];
-  return logs.length ? logs.slice(-2).join(" | ") : JSON.stringify(sim.value.err);
-}
-
 /**
  * List through MomoSwap's `/v1/nft/tx/list`: its build is verified against our own `sell` and a fee
  * bounded by MomoSwap's default, paid to the NFT program's fee wallet as the chain names it, then
- * rebuilt from our own instructions and sent like any listing (simulated first).
+ * rebuilt from our own instructions and sent like any listing (simulated first). The API refuses an
+ * item that is not a MomoSwap drop's, one this wallet does not hold, or one already listed.
  */
 async function listThroughMomoSwap(
   conn: Connection,
@@ -451,7 +440,6 @@ async function listThroughMomoSwap(
   mint: PublicKey,
   price: bigint,
   log: BazaarLog,
-  directFailure: string,
 ): Promise<{ signature: string; feeRaw: bigint; youReceiveRaw: string | null }> {
   const seller = signer.publicKey;
   let built;
@@ -463,15 +451,15 @@ async function listThroughMomoSwap(
     });
   } catch (e) {
     throw new CookieMcpError(
-      `listing would fail on Baked Bazaar (${directFailure}), and MomoSwap's listing is not available for it either (${e instanceof Error ? e.message : String(e)})`,
-      "check that this wallet holds the NFT in its main token account and it is not already listed; nothing was sent",
+      `MomoSwap would not build the listing: ${e instanceof Error ? e.message : String(e)}`,
+      "MomoSwap lists only its own drops' items; for any other NFT, list_nft without `via` lists it directly. Nothing was sent",
     );
   }
   const feeWallet = await readNftFeeWallet(conn);
   if (!feeWallet) {
     throw new CookieMcpError(
-      `listing would fail on Baked Bazaar (${directFailure}), and MomoSwap's fee wallet could not be read to check its listing`,
-      "retry later; nothing was sent",
+      "MomoSwap's fee wallet could not be read from the NFT program's Config, so its listing cannot be checked",
+      "retry later, or list_nft without `via` lists directly with no fee; nothing was sent",
     );
   }
   let tx: Transaction;

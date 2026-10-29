@@ -2060,18 +2060,25 @@ export function createServer(): McpServer {
       description:
         "List an NFT you own for sale on Baked Bazaar at `price` COOK (creates the auction-house sell " +
         "order). Simulates before sending; signs locally. Requires COOKIE_PRIVATE_KEY. The 1% " +
-        "marketplace fee and creator royalties are taken from the sale proceeds when it sells. If the " +
-        "direct listing would fail and the NFT is a MomoSwap drop's item, it is listed through " +
-        'MomoSwap instead (`via: "momoswap"`): the same Baked Bazaar listing, plus MomoSwap\'s listing ' +
-        "fee paid now (1% of the price, at least 0.001 COOK, never more), reported as `listingFee`.",
+        "marketplace fee and creator royalties are taken from the sale proceeds when it sells. " +
+        '`via: "momoswap"` lists a MomoSwap drop\'s item through MomoSwap instead: the same Baked ' +
+        "Bazaar listing, plus MomoSwap's listing fee paid now (1% of the price, at least 0.001 COOK, " +
+        "never more), reported as `listingFee`. Only on request: it is the same listing with a fee " +
+        "on top, so it is never taken on its own.",
       inputSchema: {
         mint: z.string().min(32).max(44).describe("the NFT mint you own"),
         price: z
           .union([z.number().positive(), z.string()])
           .describe("sale price in COOK, e.g. 12.5"),
+        via: z
+          .enum(["momoswap"])
+          .optional()
+          .describe(
+            'omit to list directly (no fee); "momoswap" to list a MomoSwap drop\'s item through MomoSwap, paying its listing fee now',
+          ),
       },
     },
-    tool(async (a: { mint: string; price: string | number }) => listNft(a)),
+    tool(async (a: { mint: string; price: string | number; via?: "momoswap" }) => listNft(a)),
   );
 
   registerTool(

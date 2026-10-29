@@ -21,11 +21,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   up to 10 requests open per drop (anchor-launchpad-momoswap#117), so `nft_drop_mint` with `count` > 1
   on a target-graduated drop places that many through `/v1/nft/tx/request-mint-many`, one transaction
   each, each verified and simulated on its own before it is signed.
-- **`list_nft` falls back to MomoSwap's own listing.** When the direct Baked Bazaar listing would fail
-  and the NFT is a MomoSwap drop's item, it is listed through MomoSwap (`/v1/nft/tx/list`): the same
-  Auction House `sell` plus MomoSwap's listing fee. The build is held to our own `sell` and a fee of at
-  most 1% (0.001 COOK minimum) paid to the NFT program's fee wallet as the chain names it, then rebuilt
-  from our own instructions. The result says `via: "momoswap"` and the fee paid.
+- **`list_nft` can list through MomoSwap.** With `via: "momoswap"`, a MomoSwap drop's item is listed
+  through MomoSwap (`/v1/nft/tx/list`): the same Auction House `sell` plus MomoSwap's listing fee. The
+  build is held to our own `sell` and a fee of at most 1% (0.001 COOK minimum) paid to the NFT
+  program's fee wallet as the chain names it, then rebuilt from our own instructions. The result says
+  `via: "momoswap"` and the fee paid. Only on request: it is the direct listing with a fee on top, so
+  it is never taken as a fallback.
 - **`get_nft_drop` shows a creator's held-back share.** After a target graduation the program holds
   part of the creator's share back (anchor-launchpad-momoswap#115), releasing it as items mint and
   forfeiting what is left after a deadline; the creator's view reports both as `creatorHeldBack`.

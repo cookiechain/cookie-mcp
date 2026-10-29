@@ -420,8 +420,8 @@ full-range position by default.
 **NFT marketplace** (need `COOKIE_PRIVATE_KEY`, [Baked Bazaar](https://bakedbazaar.art)): `buy_nft`,
 `list_nft`, `cancel_listing`, `make_offer`, `accept_offer`, `cancel_offer`. Built on the Cookie Chain
 Metaplex Auction House (1% marketplace fee + creator royalties); every action is built and signed
-locally. If a direct listing would fail and the NFT is a MomoSwap drop's item, `list_nft` lists it
-through MomoSwap instead, which adds its listing fee (1%, at least 0.001 COOK; checked before signing).
+locally. `list_nft` with `via: "momoswap"` lists a MomoSwap drop's item through MomoSwap instead, which
+adds its listing fee (1%, at least 0.001 COOK; checked before signing). Never taken on its own.
 
 **Lending** ([Aera](https://aera.cook), the overcollateralised COOK money market): `get_lending_markets`
 (every reserve: supplied / borrowed / available, supply and borrow APR, caps, collateral terms, oracle

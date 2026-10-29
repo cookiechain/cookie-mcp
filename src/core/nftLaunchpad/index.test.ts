@@ -16,6 +16,7 @@ import {
   planNftDrop,
   refundBudget,
   requestBudget,
+  requestShortfall,
   requestUnitTotals,
   settleBudget,
   spendCap,
@@ -371,5 +372,28 @@ describe("request slots (anchor #117)", () => {
     expect(totals).toEqual([102n, 103n, 105n]);
     expect(totals.reduce((a, b) => a + b, 0n)).toBeGreaterThanOrEqual(309n);
     expect(requestUnitTotals(["5"], "0", "0")).toEqual([5n]);
+  });
+
+  it("blames the stage that cut a batch short: the quote before the cap, the cap before the build", () => {
+    const full = { count: 5, quoted: 5, affordable: 5, built: 5 };
+    expect(requestShortfall(full)).toEqual({});
+    // The quote itself came back short: not the cap, even when one was given.
+    expect(requestShortfall({ ...full, quoted: 3, affordable: 3, built: 3 })).toEqual({
+      cutShort: "the quote covers 3 of 5: fewer are left to request",
+    });
+    expect(
+      requestShortfall({ ...full, quoted: 3, affordable: 3, built: 3, cutShort: "sold-out" }),
+    ).toEqual({
+      cutShort: "the quote covers 3 of 5: every remaining unit is minted or requested",
+    });
+    expect(requestShortfall({ ...full, affordable: 2, built: 2 })).toEqual({
+      capped: "maxCookPerItem covers 2 of 5",
+    });
+    expect(requestShortfall({ ...full, built: 4, cutShort: "requests-open" })).toEqual({
+      cutShort: "this wallet's other request slots are still taken",
+    });
+    expect(requestShortfall({ ...full, built: 4 })).toEqual({
+      cutShort: "the price moved past what the later requests were allowed",
+    });
   });
 });
