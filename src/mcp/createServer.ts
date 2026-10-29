@@ -862,8 +862,10 @@ export function createServer(): McpServer {
         "right now (`inPosition`), who may crank it, and a `status` with the keeper's next move in " +
         "words: `filling` (edge moves on the next pass), `waiting` (price not far enough past the " +
         "edge, or inside the last tick spacing), `fully-filled` (the keeper withdraws everything " +
-        "and closes the order next), `paused` (the NFT delegation is gone, a payout account was " +
-        "closed, or a tick array is missing — stop and start again), `empty`, or `stale` (the " +
+        "and closes the order next), `paused` (the NFT delegation is gone, a transfer hook has no " +
+        "published extra-account list, a payout account was closed, or a tick array is missing — " +
+        "start_ratchet with the order's `positionMint` repairs all but the hook without stopping " +
+        "it), `empty`, or `stale` (the " +
         "position is gone; stop_ratchet refunds the order's rent).",
       inputSchema: {
         owner: z
@@ -901,7 +903,15 @@ export function createServer(): McpServer {
         "for an external signer — call again to continue). `cranker` defaults to the Cookiebox " +
         "keeper; `anyone` leaves the order unpinned, which a hostile cranker can exploit to hand " +
         "most of it back unconverted. Payouts in COOK arrive as native COOK, never wCOOK. No " +
-        "protocol fee. Stop any time with stop_ratchet. Simulates first." +
+        "protocol fee. Stop any time with stop_ratchet. " +
+        "OPEN AND RATCHET IN ONE GO: pass `pool`, `sell`, `amount` (how much of `sell` to deposit) " +
+        "and `priceLower`/`priceUpper` (tokenB per tokenA, as get_ratchet_orders reports prices) " +
+        "to open a new one-sided position over that range first — the whole range must sit on the " +
+        "`sell` side of the current price (above it to sell token A, below it to sell token B); the " +
+        "result's `opened` carries the new position's NFT mint. REPAIR: on a position whose order " +
+        "is already running, this recreates what a `paused` order is missing (tick arrays, payout " +
+        "accounts, the NFT delegation) without stopping it, and refuses when nothing is missing. " +
+        "Simulates first." +
         SIGNING_NOTE,
       inputSchema: {
         position: z
@@ -943,6 +953,22 @@ export function createServer(): McpServer {
           .describe(
             'who may crank the order: omit for the Cookiebox keeper (recommended), "anyone", or a public key you run a keeper with',
           ),
+        amount: z
+          .union([z.string(), z.number()])
+          .optional()
+          .describe(
+            "open a NEW position first: how much of `sell` to deposit (UI units). Needs `pool`, `sell`, `priceLower` and `priceUpper`",
+          ),
+        priceLower: z
+          .union([z.string(), z.number()])
+          .optional()
+          .describe(
+            "lower edge of the new position's range, as tokenB per tokenA (rounded to the pool's tick spacing)",
+          ),
+        priceUpper: z
+          .union([z.string(), z.number()])
+          .optional()
+          .describe("upper edge of the new position's range, as tokenB per tokenA"),
       },
     },
     tool(
@@ -952,6 +978,9 @@ export function createServer(): McpServer {
         sell?: string;
         minStep?: number;
         cranker?: string;
+        amount?: string | number;
+        priceLower?: string | number;
+        priceUpper?: string | number;
       }) => startRatchet(a),
     ),
   );

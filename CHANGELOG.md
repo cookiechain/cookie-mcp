@@ -14,9 +14,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   position NFT stays in the wallet (the order is only its SPL delegate, limited by the program to
   moving the edge and finishing). Starting creates the owner's payout accounts and the range's tick
   arrays at the owner's expense, pins the Cookiebox keeper as cranker unless told otherwise, and
-  refuses locked, empty, already-ratcheted or over-wide positions and a sell of a token the position
-  no longer holds. Every order's status predicts the keeper's next move from the program's own edge
-  rule. Also importable from the library entry (`cookie-mcp`).
+  refuses locked, empty or over-wide positions and a sell of a token the position no longer holds.
+  `start_ratchet` also **opens the position** when given `pool`, `sell`, `amount` and
+  `priceLower`/`priceUpper` (tokenB per tokenA): a new one-sided position over that range, which
+  must sit entirely on the `sell` side of the current price, ratcheted in the same call. Every
+  refusal, including an `amount` the wallet doesn't hold, comes before anything is sent. Re-entrant
+  for an external signer: a position of yours with exactly that range and no order is continued
+  (used when it holds `amount`, deposited into when it is empty), never opened twice, and a refusal
+  of the range names it; the result's `opened` carries the new NFT mint. On a position whose order
+  is already running, `start_ratchet` **repairs** a paused order instead — recreating the tick
+  arrays, payout accounts or NFT delegation the keeper needs, without stopping it — and refuses when
+  nothing is missing or the NFT is in another wallet. Every order's status predicts the keeper's
+  next move from the program's own edge rule, and reports a pause for a lost delegation, a closed
+  payout account, a missing tick array, or a Token-2022 transfer hook with no published
+  `ExtraAccountMetaList` (such a mint cannot move at all, so the keeper skips the order and
+  `start_ratchet` refuses to open one). Also importable from the library entry (`cookie-mcp`).
 - **Several post-graduation NFT mint requests at once.** MomoSwap's NFT program now lets a wallet hold
   up to 10 requests open per drop (anchor-launchpad-momoswap#117), so `nft_drop_mint` with `count` > 1
   on a target-graduated drop places that many through `/v1/nft/tx/request-mint-many`, one transaction

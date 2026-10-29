@@ -33,6 +33,8 @@ import {
   WhirlpoolContext,
   buildWhirlpoolClient,
   LockConfigUtil,
+  MAX_TICK_INDEX,
+  MIN_TICK_INDEX,
   PDAUtil,
   PriceMath,
   TickUtil,
@@ -148,10 +150,14 @@ async function sendBuilder(
   builder: TransactionBuilder,
   computeUnits: number,
   what = "liquidity",
+  extra?: SendExtra,
 ): Promise<string> {
   const { tx, signers } = await builderToTx(builder, computeUnits);
-  return signSendConfirm(conn, tx, signer, signers, what);
+  return signSendConfirm(conn, tx, signer, signers, what, extra);
 }
+
+/** The step/summary context an external signer sees (`signSendConfirm`'s last argument). */
+type SendExtra = Parameters<typeof signSendConfirm>[5];
 
 /** Build → send a list of builders sequentially (skipping empty ones); returns the last signature. */
 async function sendBuilders(
@@ -217,15 +223,175 @@ async function sendOpenPosition(
   signer: TxSigner,
   builder: TransactionBuilder,
   computeUnits: number,
+  extra?: SendExtra,
 ): Promise<string> {
   const { tx } = await builderToTx(builder, computeUnits);
   if (legacyTxWireSize(tx, signer.publicKey) <= LEGACY_TX_MAX_BYTES) {
-    return sendBuilder(conn, signer, builder, computeUnits, "open position");
+    return sendBuilder(conn, signer, builder, computeUnits, "open position", extra);
   }
   const [open, deposit] = splitOpenPositionBuilder(builder);
-  if (!deposit) return sendBuilder(conn, signer, builder, computeUnits, "open position");
-  await sendBuilder(conn, signer, open, computeUnits, "open position");
-  return sendBuilder(conn, signer, deposit, computeUnits, "deposit");
+  if (!deposit) return sendBuilder(conn, signer, builder, computeUnits, "open position", extra);
+  await sendBuilder(conn, signer, open, computeUnits, "open position", extra);
+  return sendBuilder(conn, signer, deposit, computeUnits, "deposit", extra);
+}
+
+/**
+ * Initializable ticks for a price range given as tokenB per tokenA (the pool's own orientation,
+ * the `priceUnit` the Ratchet tools report). Each price rounds to the nearest tick the pool's
+ * spacing allows, so the range actually opened can differ slightly from the one asked for.
+ */
+export function rangeTicksFromPrices(p: {
+  lower: string | number;
+  upper: string | number;
+  decA: number;
+  decB: number;
+  tickSpacing: number;
+  /** The pair's unit and current price for the hints, e.g. "COOKHOUSE per COOK, now 21.6". */
+  unit?: string;
+}): [number, number] {
+  const unitHint = p.unit
+    ? `prices are ${p.unit}`
+    : "prices are tokenB per tokenA, the pool's orientation (see `priceUnit` on get_ratchet_orders)";
+  const parse = (v: string | number, name: string) => {
+    let d: Decimal;
+    try {
+      d = new Decimal(String(v).trim());
+    } catch {
+      d = new Decimal(NaN);
+    }
+    if (!d.isFinite() || d.lte(0)) {
+      throw new CookieMcpError(`${name} must be a positive price, got ${String(v)}`, unitHint);
+    }
+    return d;
+  };
+  const lo = parse(p.lower, "priceLower");
+  const hi = parse(p.upper, "priceUpper");
+  if (hi.lte(lo)) {
+    throw new CookieMcpError(
+      `priceUpper (${hi.toString()}) must be above priceLower (${lo.toString()})`,
+      `swap them, or widen the range (${unitHint})`,
+    );
+  }
+  const tick = (d: Decimal, name: string) => {
+    let t: number;
+    try {
+      t = PriceMath.priceToInitializableTickIndex(d, p.decA, p.decB, p.tickSpacing);
+    } catch {
+      t = NaN;
+    }
+    if (!Number.isFinite(t) || t < MIN_TICK_INDEX || t > MAX_TICK_INDEX) {
+      throw new CookieMcpError(
+        `${name} ${d.toString()} is outside the prices a CLMM pool can represent`,
+        `pick a price closer to the current one (${unitHint})`,
+      );
+    }
+    return t;
+  };
+  const lower = tick(lo, "priceLower");
+  const upper = tick(hi, "priceUpper");
+  if (upper <= lower) {
+    throw new CookieMcpError(
+      `that range rounds to a single tick (${lower}) at this pool's tick spacing ${p.tickSpacing}`,
+      `a range must span at least one tick spacing; widen it (${unitHint})`,
+    );
+  }
+  return [lower, upper];
+}
+
+/**
+ * Open a new CLMM position with an explicit tick range and deposit into it (one or both tokens,
+ * UI amounts). The two end tick arrays are created first when missing. Returns the position NFT
+ * mint and the position account, which `start_ratchet` needs right after.
+ */
+export async function openClmmPosition(
+  conn: Connection,
+  signer: TxSigner,
+  args: {
+    poolPk: PublicKey;
+    tickLower: number;
+    tickUpper: number;
+    amountA?: string | number;
+    amountB?: string | number;
+  },
+  extra?: SendExtra,
+): Promise<{ signature: string; positionMint: PublicKey; positionAddress: PublicKey }> {
+  const client = buildClmmClient(conn, signer);
+  const owner = signer.publicKey;
+  const pool = await client.getPool(args.poolPk);
+  await pool.refreshData();
+  const deposit = explicitDepositParams(pool, args);
+  const tickInit = await pool.initTickArrayForTicks([args.tickLower, args.tickUpper], owner);
+  if (tickInit && !tickInit.isEmpty()) {
+    await sendBuilder(conn, signer, tickInit, OPEN_POSITION_CU, "tick arrays", extra);
+  }
+  const { tx, positionMint } = await pool.openPositionWithMetadata(
+    args.tickLower,
+    args.tickUpper,
+    deposit,
+    owner,
+    owner,
+    undefined,
+    TOKEN_2022_PROGRAM_ID,
+  );
+  const signature = await sendOpenPosition(conn, signer, tx, OPEN_POSITION_CU, extra);
+  return {
+    signature,
+    positionMint,
+    positionAddress: PDAUtil.getPosition(CLMM_PROGRAM_ID, positionMint).publicKey,
+  };
+}
+
+/**
+ * Deposit into an existing position of the wallet (UI amounts, one or both tokens). `start_ratchet`
+ * uses it to finish an open whose deposit half never landed: when the open-position tx is too big
+ * it goes out as open + deposit, and an external signer may submit only the first.
+ */
+export async function depositClmmPosition(
+  conn: Connection,
+  signer: TxSigner,
+  args: {
+    poolPk: PublicKey;
+    positionPk: PublicKey;
+    amountA?: string | number;
+    amountB?: string | number;
+  },
+  extra?: SendExtra,
+): Promise<string> {
+  const client = buildClmmClient(conn, signer);
+  const owner = signer.publicKey;
+  const pool = await client.getPool(args.poolPk);
+  await pool.refreshData();
+  const deposit = explicitDepositParams(pool, args);
+  const position = await client.getPosition(args.positionPk);
+  await position.refreshData();
+  const tx = await position.increaseLiquidity(deposit, true, owner, owner, owner);
+  return sendBuilder(conn, signer, tx, OPEN_POSITION_CU, "deposit", extra);
+}
+
+/** Raw token maxima + the default slippage bounds for a deposit given as UI amounts. */
+function explicitDepositParams(
+  pool: Whirlpool,
+  args: { amountA?: string | number; amountB?: string | number },
+) {
+  const { decA, decB } = poolTokenDecimals(pool);
+  const raw = (v: string | number | undefined, dec: number) => {
+    if (v == null) return new BN(0);
+    try {
+      return new BN(uiToRaw(v, dec).toString());
+    } catch (e) {
+      throw new CookieMcpError((e as Error).message, "pass a positive amount in UI units");
+    }
+  };
+  const tokenMaxA = raw(args.amountA, decA);
+  const tokenMaxB = raw(args.amountB, decB);
+  if (tokenMaxA.isZero() && tokenMaxB.isZero()) {
+    throw new CookieMcpError("the deposit amount is zero", "pass a positive amount");
+  }
+  const { lowerBound, upperBound } = PriceMath.getSlippageBoundForSqrtPrice(
+    pool.getData().sqrtPrice,
+    Percentage.fromFraction(DEFAULT_SLIPPAGE_BPS, 10_000),
+  );
+  return { tokenMaxA, tokenMaxB, minSqrtPrice: lowerBound[0], maxSqrtPrice: upperBound[0] };
 }
 
 /** `["token_badge", config, mint]` — the admin-issued CLMM permission for a restricted Token-2022 mint. */

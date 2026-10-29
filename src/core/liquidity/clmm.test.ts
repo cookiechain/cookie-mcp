@@ -27,6 +27,7 @@ import {
   clmmBadgeReasons,
   clmmTokenBadgeAddress,
   splitOpenPositionBuilder,
+  rangeTicksFromPrices,
 } from "./clmm";
 
 // Constructing a Connection/Program does no network I/O, so these run offline.
@@ -205,5 +206,54 @@ describe("splitOpenPositionBuilder", () => {
     ]);
     expect(internals(second).instructions.map((e) => e.instructions[0])).toEqual([wrap, deposit]);
     expect(internals(second).signers).toHaveLength(0);
+  });
+});
+
+describe("rangeTicksFromPrices", () => {
+  // COOK (9 dec) / COOKHOUSE (6 dec) on the 64-spacing tier, like the live Ratchet pool.
+  const pool = { decA: 9, decB: 6, tickSpacing: 64 };
+
+  it("rounds each price to an initializable tick, lower below upper", () => {
+    const [lower, upper] = rangeTicksFromPrices({ ...pool, lower: "0.019", upper: "0.021" });
+    // `%` keeps the sign (−0 for negative ticks), so compare as a boolean.
+    expect(lower % 64 === 0).toBe(true);
+    expect(upper % 64 === 0).toBe(true);
+    expect(lower).toBeLessThan(upper);
+    // Strings and numbers alike.
+    expect(rangeTicksFromPrices({ ...pool, lower: 0.019, upper: 0.021 })).toEqual([lower, upper]);
+  });
+
+  it("refuses non-positive prices, an inverted range and one that rounds to a single tick", () => {
+    expect(() => rangeTicksFromPrices({ ...pool, lower: "0", upper: "1" })).toThrow(/priceLower/);
+    expect(() => rangeTicksFromPrices({ ...pool, lower: "x", upper: "1" })).toThrow(/priceLower/);
+    expect(() => rangeTicksFromPrices({ ...pool, lower: "2", upper: "1" })).toThrow(/above/);
+    expect(() => rangeTicksFromPrices({ ...pool, lower: "0.02", upper: "0.020001" })).toThrow(
+      /single tick/,
+    );
+  });
+
+  it("refuses a price no CLMM tick can represent with a CookieMcpError, not the SDK's", () => {
+    expect(() => rangeTicksFromPrices({ ...pool, lower: "1e30", upper: "1e31" })).toThrow(
+      /priceLower 1e\+30 is outside the prices a CLMM pool can represent/,
+    );
+    expect(() => rangeTicksFromPrices({ ...pool, lower: "0.02", upper: "1e40" })).toThrow(
+      /priceUpper/,
+    );
+  });
+
+  it("names the pair's unit in the hint when given one", () => {
+    const unit = "COOKHOUSE per COOK, now 0.02";
+    for (const [lower, upper] of [
+      ["0", "1"],
+      ["2", "1"],
+      ["0.02", "0.020001"],
+    ]) {
+      try {
+        rangeTicksFromPrices({ ...pool, lower: lower!, upper: upper!, unit });
+        expect.unreachable();
+      } catch (e) {
+        expect((e as { hint?: string }).hint).toContain(unit);
+      }
+    }
   });
 });

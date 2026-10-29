@@ -1,17 +1,29 @@
-import { PublicKey } from "@solana/web3.js";
+import {
+  ExtensionType,
+  MINT_SIZE,
+  TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  getMintLen,
+} from "@solana/spl-token";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
 import { COOK_MINT, RATCHET_KEEPER } from "../config";
 import { CLMM_PROGRAM_ID } from "../liquidity/clmm";
 import {
+  depositShortfall,
   describeDecision,
   directionForSell,
   keeperKind,
   orderStatus,
+  pickReentry,
   pickStopOrder,
   positionHoldings,
   RATCHET_PROGRAM_ID,
+  repairPlan,
   resolveCranker,
+  strandedPositionHint,
+  transferHookProgramOf,
   type PairTokens,
 } from "./index";
 
@@ -125,7 +137,13 @@ describe("describeDecision + orderStatus", () => {
   });
 
   it("maps decisions to statuses when nothing is paused", () => {
-    const base = { delegated: true, missingPayout: [], missingTickArrays: 0, next: "n" };
+    const base = {
+      delegated: true,
+      missingHookMetaLists: [],
+      missingPayout: [],
+      missingTickArrays: 0,
+      next: "n",
+    };
     expect(orderStatus({ ...base, decision: { kind: "finish" } }).status).toBe("fully-filled");
     expect(
       orderStatus({ ...base, decision: { kind: "ratchet", lower: 0, upper: 1, liquidity: 1n } })
@@ -144,18 +162,31 @@ describe("describeDecision + orderStatus", () => {
     const base = {
       decision: { kind: "ratchet", lower: 0, upper: 1, liquidity: 1n } as const,
       delegated: true,
+      missingHookMetaLists: [] as string[],
       missingPayout: [] as string[],
       missingTickArrays: 0,
       next: "n",
     };
     expect(orderStatus({ ...base, delegated: false })).toMatchObject({
       status: "paused",
-      detail: expect.stringMatching(/no longer delegated.*stop_ratchet, then start_ratchet/),
+      detail: expect.stringMatching(
+        /no longer delegated.*start_ratchet with `position` set to this order's positionMint re-approves/,
+      ),
     });
     expect(orderStatus({ ...base, missingPayout: ["COOKHOUSE"] }).detail).toMatch(
-      /COOKHOUSE token account was closed/,
+      /COOKHOUSE token account was closed.*start_ratchet with `position`.*recreates it/,
     );
-    expect(orderStatus({ ...base, missingTickArrays: 2 }).detail).toMatch(/2 tick array/);
+    expect(orderStatus({ ...base, missingTickArrays: 2 }).detail).toMatch(
+      /2 tick array.*without stopping the order/,
+    );
+    expect(orderStatus({ ...base, missingHookMetaLists: ["HOOKIE"] })).toMatchObject({
+      status: "paused",
+      detail: expect.stringMatching(/HOOKIE transfer hook has published no extra-account list/),
+    });
+    // The hook outranks a closed payout account: no repair of ours can fix it.
+    expect(
+      orderStatus({ ...base, missingHookMetaLists: ["HOOKIE"], missingPayout: ["X"] }).detail,
+    ).toMatch(/transfer hook/);
     // Delegation outranks the rest: without it nothing else matters.
     expect(orderStatus({ ...base, delegated: false, missingPayout: ["X"] }).detail).toMatch(
       /delegated/,
@@ -189,5 +220,168 @@ describe("pickStopOrder", () => {
     expect(pickStopOrder(none)).toBe("notFound");
     // An account some other program owns (a pool mint, a wallet) is neither.
     expect(pickStopOrder({ ...none, arg: { owner: PublicKey.default } })).toBe("notFound");
+  });
+});
+
+describe("transferHookProgramOf", () => {
+  const mint = Keypair.generate().publicKey;
+  /** A Token-2022 mint account with one TransferHook extension naming `program`. */
+  const hookedMint = (program: PublicKey) => {
+    const data = Buffer.alloc(getMintLen([ExtensionType.TransferHook]));
+    data[45] = 1; // is_initialized
+    data[MINT_SIZE + 83] = 1; // account type: Mint (after the 83-byte padding)
+    let o = MINT_SIZE + 83 + 1;
+    data.writeUInt16LE(ExtensionType.TransferHook, o); // TLV type
+    data.writeUInt16LE(64, o + 2); // TLV length: authority + program id
+    o += 4;
+    Keypair.generate().publicKey.toBuffer().copy(data, o); // authority
+    program.toBuffer().copy(data, o + 32);
+    return { owner: TOKEN_2022_PROGRAM_ID, data };
+  };
+
+  it("names the hook program of a Token-2022 mint, and null when the program is unset", () => {
+    const hook = Keypair.generate().publicKey;
+    expect(transferHookProgramOf(mint, hookedMint(hook))?.equals(hook)).toBe(true);
+    expect(transferHookProgramOf(mint, hookedMint(PublicKey.default))).toBeNull();
+  });
+
+  it("is null for a classic mint or a Token-2022 mint without the extension", () => {
+    const plain = Buffer.alloc(MINT_SIZE);
+    plain[45] = 1;
+    expect(transferHookProgramOf(mint, { owner: TOKEN_PROGRAM_ID, data: plain })).toBeNull();
+    expect(transferHookProgramOf(mint, { owner: TOKEN_2022_PROGRAM_ID, data: plain })).toBeNull();
+  });
+
+  it("refuses a Token-2022 mint it can't parse rather than call it hook-less", () => {
+    expect(() =>
+      transferHookProgramOf(mint, { owner: TOKEN_2022_PROGRAM_ID, data: Buffer.alloc(3) }),
+    ).toThrow(/could not read the Token-2022 extensions/);
+  });
+});
+
+describe("pickReentry", () => {
+  const cand = (liquidity: bigint, held: bigint) => ({
+    positionPk: Keypair.generate().publicKey,
+    positionMint: Keypair.generate().publicKey,
+    liquidity,
+    held,
+  });
+
+  it("opens a new position when there is nothing to continue with", () => {
+    expect(pickReentry([], 1_000n)).toBeNull();
+  });
+
+  it("reuses a funded position holding the amount, rounded down by at most 1%", () => {
+    const own = cand(5n, 999n);
+    expect(pickReentry([own], 1_000n)).toEqual({ kind: "reuse", c: own, more: [] });
+    expect(pickReentry([cand(5n, 990n)], 1_000n)?.kind).toBe("reuse");
+    expect(pickReentry([cand(5n, 989n)], 1_000n)?.kind).toBe("conflict");
+    // Never more than asked: a one-sided deposit can't hold more than its maximum.
+    expect(pickReentry([cand(5n, 1_001n)], 1_000n)?.kind).toBe("conflict");
+  });
+
+  it("allows two raw units of rounding on a dust amount, where 1% is under a unit", () => {
+    expect(pickReentry([cand(5n, 49n)], 50n)?.kind).toBe("reuse");
+    expect(pickReentry([cand(5n, 48n)], 50n)?.kind).toBe("reuse");
+    expect(pickReentry([cand(5n, 47n)], 50n)?.kind).toBe("conflict");
+    expect(pickReentry([cand(5n, 51n)], 50n)?.kind).toBe("conflict");
+  });
+
+  it("deposits into an empty one: an open whose deposit half never landed", () => {
+    const empty = cand(0n, 0n);
+    expect(pickReentry([empty], 1_000n)).toEqual({ kind: "deposit", c: empty, more: [] });
+    // A matching funded one wins (that empty one is older); a mismatched one doesn't.
+    const match = cand(5n, 1_000n);
+    expect(pickReentry([empty, match], 1_000n)).toEqual({ kind: "reuse", c: match, more: [] });
+    expect(pickReentry([cand(5n, 7n), empty], 1_000n)).toEqual({
+      kind: "deposit",
+      c: empty,
+      more: [],
+    });
+  });
+
+  it("refuses rather than guess when the only same-range position holds something else", () => {
+    const other = cand(5n, 50n);
+    expect(pickReentry([other], 1_000n)).toEqual({ kind: "conflict", c: other, more: [] });
+    // Several: the first is named with its amount, the rest ride along for the message.
+    const second = cand(5n, 60n);
+    expect(pickReentry([other, second], 1_000n)).toEqual({
+      kind: "conflict",
+      c: other,
+      more: [second],
+    });
+  });
+});
+
+describe("strandedPositionHint", () => {
+  it("is empty with nothing to name", () => {
+    expect(strandedPositionHint([])).toBe("");
+  });
+
+  it("names the position and how to continue with it", () => {
+    const one = strandedPositionHint(["MintA"]);
+    expect(one).toMatch(/^; note you already hold a position/);
+    expect(one).toContain('position: "MintA"');
+    expect(one).toContain("remove_liquidity");
+    const two = strandedPositionHint(["MintA", "MintB"]);
+    expect(two).toContain("2 positions");
+    expect(two).toContain("NFT MintA, MintB");
+    expect(two).toContain('position: "MintA"');
+  });
+});
+
+describe("depositShortfall", () => {
+  const p = { want: 1_500_000_000n, dec: 9, label: "COOK", native: false };
+
+  it("passes a balance that covers the deposit", () => {
+    expect(depositShortfall({ ...p, balance: 1_500_000_000n })).toBeNull();
+  });
+
+  it("refuses less, naming both amounts, with the fee hint for native COOK only", () => {
+    const err = depositShortfall({ ...p, balance: 1_000_000_000n });
+    expect(err?.message).toMatch(/holds 1 COOK, less than the 1.5 COOK to deposit/);
+    expect(err?.hint).not.toMatch(/fees/);
+    expect(depositShortfall({ ...p, balance: 0n, native: true })?.hint).toMatch(/fees/);
+  });
+});
+
+describe("repairPlan", () => {
+  const ok = {
+    missingTickArrays: 0,
+    missingPayout: 0,
+    holdsNft: true,
+    delegatedToOrder: true,
+    missingHookMetaLists: [] as string[],
+  };
+
+  it("refuses when nothing is missing", () => {
+    expect(repairPlan(ok)).toEqual({ reapprove: false, refuse: "nothing" });
+  });
+
+  it("re-approves only when this wallet holds the NFT", () => {
+    expect(repairPlan({ ...ok, delegatedToOrder: false })).toEqual({
+      reapprove: true,
+      refuse: null,
+    });
+    expect(repairPlan({ ...ok, delegatedToOrder: false, holdsNft: false })).toEqual({
+      reapprove: false,
+      refuse: "nftElsewhere",
+    });
+    // Elsewhere with a tick array missing too: the order stays paused either way, so no rent.
+    expect(
+      repairPlan({ ...ok, delegatedToOrder: false, holdsNft: false, missingTickArrays: 1 }),
+    ).toEqual({ reapprove: false, refuse: "nftElsewhere" });
+  });
+
+  it("recreates tick arrays and payout accounts", () => {
+    expect(repairPlan({ ...ok, missingTickArrays: 3 }).refuse).toBeNull();
+    expect(repairPlan({ ...ok, missingPayout: 1 }).refuse).toBeNull();
+  });
+
+  it("names the hook when it is the only thing pausing the order", () => {
+    expect(repairPlan({ ...ok, missingHookMetaLists: ["HOOKIE"] }).refuse).toBe("hook");
+    expect(repairPlan({ ...ok, missingHookMetaLists: ["HOOKIE"], missingPayout: 1 }).refuse).toBe(
+      null,
+    );
   });
 });

@@ -15,19 +15,30 @@
 // billed to it by a hostile position. Everything the keeper may do afterwards is predicted here from
 // the program's own rules (`decision.ts`), so an agent can tell what happens next without a chain.
 import { PriceMath } from "@orca-so/whirlpools-sdk";
-import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
+import {
+  createApproveInstruction,
+  getAssociatedTokenAddressSync,
+  getExtraAccountMetaAddress,
+  getTransferHook,
+  TOKEN_2022_PROGRAM_ID,
+  unpackAccount,
+  unpackMint,
+} from "@solana/spl-token";
 import { PublicKey, Transaction, type AccountInfo, type Connection } from "@solana/web3.js";
 import type BN from "bn.js";
 
 import { COOK_MINT, RATCHET_KEEPER, explorerTxUrl } from "../config";
 import { resolveWallet } from "../domains";
 import { CookieMcpError } from "../errors";
-import { rawToUi, shortAddr } from "../format";
+import { rawToUi, shortAddr, uiToRaw } from "../format";
 import {
   CLMM_PROGRAM_ID,
   buildClmmClient,
   clmmLockConfigAddress,
   findClmmPositions,
+  depositClmmPosition,
+  openClmmPosition,
+  rangeTicksFromPrices,
 } from "../liquidity/clmm";
 import { signSendConfirm } from "../liquidity/send";
 import { requireMintMeta, resolveMintMeta, type MintMeta } from "../mintMeta";
@@ -139,6 +150,30 @@ export function directionForSell(
   return direction;
 }
 
+/**
+ * The transfer-hook program a Token-2022 mint names, or null (classic mint, no hook, or a hook
+ * whose program was unset). Token-2022 refuses every transfer of a hooked mint until the hook has
+ * published its `ExtraAccountMetaList`, so the keeper skips such an order; `orderStatus` reports it.
+ * A Token-2022 mint whose extensions don't parse is refused rather than read as hook-less.
+ */
+export function transferHookProgramOf(
+  mint: PublicKey,
+  info: Pick<AccountInfo<Buffer>, "owner" | "data">,
+): PublicKey | null {
+  if (!info.owner.equals(TOKEN_2022_PROGRAM_ID)) return null;
+  let parsed: ReturnType<typeof unpackMint>;
+  try {
+    parsed = unpackMint(mint, info as AccountInfo<Buffer>, TOKEN_2022_PROGRAM_ID);
+  } catch (e) {
+    throw new CookieMcpError(
+      `could not read the Token-2022 extensions of mint ${mint.toBase58()} (${(e as Error).message})`,
+      "its transfer hook can't be checked, so nothing was sent; retry, or pick another pool",
+    );
+  }
+  const hook = getTransferHook(parsed);
+  return hook && !hook.programId.equals(PublicKey.default) ? hook.programId : null;
+}
+
 /** Who cranks an order: Cookiebox's keeper (the default), anyone, or a key of the caller's choosing. */
 export type KeeperKind = "cookiebox" | "anyone" | "custom";
 
@@ -210,24 +245,38 @@ export function describeDecision(
 }
 
 /**
- * An order's status from the keeper's decision and the three things that pause an order: the NFT
- * delegation being gone, a payout account the owner closed, and a tick array the next move needs.
- * Pure, so the rule is testable; the reads happen in the caller.
+ * An order's status from the keeper's decision and the four things that pause an order: the NFT
+ * delegation being gone, a transfer hook with no published extra-account list, a payout account
+ * the owner closed, and a tick array the next move needs. Pure, so the rule is testable; the reads
+ * happen in the caller.
  */
 export function orderStatus(p: {
   decision: RatchetDecision;
   delegated: boolean;
+  /** Hooked pool mints whose hook has published no `ExtraAccountMetaList` (labels). */
+  missingHookMetaLists: string[];
   missingPayout: string[];
   missingTickArrays: number;
   next: string;
 }): { status: OrderStatus; detail: string } {
-  const restart = "stop_ratchet, then start_ratchet again (starting recreates what is missing)";
+  // `position`, not `pool`: by pool, start_ratchet would pick a position without an order.
+  const onIt = "start_ratchet with `position` set to this order's positionMint";
+  const repair = `${onIt} recreates it (owner-paid) without stopping the order`;
   if (!p.delegated) {
     return {
       status: "paused",
       detail:
         "the position NFT is no longer delegated to the order (approval revoked or NFT moved), so " +
-        `the keeper cannot move the edge — ${restart}`,
+        `the keeper cannot move the edge — if you still hold the NFT, ${onIt} re-approves it ` +
+        "without stopping the order; otherwise stop_ratchet",
+    };
+  }
+  if (p.missingHookMetaLists.length) {
+    return {
+      status: "paused",
+      detail:
+        `${hookUnpublished(p.missingHookMetaLists)}, and the keeper skips this order until the ` +
+        "issuer publishes one",
     };
   }
   if (p.missingPayout.length) {
@@ -235,13 +284,13 @@ export function orderStatus(p: {
       status: "paused",
       detail:
         `the owner's ${p.missingPayout.join(" and ")} token account was closed; the keeper will not ` +
-        `recreate it — ${restart}`,
+        `recreate it — ${repair}`,
     };
   }
   if (p.missingTickArrays > 0) {
     return {
       status: "paused",
-      detail: `${p.missingTickArrays} tick array(s) the next move needs do not exist — ${restart}`,
+      detail: `${p.missingTickArrays} tick array(s) the next move needs do not exist — ${repair}`,
     };
   }
   if (p.decision.kind === "finish") return { status: "fully-filled", detail: p.next };
@@ -264,6 +313,8 @@ interface PositionContext {
   order: RangeOrder | null;
   tokenProgramA: PublicKey;
   tokenProgramB: PublicKey;
+  mintAInfo: AccountInfo<Buffer>;
+  mintBInfo: AccountInfo<Buffer>;
   metaA: MintMeta;
   metaB: MintMeta;
 }
@@ -305,6 +356,8 @@ async function loadPositionContext(
     order: orderInfo ? decodeRangeOrder(orderInfo.data) : null,
     tokenProgramA: mintAInfo.owner,
     tokenProgramB: mintBInfo.owner,
+    mintAInfo,
+    mintBInfo,
     metaA: requireMintMeta(meta, pool.tokenMintA.toBase58()),
     metaB: requireMintMeta(meta, pool.tokenMintB.toBase58()),
   };
@@ -419,6 +472,49 @@ function tokenNotes(ctx: PositionContext): string[] {
   return notes;
 }
 
+/**
+ * Labels of the pool mints whose transfer hook has published no `ExtraAccountMetaList`. Token-2022
+ * refuses every transfer of such a mint, so the keeper skips the order (cookiebox's keeper logs
+ * "missing hook meta list" and moves on). Empty for classic and hook-less mints, with no read.
+ */
+async function missingHookMetaLists(
+  conn: Connection,
+  mints: { mint: PublicKey; info: AccountInfo<Buffer>; sym: string | null }[],
+): Promise<string[]> {
+  const hooked = mints
+    .map((m) => ({ ...m, hook: transferHookProgramOf(m.mint, m.info) }))
+    .filter((h): h is typeof h & { hook: PublicKey } => h.hook != null);
+  if (hooked.length === 0) return [];
+  const infos = await conn.getMultipleAccountsInfo(
+    hooked.map((h) => getExtraAccountMetaAddress(h.mint, h.hook)),
+    "confirmed",
+  );
+  return hooked.filter((_, i) => !infos[i]).map((h) => label(h.mint.toBase58(), h.sym));
+}
+
+/** The position's two pool mints, as `missingHookMetaLists` takes them. */
+function poolMints(ctx: PositionContext) {
+  return [
+    { mint: ctx.pool.tokenMintA, info: ctx.mintAInfo, sym: ctx.metaA.sym },
+    { mint: ctx.pool.tokenMintB, info: ctx.mintBInfo, sym: ctx.metaB.sym },
+  ];
+}
+
+function hookUnpublished(labels: string[]): string {
+  return (
+    `the ${labels.join(" and ")} transfer hook has published no extra-account list on chain, so ` +
+    "Token-2022 cannot move the token"
+  );
+}
+
+/** `start_ratchet`'s refusal for a pool with such a hook: the keeper could never crank the order. */
+function hookRefusal(labels: string[]): CookieMcpError {
+  return new CookieMcpError(
+    `${hookUnpublished(labels)} and the keeper could never crank this order`,
+    "ask the issuer to publish the hook's ExtraAccountMetaList, or pick another pool",
+  );
+}
+
 // --- resolving which position -------------------------------------------------------------------
 
 function positionKey(arg: string): PublicKey {
@@ -485,6 +581,10 @@ async function resolvePosition(
       mode === "stop"
         ? withOrder
         : mine.filter((p, i) => !orderInfos[i] && !p.locked && p.liquidity.gtn(0));
+    // Nothing left to start but one running order: that one is meant — start repairs it.
+    if (mode === "start" && usable.length === 0 && withOrder.length === 1) {
+      return { positionPk: withOrder[0]!.positionAddress };
+    }
     if (usable.length === 0) {
       throw mode === "stop"
         ? new CookieMcpError(
@@ -496,7 +596,9 @@ async function resolvePosition(
               ? "every usable position of yours in that pool already has a Ratchet order running"
               : "no position of yours in that pool can be ratcheted (locked or empty)",
             withOrder.length
-              ? "get_ratchet_orders shows them; stop_ratchet one first to change its direction"
+              ? "to repair a paused one, pass `position` with its NFT mint " +
+                  `(${withOrder.map((p) => p.positionMint.toBase58()).join(", ")}); ` +
+                  "stop_ratchet one first to change its direction"
               : "a Ratchet needs an unlocked position with liquidity",
           );
     }
@@ -664,7 +766,7 @@ async function describeOrder(
           tickArrayFor(ctx.poolPk, decision.upper, ctx.pool.tickSpacing),
         ]
       : [];
-  const [ataInfos, missingArrays] = await Promise.all([
+  const [ataInfos, missingArrays, noMetaLists] = await Promise.all([
     payout.ownerAtas.length
       ? conn.getMultipleAccountsInfo(
           payout.ownerAtas.map((a) => a.address),
@@ -672,6 +774,7 @@ async function describeOrder(
         )
       : Promise.resolve([] as (AccountInfo<Buffer> | null)[]),
     needed.length ? missingTickArrays(conn, needed) : Promise.resolve([]),
+    missingHookMetaLists(conn, poolMints(ctx)),
   ]);
   const missingPayout = payout.ownerAtas
     .filter((_, i) => !ataInfos[i])
@@ -682,6 +785,7 @@ async function describeOrder(
   const { status, detail } = orderStatus({
     decision,
     delegated,
+    missingHookMetaLists: noMetaLists,
     missingPayout,
     missingTickArrays: missingArrays.length,
     next,
@@ -753,10 +857,17 @@ export async function getRatchetOrders(args: { owner?: string }): Promise<Ratche
 export interface StartRatchetArgs {
   /** The position NFT mint (or the position account). */
   position?: string;
-  /** Alternatively: your position in this CLMM pool. */
+  /** Alternatively: your position in this CLMM pool (or, with `amount`, the pool to open one in). */
   pool?: string;
   /** The token to sell: either pool mint, or "COOK". Optional for a one-sided position. */
   sell?: string;
+  /**
+   * Open a NEW one-sided position first: deposit this much of `sell` (UI units) into `pool` over
+   * `priceLower`..`priceUpper` (tokenB per tokenA), then ratchet it. All three go together.
+   */
+  amount?: string | number;
+  priceLower?: string | number;
+  priceUpper?: string | number;
   /** Tick spacings the price must move past the edge before it follows (default 1). */
   minStep?: number;
   /** Who may crank: omitted = the Cookiebox keeper; "anyone"; or a public key. */
@@ -777,6 +888,10 @@ export interface StartRatchetResult extends ReturnType<typeof positionView> {
   next: string;
   /** Owner-paid setup this start included (idempotent: 0 when they already existed). */
   created: { tickArrays: number; payoutAccounts: number };
+  /** Set when this call opened the position too (`amount` given); `signature` null = it existed already. */
+  opened?: { positionMint: string; signature: string | null; explorerUrl: string | null };
+  /** Set when the order was already running and this call only recreated what the keeper needs. */
+  repaired?: { delegation: boolean };
   notes: string[];
 }
 
@@ -803,18 +918,15 @@ export async function startRatchet(args: StartRatchetArgs): Promise<StartRatchet
   }
   const { cranker, keeper } = resolveCranker(args.cranker);
 
-  const { positionPk, info } = await resolvePosition(conn, args, signer, "start");
+  const opening = args.amount != null || args.priceLower != null || args.priceUpper != null;
+  const opened = opening ? await openPositionForRatchet(conn, signer, args) : null;
+  const { positionPk, info } = opened
+    ? { positionPk: opened.positionPk, info: undefined }
+    : await resolvePosition(conn, args, signer, "start");
   const ctx = await loadPositionContext(conn, positionPk, info);
   const pair = pairOf(ctx);
 
-  if (ctx.order) {
-    const { sells, receives } = soldReceived(ctx, ctx.order.direction);
-    throw new CookieMcpError(
-      `this position already has a Ratchet order running (${label(sells.mint, sells.symbol)} → ` +
-        `${label(receives.mint, receives.symbol)}, order ${ctx.orderPk.toBase58()})`,
-      "stop_ratchet it first to change the direction, step or cranker; get_ratchet_orders shows it",
-    );
-  }
+  if (ctx.order) return repairRatchet(conn, signer, { ...ctx, order: ctx.order });
   if (!ctx.nft || !ctx.nft.holder.equals(owner)) {
     throw new CookieMcpError(
       ctx.nft
@@ -842,6 +954,11 @@ export async function startRatchet(args: StartRatchetArgs): Promise<StartRatchet
   );
   const direction = directionForSell(args.sell, pair, holdings);
   const { sells, receives } = soldReceived(ctx, direction);
+  // Opening checked this before sending anything; a held position is checked here.
+  if (!opened) {
+    const noMetaLists = await missingHookMetaLists(conn, poolMints(ctx));
+    if (noMetaLists.length) throw hookRefusal(noMetaLists);
+  }
 
   const spanned = rangeTickArrayCount(
     ctx.position.tickLowerIndex,
@@ -947,6 +1064,17 @@ export async function startRatchet(args: StartRatchetArgs): Promise<StartRatchet
     "the position keeps earning LP fees while it fills; finish pays them out with the last fill",
     ...tokenNotes(ctx),
   ];
+  if (opened?.reused === "funded") {
+    notes.unshift(
+      `continued with position ${opened.positionMint} that an earlier call opened (same range, ` +
+        "about the same amount, no order): nothing new was deposited",
+    );
+  } else if (opened?.reused === "empty") {
+    notes.unshift(
+      `deposited into position ${opened.positionMint}, which an earlier call opened but whose ` +
+        "deposit had not landed",
+    );
+  }
   if (keeper === "anyone") {
     notes.push(
       "unpinned: anyone may crank this order, and a hostile cranker can hand most of it back " +
@@ -967,8 +1095,584 @@ export async function startRatchet(args: StartRatchetArgs): Promise<StartRatchet
     keeper,
     next,
     created: { tickArrays: missing.length, payoutAccounts: payoutAccountsCreated },
+    ...(opened
+      ? {
+          opened: {
+            positionMint: opened.positionMint,
+            signature: opened.signature,
+            explorerUrl: opened.signature ? explorerTxUrl(opened.signature) : null,
+          },
+        }
+      : {}),
     ...positionView(ctx),
     notes,
+  };
+}
+
+/**
+ * `start_ratchet` with `amount` + `priceLower` + `priceUpper`: open a one-sided position in `pool`
+ * first. The range must sit entirely on the `sell` side of the current price (above it to sell
+ * token A, below it to sell token B), so nothing counts as filled the moment it opens. Re-entrant
+ * for an external signer: a position of this wallet with exactly this range, liquidity and no order
+ * is used instead of opening another, so "submit, then call again" lands on the enable step.
+ */
+async function openPositionForRatchet(
+  conn: Connection,
+  signer: TxSigner,
+  args: StartRatchetArgs,
+): Promise<OpenedForRatchet> {
+  if (args.amount == null || args.priceLower == null || args.priceUpper == null) {
+    throw new CookieMcpError(
+      "to open a position, pass amount, priceLower and priceUpper together",
+      "or leave all three out to ratchet a position you already hold (`position` or `pool`)",
+    );
+  }
+  if (args.position) {
+    throw new CookieMcpError(
+      "`position` and amount/priceLower/priceUpper don't go together: the first ratchets a position " +
+        "you hold, the others open a new one",
+      "drop `position` to open a new one in `pool`, or drop the other three to ratchet it",
+    );
+  }
+  if (!args.pool) {
+    throw new CookieMcpError(
+      "opening a position needs `pool` (the cookiebox-clmm pool to open it in)",
+      "see get_pools",
+    );
+  }
+  if (!args.sell || !args.sell.trim()) {
+    throw new CookieMcpError(
+      "opening a position needs `sell`: the token you deposit and sell (a pool mint, or COOK)",
+      "the position is one-sided, so what you deposit is what the order sells",
+    );
+  }
+  let poolPk: PublicKey;
+  try {
+    poolPk = new PublicKey(args.pool.trim());
+  } catch {
+    throw new CookieMcpError(`invalid pool address: ${args.pool}`, "pass a valid pool pubkey");
+  }
+  const pool = parsePool(poolPk, await conn.getAccountInfo(poolPk, "confirmed"));
+  const [meta, [mintAInfo, mintBInfo]] = await Promise.all([
+    resolveMintMeta([pool.tokenMintA.toBase58(), pool.tokenMintB.toBase58()]),
+    conn.getMultipleAccountsInfo([pool.tokenMintA, pool.tokenMintB], "confirmed"),
+  ]);
+  const metaA = requireMintMeta(meta, pool.tokenMintA.toBase58());
+  const metaB = requireMintMeta(meta, pool.tokenMintB.toBase58());
+  const pair: PairTokens = {
+    mintA: pool.tokenMintA.toBase58(),
+    mintB: pool.tokenMintB.toBase58(),
+    symA: metaA.sym,
+    symB: metaB.sym,
+  };
+  const current = PriceMath.sqrtPriceX64ToPrice(pool.sqrtPrice as BN, metaA.dec, metaB.dec)
+    .toSignificantDigits(9)
+    .toString();
+  const priceUnit = `${label(pair.mintB, pair.symB)} per ${label(pair.mintA, pair.symA)}`;
+  const [lower, upper] = rangeTicksFromPrices({
+    lower: args.priceLower,
+    upper: args.priceUpper,
+    decA: metaA.dec,
+    decB: metaB.dec,
+    tickSpacing: pool.tickSpacing,
+    unit: `${priceUnit}, now ${current}`,
+  });
+  const holdings = positionHoldings(pool.tickCurrentIndex, lower, upper);
+  const price = (tick: number) =>
+    PriceMath.tickIndexToPrice(tick, metaA.dec, metaB.dec).toSignificantDigits(9).toString();
+  // Our same-range positions come first: with an external signer each call stops at the next
+  // unsigned tx, so an earlier call of this request may already have opened (and funded) one. The
+  // refusals below name it, so a price that moved meanwhile never strands it.
+  const sameRange = await sameRangePositions(conn, signer, pool, poolPk, lower, upper);
+  const stranded = strandedPositionHint(sameRange.map((p) => p.positionMint.toBase58()));
+  if (holdings === "both") {
+    throw new CookieMcpError(
+      `the range ${price(lower)}–${price(upper)} contains the current price ${current} (${priceUnit})`,
+      `a Ratchet starts from a one-sided range: to sell ${label(pair.mintA, pair.symA)} put the ` +
+        `whole range above the price, to sell ${label(pair.mintB, pair.symB)} put it below` +
+        stranded,
+    );
+  }
+  // A range on one side of the price holds one token, so it can only sell that one.
+  let direction: RatchetDirection;
+  try {
+    direction = directionForSell(args.sell, pair, holdings);
+  } catch (e) {
+    if (!(e instanceof CookieMcpError) || !/holds no/.test(e.message)) throw e;
+    const holds = holdings === "a" ? label(pair.mintA, pair.symA) : label(pair.mintB, pair.symB);
+    const other = holdings === "a" ? label(pair.mintB, pair.symB) : label(pair.mintA, pair.symA);
+    throw new CookieMcpError(
+      `a range ${holdings === "a" ? "above" : "below"} the current price ${current} (${priceUnit}) ` +
+        `holds only ${holds}, so it can only sell ${holds}, not ${other}`,
+      `to sell ${other}, put the whole range ${holdings === "a" ? "below" : "above"} the price` +
+        stranded,
+    );
+  }
+  const spanned = rangeTickArrayCount(lower, upper, pool.tickSpacing);
+  if (spanned > MAX_RANGE_TICK_ARRAYS) {
+    throw new CookieMcpError(
+      `this range spans ${spanned} tick arrays; Ratchet supports up to ${MAX_RANGE_TICK_ARRAYS}`,
+      "narrow the range",
+    );
+  }
+  // Everything that can refuse runs before the first send, so a refusal never leaves a funded
+  // position without an order behind.
+  if (!mintAInfo || !mintBInfo) {
+    throw new CookieMcpError(
+      `the pool's ${!mintAInfo ? "token A" : "token B"} mint account was not found`,
+      "the pool may be misconfigured or the RPC lagging; retry, or pick another pool",
+    );
+  }
+  const noMetaLists = await missingHookMetaLists(conn, [
+    { mint: pool.tokenMintA, info: mintAInfo, sym: metaA.sym },
+    { mint: pool.tokenMintB, info: mintBInfo, sym: metaB.sym },
+  ]);
+  if (noMetaLists.length) throw hookRefusal(noMetaLists);
+  const sold =
+    direction === "aToB" ? { ...metaA, mint: pair.mintA } : { ...metaB, mint: pair.mintB };
+  const soldLabel = label(sold.mint, sold.sym);
+  let wantRaw: bigint;
+  try {
+    wantRaw = uiToRaw(args.amount, sold.dec);
+  } catch (e) {
+    throw new CookieMcpError((e as Error).message, `amount is how much ${soldLabel} to deposit`);
+  }
+  if (wantRaw <= 0n) {
+    throw new CookieMcpError("amount must be above zero", `how much ${soldLabel} to deposit`);
+  }
+  const amounts = {
+    amountA: direction === "aToB" ? args.amount : undefined,
+    amountB: direction === "bToA" ? args.amount : undefined,
+  };
+  const summary = {
+    action: "open position for ratchet",
+    pool: poolPk.toBase58(),
+    deposit: `${String(args.amount)} ${soldLabel}`,
+    range: `${price(lower)}–${price(upper)} ${priceUnit} (ticks ${lower}..${upper})`,
+    currentPrice: `${current} ${priceUnit}`,
+    direction,
+    then: WAIT_BEFORE_RECALL,
+  };
+
+  // Re-entry: a same-range position of ours is this request's earlier call — funded, or empty when
+  // the open went out as open + deposit and only the open landed. Use it rather than open another.
+  const candidates: ReentryCandidate[] = sameRange.map((p) => ({
+    ...p,
+    held: direction === "aToB" ? p.held.a : p.held.b,
+  }));
+  const reentry = pickReentry(candidates, wantRaw);
+  if (reentry?.kind === "reuse") {
+    return {
+      positionPk: reentry.c.positionPk,
+      positionMint: reentry.c.positionMint.toBase58(),
+      signature: null,
+      reused: "funded",
+    };
+  }
+  if (reentry?.kind === "conflict") {
+    const mint = reentry.c.positionMint.toBase58();
+    const more = reentry.more.map((c) => c.positionMint.toBase58());
+    throw new CookieMcpError(
+      `you already hold a position with exactly this range and no order (NFT ${mint}), holding ` +
+        `${rawToUi(reentry.c.held, sold.dec)} ${soldLabel} rather than ${String(args.amount)}` +
+        (more.length ? ` (and ${more.length} more like it: NFT ${more.join(", ")})` : ""),
+      `ratchet that one with \`position: "${mint}"\` (no amount/prices), or nudge ` +
+        "priceLower/priceUpper so the new range differs",
+    );
+  }
+  // The open sends its tick arrays (rent, never refunded) before the deposit is simulated, so a
+  // shortfall must be caught here, not by that simulation.
+  const soldMint = new PublicKey(sold.mint);
+  const balance = await soldBalanceRaw(
+    conn,
+    signer.publicKey,
+    soldMint,
+    (direction === "aToB" ? mintAInfo : mintBInfo).owner,
+  );
+  const short = depositShortfall({
+    balance,
+    want: wantRaw,
+    dec: sold.dec,
+    label: soldLabel,
+    native: soldMint.toBase58() === COOK_MINT,
+  });
+  if (short) throw short;
+  if (reentry?.kind === "deposit") {
+    const signature = await depositClmmPosition(
+      conn,
+      signer,
+      { poolPk, positionPk: reentry.c.positionPk, ...amounts },
+      { step: "intermediate", summary: { ...summary, action: "deposit into opened position" } },
+    );
+    return {
+      positionPk: reentry.c.positionPk,
+      positionMint: reentry.c.positionMint.toBase58(),
+      signature,
+      reused: "empty",
+    };
+  }
+
+  const opened = await openClmmPosition(
+    conn,
+    signer,
+    { poolPk, tickLower: lower, tickUpper: upper, ...amounts },
+    { step: "intermediate", summary },
+  );
+  return {
+    positionPk: opened.positionAddress,
+    positionMint: opened.positionMint.toBase58(),
+    signature: opened.signature,
+    reused: null,
+  };
+}
+
+/** Both open and deposit go out as `step: "intermediate"`; a re-call before they confirm repeats them. */
+const WAIT_BEFORE_RECALL =
+  "wait for this transaction to confirm (submit_signed_tx reports `confirmed`) before calling " +
+  "start_ratchet again, or the next call sends it a second time";
+
+/**
+ * What the wallet can deposit of `mint`, raw: native lamports for COOK (the CLMM client wraps the
+ * deposit from lamports into a temporary account), else the associated token account's balance.
+ */
+async function soldBalanceRaw(
+  conn: Connection,
+  owner: PublicKey,
+  mint: PublicKey,
+  tokenProgram: PublicKey,
+): Promise<bigint> {
+  if (mint.toBase58() === COOK_MINT) return BigInt(await conn.getBalance(owner, "confirmed"));
+  const ata = getAssociatedTokenAddressSync(mint, owner, true, tokenProgram);
+  const info = await conn.getAccountInfo(ata, "confirmed");
+  return info ? unpackAccount(ata, info, tokenProgram).amount : 0n;
+}
+
+/** The refusal for a deposit the wallet can't cover, or null. Native COOK also pays the fees. */
+export function depositShortfall(p: {
+  balance: bigint;
+  want: bigint;
+  dec: number;
+  label: string;
+  native: boolean;
+}): CookieMcpError | null {
+  if (p.balance >= p.want) return null;
+  return new CookieMcpError(
+    `this wallet holds ${rawToUi(p.balance, p.dec)} ${p.label}, less than the ${rawToUi(p.want, p.dec)} ` +
+      `${p.label} to deposit`,
+    "lower `amount`" +
+      (p.native ? " (leave some COOK for fees and the position and tick-array rent)" : "") +
+      "; nothing was sent",
+  );
+}
+
+/**
+ * The wallet's unlocked, order-less positions in `pool` with exactly this tick range, with what each
+ * holds of both tokens at the current price. These are what an earlier call of the same request
+ * opened; the caller names them in refusals and continues with one of them.
+ */
+async function sameRangePositions(
+  conn: Connection,
+  signer: TxSigner,
+  pool: ReturnType<typeof parsePool>,
+  poolPk: PublicKey,
+  lower: number,
+  upper: number,
+): Promise<SameRangePosition[]> {
+  const client = buildClmmClient(conn, signer);
+  const mine = await findClmmPositions(conn, client, signer.publicKey, poolPk);
+  if (mine.length === 0) return [];
+  const [infos, orders] = await Promise.all([
+    conn.getMultipleAccountsInfo(
+      mine.map((p) => p.positionAddress),
+      "confirmed",
+    ),
+    conn.getMultipleAccountsInfo(
+      mine.map((p) => rangeOrderPda(p.positionAddress)),
+      "confirmed",
+    ),
+  ]);
+  const found: SameRangePosition[] = [];
+  for (let i = 0; i < mine.length; i++) {
+    const own = mine[i]!;
+    if (own.locked || orders[i] || !infos[i]) continue;
+    const pos = parsePosition(own.positionAddress, infos[i]!);
+    if (pos.tickLowerIndex !== lower || pos.tickUpperIndex !== upper) continue;
+    const liquidity = BigInt(pos.liquidity.toString());
+    found.push({
+      positionPk: own.positionAddress,
+      positionMint: own.positionMint,
+      liquidity,
+      held: withdrawAmounts({
+        liquidity,
+        tickCurrent: pool.tickCurrentIndex,
+        sqrtPrice: BigInt((pool.sqrtPrice as BN).toString()),
+        lower,
+        upper,
+        sqrtLower: sqrtAt(lower),
+        sqrtUpper: sqrtAt(upper),
+      }),
+    });
+  }
+  return found;
+}
+
+interface SameRangePosition {
+  positionPk: PublicKey;
+  positionMint: PublicKey;
+  liquidity: bigint;
+  held: { a: bigint; b: bigint };
+}
+
+/**
+ * Appended to a refusal of the range when the wallet already holds a position with it: an earlier
+ * call of this request opened it and the price moved since, so the agent must not just nudge the
+ * range and open another.
+ */
+export function strandedPositionHint(mints: string[]): string {
+  if (mints.length === 0) return "";
+  const one = mints.length === 1;
+  return (
+    `; note you already hold ${one ? "a position" : `${mints.length} positions`} with exactly this ` +
+    `range and no order (NFT ${mints.join(", ")}), likely opened by an earlier call of this ` +
+    `request: once the price is back on its side, ratchet it with \`position: "${mints[0]}"\` ` +
+    "(no amount/prices), or remove_liquidity to take the deposit out"
+  );
+}
+
+interface OpenedForRatchet {
+  positionPk: PublicKey;
+  positionMint: string;
+  /** The open (or deposit) signature; null when an already-funded position was reused. */
+  signature: string | null;
+  /** "funded": an earlier call's position, used as is; "empty": one whose deposit this call made. */
+  reused: "funded" | "empty" | null;
+}
+
+/** A same-range, unlocked, order-less position of the wallet, as `pickReentry` weighs it. */
+export interface ReentryCandidate {
+  positionPk: PublicKey;
+  positionMint: PublicKey;
+  liquidity: bigint;
+  /** Raw amount of the token being sold that the position holds now. */
+  held: bigint;
+}
+
+/**
+ * Which existing position an open-and-ratchet call continues with, if any. One holding about the
+ * requested amount (within 1% or two raw units, whichever is looser; never more — a one-sided
+ * deposit rounds down) is the earlier call's open: reuse it. Otherwise an empty one is an open whose
+ * deposit never landed: deposit into it. A funded one holding something else is not this request's,
+ * so the caller refuses rather than guess (`more` = the other funded ones, for the message). Null:
+ * open a new position.
+ */
+export function pickReentry(
+  candidates: ReentryCandidate[],
+  wantRaw: bigint,
+):
+  | { kind: "reuse" | "deposit"; c: ReentryCandidate; more: [] }
+  | { kind: "conflict"; c: ReentryCandidate; more: ReentryCandidate[] }
+  | null {
+  const funded = candidates.filter((c) => c.liquidity > 0n);
+  const match = funded.find(
+    (c) => c.held <= wantRaw && (c.held * 100n >= wantRaw * 99n || wantRaw - c.held <= 2n),
+  );
+  if (match) return { kind: "reuse", c: match, more: [] };
+  const empty = candidates.find((c) => c.liquidity === 0n);
+  if (empty) return { kind: "deposit", c: empty, more: [] };
+  return funded.length ? { kind: "conflict", c: funded[0]!, more: funded.slice(1) } : null;
+}
+
+/**
+ * What `start_ratchet` on a running order does: re-approve the NFT when this wallet holds it and
+ * the delegation is gone, recreate whatever else is missing, or refuse with the reason nothing here
+ * helps — nothing missing, a hook only its issuer can fix, or a delegation only the holder can.
+ */
+export function repairPlan(p: {
+  missingTickArrays: number;
+  missingPayout: number;
+  holdsNft: boolean;
+  delegatedToOrder: boolean;
+  missingHookMetaLists: string[];
+}): { reapprove: boolean; refuse: null | "nothing" | "hook" | "nftElsewhere" } {
+  const reapprove = p.holdsNft && !p.delegatedToOrder;
+  // Without the delegation the keeper can't crank at all, so recreating the rest would only spend
+  // rent on an order that stays paused; the holder's own repair redoes it once the NFT is back.
+  if (!p.delegatedToOrder && !p.holdsNft) return { reapprove, refuse: "nftElsewhere" };
+  if (p.missingTickArrays > 0 || p.missingPayout > 0 || reapprove) {
+    return { reapprove, refuse: null };
+  }
+  return { reapprove, refuse: p.missingHookMetaLists.length ? "hook" : "nothing" };
+}
+
+/**
+ * `start_ratchet` on a position whose order is already running: recreate what the keeper needs and
+ * the owner is responsible for — tick arrays the range spans, the owner's payout accounts, and the
+ * NFT's delegation to the order (re-approve, when this wallet still holds it). Nothing about the
+ * order changes. With nothing missing it refuses, as before: stop first to change it.
+ */
+async function repairRatchet(
+  conn: Connection,
+  signer: TxSigner,
+  ctx: PositionContext & { order: RangeOrder },
+): Promise<StartRatchetResult> {
+  const owner = signer.publicKey;
+  const order = ctx.order;
+  const { sells, receives } = soldReceived(ctx, order.direction);
+  const running =
+    `this position already has a Ratchet order running (${label(sells.mint, sells.symbol)} → ` +
+    `${label(receives.mint, receives.symbol)}, order ${ctx.orderPk.toBase58()})`;
+  if (!order.owner.equals(owner)) {
+    throw new CookieMcpError(
+      `${running}, owned by ${order.owner.toBase58()}`,
+      "only its owner may repair it; stop_ratchet is open to the NFT holder too",
+    );
+  }
+  const payout = payoutAccounts({
+    order: ctx.orderPk,
+    owner,
+    mintA: ctx.pool.tokenMintA,
+    mintB: ctx.pool.tokenMintB,
+    tokenProgramA: ctx.tokenProgramA,
+    tokenProgramB: ctx.tokenProgramB,
+  });
+  const [missingArrays, ataInfos, noMetaLists] = await Promise.all([
+    missingTickArrays(
+      conn,
+      rangeTickArrays(
+        ctx.poolPk,
+        ctx.position.tickLowerIndex,
+        ctx.position.tickUpperIndex,
+        ctx.pool.tickSpacing,
+      ),
+    ),
+    payout.ownerAtas.length
+      ? conn.getMultipleAccountsInfo(
+          payout.ownerAtas.map((a) => a.address),
+          "confirmed",
+        )
+      : Promise.resolve([] as (AccountInfo<Buffer> | null)[]),
+    missingHookMetaLists(conn, poolMints(ctx)),
+  ]);
+  const missingAtas = ataInfos.filter((i) => !i).length;
+  const { reapprove, refuse } = repairPlan({
+    missingTickArrays: missingArrays.length,
+    missingPayout: missingAtas,
+    holdsNft: ctx.nft != null && ctx.nft.holder.equals(owner),
+    delegatedToOrder: ctx.nft?.delegate?.equals(ctx.orderPk) ?? false,
+    missingHookMetaLists: noMetaLists,
+  });
+  if (refuse === "hook") {
+    throw new CookieMcpError(
+      `${running}, paused because ${hookUnpublished(noMetaLists)}`,
+      "nothing start_ratchet can recreate fixes that: it resumes once the issuer publishes the " +
+        "hook's ExtraAccountMetaList; stop_ratchet to take the position back meanwhile",
+    );
+  }
+  if (refuse === "nftElsewhere") {
+    throw new CookieMcpError(
+      `${running}, paused because the position NFT is not in this wallet, so only its holder can ` +
+        "re-approve it",
+      "move the NFT back and call start_ratchet again, or stop_ratchet to close the order",
+    );
+  }
+  if (refuse === "nothing") {
+    throw new CookieMcpError(
+      running,
+      "stop_ratchet it first to change the direction, step or cranker; get_ratchet_orders shows it",
+    );
+  }
+
+  const inits = buildTickArrayInitIxs(conn, {
+    whirlpool: ctx.poolPk,
+    arrays: missingArrays,
+    funder: owner,
+  });
+  const tail = [
+    ...(missingAtas
+      ? buildPayoutAtaIxs({
+          owner,
+          mintA: ctx.pool.tokenMintA,
+          mintB: ctx.pool.tokenMintB,
+          tokenProgramA: ctx.tokenProgramA,
+          tokenProgramB: ctx.tokenProgramB,
+        })
+      : []),
+    ...(reapprove
+      ? [
+          createApproveInstruction(
+            ctx.nft!.address,
+            ctx.orderPk,
+            owner,
+            1,
+            [],
+            ctx.nft!.tokenProgram,
+          ),
+        ]
+      : []),
+  ];
+  const txs = enableTransactions(inits, tail).filter((ixs) => ixs.length > 0);
+  // An SPL account has one delegate: re-approving revokes whoever holds it now (a marketplace, say).
+  const replacedDelegate = reapprove ? (ctx.nft!.delegate?.toBase58() ?? null) : null;
+  const summary = {
+    action: "repair ratchet",
+    order: ctx.orderPk.toBase58(),
+    position: ctx.positionPk.toBase58(),
+    tickArraysToCreate: missingArrays.length,
+    payoutAccountsToCreate: missingAtas,
+    reapproveNft: reapprove,
+    ...(replacedDelegate ? { revokesDelegate: replacedDelegate } : {}),
+  };
+  let signature = "";
+  for (let i = 0; i < txs.length; i++) {
+    const last = i === txs.length - 1;
+    signature = await signSendConfirm(
+      conn,
+      new Transaction().add(...txs[i]!),
+      signer,
+      [],
+      last ? "repair ratchet" : `ratchet tick arrays (${i + 1}/${txs.length - 1})`,
+      { step: last ? "final" : "intermediate", summary },
+    );
+  }
+  const decision = decisionFor(ctx, order.direction, order.minStep);
+  const next = describeDecision(decision, {
+    direction: order.direction,
+    minStep: order.minStep,
+    sold: label(sells.mint, sells.symbol),
+    received: label(receives.mint, receives.symbol),
+  });
+  const keeper = keeperKind(order.cranker);
+  return {
+    signature,
+    explorerUrl: explorerTxUrl(signature),
+    order: ctx.orderPk.toBase58(),
+    direction: order.direction,
+    sells,
+    receives,
+    minStep: order.minStep,
+    cranker: order.cranker?.toBase58() ?? null,
+    keeper,
+    next,
+    created: { tickArrays: missingArrays.length, payoutAccounts: missingAtas },
+    repaired: { delegation: reapprove },
+    ...positionView(ctx),
+    notes: [
+      "the order kept running and nothing about it changed; this only recreated what the keeper " +
+        "needs to crank it (the keeper never pays that rent itself)",
+      ...(replacedDelegate
+        ? [
+            `the NFT's previous delegate ${replacedDelegate} was revoked by the re-approval (an ` +
+              "account has one delegate); anything that relied on it, like a listing, no longer can",
+          ]
+        : []),
+      ...(noMetaLists.length
+        ? [
+            `still paused: ${hookUnpublished(noMetaLists)}; the keeper resumes once the issuer ` +
+              "publishes one, and nothing start_ratchet can recreate changes that",
+          ]
+        : []),
+      ...tokenNotes(ctx),
+    ],
   };
 }
 

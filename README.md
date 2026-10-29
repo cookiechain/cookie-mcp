@@ -323,6 +323,23 @@ convert back. Selling COOKHOUSE for COOK and buying COOK with COOKHOUSE are the 
   `pool` (your position in that pool; refused when you hold several). `sell` is the mint to sell (or
   `"COOK"`); a one-sided position infers it, a position holding both tokens must be told. Selling a
   token the position no longer holds is refused — that side has already converted.
+- **Open and ratchet in one go:** `start_ratchet` with `pool`, `sell`, `amount` and
+  `priceLower`/`priceUpper` (tokenB per tokenA, the `priceUnit` the tools report) opens a new
+  one-sided position over that range and ratchets it. The whole range must sit on the `sell` side
+  of the current price (above it to sell token A, below it to sell token B), so nothing counts as
+  filled the moment it opens; prices round to the pool's tick spacing. Every refusal (including a
+  transfer hook with no published extra-account list, and an `amount` the wallet doesn't hold)
+  comes before anything is sent. Re-entrant for
+  an external signer: a position of yours with exactly that range and no order is continued — used
+  as is when it holds `amount`, deposited into when it is empty (an open that went out as open +
+  deposit) — never opened twice; one holding a different amount is refused, naming it, and a
+  refusal of the range (the price moved onto it between calls) names it too.
+- **Repair instead of restart:** `start_ratchet` on a position whose order is already running
+  (by `position`, or by `pool` when that order is your only position there) recreates what a
+  `paused` order is missing — tick arrays, payout accounts, the NFT's delegation (re-approved when
+  you still hold it, revoking any other delegate, which the result names) — without stopping the
+  order. It refuses when nothing is missing (stop first to change direction, step or cranker) and
+  while the NFT is in another wallet, since the order can't resume until it is back.
 - **The NFT never leaves your wallet.** `enable` makes the order PDA the NFT's SPL delegate, and the
   program lets that delegate do exactly two things: move the trailing edge (one CPI to the CLMM's
   `reposition_liquidity_v2`, with the received-token deposit capped at 0 so the range can never
@@ -346,7 +363,8 @@ convert back. Selling COOKHOUSE for COOK and buying COOK with COOKHOUSE are the 
   (as tokenB per tokenA, see `priceUnit`), what the position holds now, who may crank it, and a
   `status` with the keeper's next move in words: `filling`, `waiting` (price not far enough past the
   edge, or in the range's last spacing), `fully-filled` (the keeper withdraws and closes next),
-  `paused` (delegation gone, payout account closed, or a tick array missing — stop and start again),
+  `paused` (delegation gone, a transfer hook with no published extra-account list, payout account
+  closed, or a tick array missing — `start_ratchet` on the position repairs all but the hook),
   `empty`, or `stale` (position account closed; `stop_ratchet` with the order address or NFT mint
   refunds the rent). Predicted from the program's
   own edge rule, which `src/core/ratchet/decision.ts` mirrors line for line.
