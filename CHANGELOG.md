@@ -4,6 +4,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 # Unreleased
 
+### Fixed
+
+- **`get_wallet_nfts` lists every NFT the wallet holds.** It used to return Baked Bazaar's per-wallet
+  view, which can miss most of a wallet (8 of 175 for one holder). The holdings now come from the
+  chain (each classic-token account holding one unit of a 0-decimal mint that has Metaplex metadata),
+  with names from the on-chain metadata and the price from the wallet's active Baked Bazaar listing.
+  An item whose token account is delegated to the auction house shows as listed even before the
+  marketplace has indexed the listing.
+
 # [0.9.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.9.0)
 
 _October 30, 2026_

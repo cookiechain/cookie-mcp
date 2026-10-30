@@ -1,7 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { PublicKey, Keypair } from "@solana/web3.js";
 
-import { filterSortListings, searchListings, toListingView, decodeMetadataCreators } from "./index";
+import {
+  filterSortListings,
+  searchListings,
+  toListingView,
+  decodeMetadataCreators,
+  decodeMetadataHeader,
+  mapWalletNfts,
+} from "./index";
 import type { BazaarListing } from "./bazaar";
 
 function listing(over: Partial<BazaarListing>): BazaarListing {
@@ -166,5 +173,93 @@ describe("decodeMetadataCreators", () => {
 
   it("returns [] on malformed/truncated data instead of throwing", () => {
     expect(decodeMetadataCreators(Buffer.alloc(4))).toEqual([]);
+  });
+});
+
+describe("decodeMetadataHeader", () => {
+  it("reads name, symbol and uri", () => {
+    expect(decodeMetadataHeader(encodeMetadata(null))).toEqual({
+      name: "Cookie",
+      symbol: "GORI",
+      uri: "https://example/uri.json",
+    });
+  });
+
+  it("trims the NUL padding of fixed-width fields", () => {
+    const data = encodeMetadata(null);
+    const padded = Buffer.concat([
+      data.subarray(0, 65),
+      Buffer.from([10, 0, 0, 0]),
+      Buffer.from("Chad #7\0\0\0"),
+      data.subarray(65 + 4 + 6),
+    ]);
+    expect(decodeMetadataHeader(padded)?.name).toBe("Chad #7");
+  });
+
+  it("returns null on truncated data", () => {
+    expect(decodeMetadataHeader(Buffer.alloc(70))).toBeNull();
+    expect(decodeMetadataHeader(encodeMetadata(null).subarray(0, 80))).toBeNull();
+  });
+});
+
+describe("mapWalletNfts", () => {
+  const owner = "ownerW";
+  const signer = "ahSigner";
+  const meta = (name: string) => ({ name, symbol: "CHADS" });
+
+  it("returns every on-chain holding with metadata, not just what the indexer lists", () => {
+    const holdings = Array.from({ length: 175 }, (_, i) => ({ mint: `m${i}`, delegate: null }));
+    const metadata = new Map(holdings.map((h, i) => [h.mint, meta(`Cookie Chads #${i}`)]));
+    expect(mapWalletNfts(owner, holdings, metadata, [], new Map(), signer)).toHaveLength(175);
+  });
+
+  it("drops holdings without metadata and sorts names numerically", () => {
+    const out = mapWalletNfts(
+      owner,
+      [
+        { mint: "a", delegate: null },
+        { mint: "b", delegate: null },
+        { mint: "fungible", delegate: null },
+      ],
+      new Map([
+        ["a", meta("Cookie Chads #1076")],
+        ["b", meta("Cookie Chads #89")],
+      ]),
+      [],
+      new Map(),
+      signer,
+    );
+    expect(out.map((n) => n.name)).toEqual(["Cookie Chads #89", "Cookie Chads #1076"]);
+  });
+
+  it("takes price from the owner's active listing; a delegated account without one is listed, price unknown", () => {
+    const out = mapWalletNfts(
+      owner,
+      [
+        { mint: "listed", delegate: signer },
+        { mint: "lagging", delegate: signer },
+        { mint: "free", delegate: null },
+        { mint: "old", delegate: null },
+      ],
+      new Map([
+        ["listed", meta("A")],
+        ["lagging", meta("B")],
+        ["free", meta("C")],
+        ["old", meta("D")],
+      ]),
+      [
+        listing({ nftMint: "listed", seller: owner, price: "30000000000000" }),
+        listing({ nftMint: "free", seller: "previousOwner" }), // someone else's stale listing
+        listing({ nftMint: "old", seller: owner, status: "Cancelled" }),
+      ],
+      new Map([["free", "https://img/c.png"]]),
+      signer,
+    );
+    expect(out.map((n) => [n.mint, n.listed, n.listedPrice, n.image ?? null])).toEqual([
+      ["listed", true, "30000", null],
+      ["lagging", true, null, null],
+      ["free", false, null, "https://img/c.png"],
+      ["old", false, null, null],
+    ]);
   });
 });

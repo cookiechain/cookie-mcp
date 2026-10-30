@@ -26,6 +26,7 @@ import {
   AH_SELLER_FEE_BPS,
   escrowPaymentAccount,
   metadataPda,
+  programAsSigner,
   buildSellIx,
   buildBuyIx,
   buildPublicBuyIx,
@@ -128,6 +129,31 @@ export function decodeMetadataCreators(data: Buffer): Creator[] {
     return creators;
   } catch {
     return [];
+  }
+}
+
+/** name / symbol / uri from Metaplex metadata (same layout as above), NULs trimmed; null if malformed. */
+export function decodeMetadataHeader(
+  data: Buffer,
+): { name: string; symbol: string; uri: string } | null {
+  try {
+    let i = 1 + 32 + 32;
+    const fields: string[] = [];
+    for (let f = 0; f < 3; f++) {
+      const len = data.readUInt32LE(i);
+      if (i + 4 + len > data.length) return null;
+      fields.push(
+        data
+          .subarray(i + 4, i + 4 + len)
+          .toString("utf8")
+          .replace(/\0/g, "")
+          .trim(),
+      );
+      i += 4 + len;
+    }
+    return { name: fields[0], symbol: fields[1], uri: fields[2] };
+  } catch {
+    return null;
   }
 }
 
@@ -299,23 +325,106 @@ async function readOwner(wallet?: string): Promise<string> {
   return owner;
 }
 
+/** A token account holding exactly one unit of a 0-decimal mint: the shape of an NFT holding. */
+export interface NftHolding {
+  mint: string;
+  delegate: string | null;
+}
+
+export interface WalletNftView {
+  mint: string;
+  name?: string;
+  symbol?: string;
+  image?: string;
+  listed: boolean;
+  listedPrice: string | null;
+  url: string;
+}
+
+/**
+ * Join the wallet's on-chain holdings with what the indexer knows. Holdings are the truth (the
+ * indexer's per-wallet view can miss most of a wallet); a holding without Metaplex metadata is not an
+ * NFT and is dropped. An item counts as listed when the indexer has an active listing by `owner` or
+ * — indexer lag — the token account is delegated to the auction house's program-as-signer, which
+ * `sell` sets and `cancel` revokes (price then unknown). Sorted by name, numbers in order.
+ */
+export function mapWalletNfts(
+  owner: string,
+  holdings: NftHolding[],
+  metadata: Map<string, { name: string; symbol: string }>,
+  listings: BazaarListing[],
+  images: Map<string, string>,
+  listingDelegate: string,
+): WalletNftView[] {
+  const listed = new Map(
+    listings
+      .filter((l) => l.seller === owner && (l.status ?? "").toLowerCase() === "active")
+      .map((l) => [l.nftMint, l]),
+  );
+  return holdings
+    .filter((h) => metadata.has(h.mint))
+    .map((h) => {
+      const meta = metadata.get(h.mint)!;
+      const listing = listed.get(h.mint);
+      return {
+        mint: h.mint,
+        name: meta.name || undefined,
+        symbol: meta.symbol || undefined,
+        image: images.get(h.mint) ?? listing?.metadata?.image,
+        listed: !!listing || h.delegate === listingDelegate,
+        listedPrice: listing ? cookUi(listing.price) : null,
+        url: listingUrl(h.mint),
+      };
+    })
+    .sort((a, b) =>
+      (a.name ?? a.mint).localeCompare(b.name ?? b.mint, undefined, { numeric: true }),
+    );
+}
+
 /** NFTs held by a wallet (default the configured wallet), with any active listing. */
 export async function getWalletNfts(wallet?: string): Promise<unknown> {
   const owner = await readOwner(wallet);
-  const nfts = await fetchUserNfts(owner);
-  return {
-    wallet: owner,
-    count: nfts.length,
-    nfts: nfts.map((n) => ({
-      mint: n.mint,
-      name: n.metadata?.name,
-      symbol: n.metadata?.symbol,
-      image: n.metadata?.image,
-      listed: !!n.listing && (n.listing.status ?? "").toLowerCase() === "active",
-      listedPrice: n.listing ? cookUi(n.listing.price) : null,
-      url: listingUrl(n.mint),
-    })),
-  };
+  const conn = getConnection();
+  // Auction House trades classic SPL tokens only, so that is where listable NFTs live.
+  const [accounts, listings, indexed] = await Promise.all([
+    conn.getParsedTokenAccountsByOwner(
+      new PublicKey(owner),
+      { programId: TOKEN_PROGRAM_ID },
+      "confirmed",
+    ),
+    fetchListings().catch(() => [] as BazaarListing[]),
+    fetchUserNfts(owner),
+  ]);
+  const holdings: NftHolding[] = accounts.value
+    .map((a) => a.account.data.parsed?.info)
+    .filter((i) => i?.tokenAmount?.decimals === 0 && i.tokenAmount.amount === "1")
+    .map((i) => ({ mint: i.mint as string, delegate: (i.delegate as string | undefined) ?? null }));
+
+  const metadata = new Map<string, { name: string; symbol: string }>();
+  for (let i = 0; i < holdings.length; i += 100) {
+    const chunk = holdings.slice(i, i + 100);
+    const infos = await conn.getMultipleAccountsInfo(
+      chunk.map((h) => metadataPda(new PublicKey(h.mint))),
+      "confirmed",
+    );
+    infos.forEach((info, j) => {
+      const header = info ? decodeMetadataHeader(info.data) : null;
+      if (header) metadata.set(chunk[j].mint, header);
+    });
+  }
+  const images = new Map(
+    indexed.flatMap((n) => (n.metadata?.image ? [[n.mint, n.metadata.image] as const] : [])),
+  );
+
+  const nfts = mapWalletNfts(
+    owner,
+    holdings,
+    metadata,
+    listings,
+    images,
+    programAsSigner()[0].toBase58(),
+  );
+  return { wallet: owner, count: nfts.length, nfts };
 }
 
 /** Offers a wallet has made and offers it has received (on NFTs it holds). Default configured wallet. */
