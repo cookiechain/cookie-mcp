@@ -237,7 +237,7 @@ async function sendOpenPosition(
 
 /**
  * Initializable ticks for a price range given as tokenB per tokenA (the pool's own orientation,
- * the `priceUnit` the Ratchet tools report). Each price rounds to the nearest tick the pool's
+ * the `priceUnit` the Zip tools report). Each price rounds to the nearest tick the pool's
  * spacing allows, so the range actually opened can differ slightly from the one asked for.
  */
 export function rangeTicksFromPrices(p: {
@@ -251,7 +251,7 @@ export function rangeTicksFromPrices(p: {
 }): [number, number] {
   const unitHint = p.unit
     ? `prices are ${p.unit}`
-    : "prices are tokenB per tokenA, the pool's orientation (see `priceUnit` on get_ratchet_orders)";
+    : "prices are tokenB per tokenA, the pool's orientation (see `priceUnit` on get_zip_orders)";
   const parse = (v: string | number, name: string) => {
     let d: Decimal;
     try {
@@ -301,7 +301,7 @@ export function rangeTicksFromPrices(p: {
 /**
  * Open a new CLMM position with an explicit tick range and deposit into it (one or both tokens,
  * UI amounts). The two end tick arrays are created first when missing. Returns the position NFT
- * mint and the position account, which `start_ratchet` needs right after.
+ * mint and the position account, which `start_zip` needs right after.
  */
 export async function openClmmPosition(
   conn: Connection,
@@ -342,7 +342,7 @@ export async function openClmmPosition(
 }
 
 /**
- * Deposit into an existing position of the wallet (UI amounts, one or both tokens). `start_ratchet`
+ * Deposit into an existing position of the wallet (UI amounts, one or both tokens). `start_zip`
  * uses it to finish an open whose deposit half never landed: when the open-position tx is too big
  * it goes out as open + deposit, and an external signer may submit only the first.
  */

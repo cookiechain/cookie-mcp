@@ -13,7 +13,7 @@ import {
 } from "@solana/web3.js";
 import { describe, expect, it, vi } from "vitest";
 
-import { PROGRAM_IDS, RATCHET_KEEPER } from "../config";
+import { PROGRAM_IDS, ZIP_KEEPER } from "../config";
 import { CLMM_PROGRAM_ID } from "../liquidity/clmm";
 import {
   buildDisableIx,
@@ -35,8 +35,8 @@ import {
   rangeOrderPda,
   rangeTickArrayCount,
   rangeTickArrays,
-  RATCHET_PROGRAM_ID,
-  ratchetProgram,
+  ZIP_PROGRAM_ID,
+  zipProgram,
   sqrtAt,
   TICK_ARRAY_INITS_PER_TX,
   tickArrayFor,
@@ -45,7 +45,9 @@ import {
 // --- golden fixtures: the first order ever opened on the live program (2026-10-28), read-only ------
 // Owner 8kBvpMzo…, position FaRJUds9… (NFT CJoGwAhw…) in the COOK/COOKHOUSE pool 8UPUKWa8…, bToA,
 // min_step 1, cranker = the Cookiebox keeper. The bytes pin the account layouts and the seed strings.
-const ORDER_ADDRESS = new PublicKey("CmMXNeV49wzarZC3MmtiWyS7bLSBExRp6joZwS3DXNQe");
+// The order was opened under the old Ratchet id (RTCHidUR…); its address here is re-derived for the
+// Zip id, since the account layout did not change with the rename.
+const ORDER_ADDRESS = new PublicKey("93XMoZjBVDXciWX1zqnw4Z25nhidHVEMsMU5gL1XrTna");
 const ORDER_B64 =
   "cxcRF2bfXZpzEiOzmG8JcWudmdDJR2KFQRdIOO6c+qhTW9zvMHCbQtiTQuG7UKzqnBnY1y3qrOxLwsPiwXCjzzpY6ufEHi89p//AwKymntmw45a+UWXwelfk4xr+SDOW19aI76ZR62JvBeX9CiC5yV8Q08VYILNa05Jjku0ZuhdJ6rzpAOcj6wEBAAGD2pEqNzseYNNfoll59oaL5zeFm/DLzCm0hc7bAzINWP4=";
 const OWNER = new PublicKey("8kBvpMzouRzb8ZhrJJFMrBh3qcEsgnf6w2EUSxU7JTGD");
@@ -59,7 +61,7 @@ const POOL_B64 =
   "P5XRDOGAYwljJNY0p1w1IRDIzUEIom5+tcAdYejz6Vgi+nyoNHL8aP1AAEAEiBPQBwAAAAAAAAAAAAAAAAAAAADeUqPiqcCnJQAAAAAAAAAAQGr//wAAAAAAAAAAAAAAAAAAAAAGm4hX/quBhPtof2NGGMA12sQ53BrrO1WYoPAAAAAAAWdzaJ6lmTkyv+t0Vs+TtCNDoPXUUlkjEe6L5MXGT/BcAAAAAAAAAAAAAAAAAAAAAKR1LHd2cszSZNFOvfHl6g/vaaPITGtRD8jsMKMB5kzutUYQ0+vDWxtx+AdX/PvdmLdZnE/GzU984KRoRqAQjbIAAAAAAAAAAAAAAAAAAAAAnCzhagAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8a9GTrurjdgYHI7+qAKN0PW57T30iaWf9OcV3PmgAecAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 const NFT_ACCOUNT = new PublicKey("8htC1PWPDdFSRu3EHz4C48U6gSyngacQUFbWvjkY4CgX");
 const NFT_ACCOUNT_B64 =
-  "p//AwKymntmw45a+UWXwelfk4xr+SDOW19aI76ZR62JzEiOzmG8JcWudmdDJR2KFQRdIOO6c+qhTW9zvMHCbQgEAAAAAAAAAAQAAAK7NUWdg78c9jjjq8nvMyrJ2J6FawBitbGqzAJy8IJE/AQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  "p//AwKymntmw45a+UWXwelfk4xr+SDOW19aI76ZR62JzEiOzmG8JcWudmdDJR2KFQRdIOO6c+qhTW9zvMHCbQgEAAAAAAAAAAQAAAHeC+9LY/2JhRhZr964+tKbNkLBDLu2hQe1TDOcIC7vDAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 const acct = (b64: string, owner: PublicKey) => ({
   data: Buffer.from(b64, "base64"),
@@ -71,10 +73,10 @@ const acct = (b64: string, owner: PublicKey) => ({
 
 const conn = new Connection("http://localhost:8899"); // never contacted: builders only
 
-describe("Ratchet program binding", () => {
+describe("Zip program binding", () => {
   it("pins the program id and the IDL address together", () => {
-    expect(RATCHET_PROGRAM_ID.toBase58()).toBe("RTCHidURfYbbig1xAiXq39gyNYuBBLs3QQUL4mpqYRX");
-    expect(PROGRAM_IDS.ratchet).toBe(RATCHET_PROGRAM_ID.toBase58());
+    expect(ZIP_PROGRAM_ID.toBase58()).toBe("ZiPzPbbMhmUxi6XrRGN6d9qHAKtpWRpGR6orR2y1wEC");
+    expect(PROGRAM_IDS.zip).toBe(ZIP_PROGRAM_ID.toBase58());
   });
 
   it("derives the live order's PDA from its position (golden: seed string + program id)", () => {
@@ -83,7 +85,7 @@ describe("Ratchet program binding", () => {
     expect(nativePayoutPda(ORDER_ADDRESS).toBase58()).toBe(
       PublicKey.findProgramAddressSync(
         [Buffer.from("native_payout"), ORDER_ADDRESS.toBuffer()],
-        RATCHET_PROGRAM_ID,
+        ZIP_PROGRAM_ID,
       )[0].toBase58(),
     );
   });
@@ -99,12 +101,12 @@ describe("Ratchet program binding", () => {
     expect(o.whirlpool.toBase58()).toBe(POOL.toBase58());
     expect(o.direction).toBe("bToA");
     expect(o.minStep).toBe(1);
-    expect(o.cranker?.toBase58()).toBe(RATCHET_KEEPER);
+    expect(o.cranker?.toBase58()).toBe(ZIP_KEEPER);
     expect(o.bump).toBe(254);
   });
 
   it("refuses to decode an account that is not a RangeOrder", () => {
-    expect(() => decodeRangeOrder(Buffer.from(POOL_B64, "base64"))).toThrow(/not a Ratchet/);
+    expect(() => decodeRangeOrder(Buffer.from(POOL_B64, "base64"))).toThrow(/not a Zip/);
   });
 
   it("filters program reads by discriminator, then owner at offset 8", () => {
@@ -151,7 +153,7 @@ describe("Ratchet program binding", () => {
 });
 
 describe("enable / disable instructions", () => {
-  const program = ratchetProgram(conn);
+  const program = zipProgram(conn);
   const owner = Keypair.generate().publicKey;
   const nft = Keypair.generate().publicKey;
   const base = {
@@ -165,9 +167,9 @@ describe("enable / disable instructions", () => {
   };
 
   it("enable encodes disc + direction enum + min_step u16 + Option<cranker> (golden bytes)", async () => {
-    const cranker = new PublicKey(RATCHET_KEEPER);
+    const cranker = new PublicKey(ZIP_KEEPER);
     const ix = await buildEnableIx({ ...base, direction: "bToA", cranker });
-    expect(ix.programId.equals(RATCHET_PROGRAM_ID)).toBe(true);
+    expect(ix.programId.equals(ZIP_PROGRAM_ID)).toBe(true);
     expect(ix.data.length).toBe(8 + 1 + 2 + 1 + 32);
     expect([...ix.data.subarray(0, 8)]).toEqual([159, 34, 127, 41, 193, 53, 124, 27]);
     expect(ix.data[8]).toBe(1); // Direction::BToA
@@ -219,8 +221,8 @@ describe("enable / disable instructions", () => {
       nft: null,
     });
     expect(without.keys.slice(3).map((k) => k.pubkey.toBase58())).toEqual([
-      RATCHET_PROGRAM_ID.toBase58(),
-      RATCHET_PROGRAM_ID.toBase58(),
+      ZIP_PROGRAM_ID.toBase58(),
+      ZIP_PROGRAM_ID.toBase58(),
     ]);
   });
 });
@@ -332,7 +334,7 @@ describe("tick arrays", () => {
       expect(inits[0]!.keys.some((k) => k.pubkey.equals(funder) && k.isSigner)).toBe(true);
       const other = Keypair.generate().publicKey;
       const enable = await buildEnableIx({
-        program: ratchetProgram(conn),
+        program: zipProgram(conn),
         owner: funder,
         whirlpool: POOL,
         position: Keypair.generate().publicKey,

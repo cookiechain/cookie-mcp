@@ -8,7 +8,7 @@ import {
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import { COOK_MINT, RATCHET_KEEPER } from "../config";
+import { COOK_MINT, ZIP_KEEPER } from "../config";
 import { CLMM_PROGRAM_ID } from "../liquidity/clmm";
 import {
   depositShortfall,
@@ -19,7 +19,7 @@ import {
   pickReentry,
   pickStopOrder,
   positionHoldings,
-  RATCHET_PROGRAM_ID,
+  ZIP_PROGRAM_ID,
   repairPlan,
   resolveCranker,
   strandedPositionHint,
@@ -83,7 +83,7 @@ describe("resolveCranker / keeperKind", () => {
   it("defaults to the Cookiebox keeper", () => {
     for (const input of [undefined, "", "cookiebox", "Keeper"]) {
       const r = resolveCranker(input);
-      expect(r.cranker?.toBase58()).toBe(RATCHET_KEEPER);
+      expect(r.cranker?.toBase58()).toBe(ZIP_KEEPER);
       expect(r.keeper).toBe("cookiebox");
     }
   });
@@ -97,8 +97,8 @@ describe("resolveCranker / keeperKind", () => {
   it("a public key is custom unless it is the keeper's", () => {
     const k = PublicKey.unique();
     expect(resolveCranker(k.toBase58())).toEqual({ cranker: k, keeper: "custom" });
-    expect(resolveCranker(RATCHET_KEEPER).keeper).toBe("cookiebox");
-    expect(keeperKind(new PublicKey(RATCHET_KEEPER))).toBe("cookiebox");
+    expect(resolveCranker(ZIP_KEEPER).keeper).toBe("cookiebox");
+    expect(keeperKind(new PublicKey(ZIP_KEEPER))).toBe("cookiebox");
   });
 
   it("refuses anything else", () => {
@@ -111,11 +111,11 @@ describe("describeDecision + orderStatus", () => {
 
   it("names the edge that moves and the token paid out", () => {
     expect(
-      describeDecision({ kind: "ratchet", lower: -39296, upper: -38528, liquidity: 1n }, words),
+      describeDecision({ kind: "zip", lower: -39296, upper: -38528, liquidity: 1n }, words),
     ).toMatch(/upper edge down to tick -38528 and pays the filled COOK/);
     expect(
       describeDecision(
-        { kind: "ratchet", lower: 640, upper: 1408, liquidity: 1n },
+        { kind: "zip", lower: 640, upper: 1408, liquidity: 1n },
         { ...words, direction: "aToB" },
       ),
     ).toMatch(/lower edge up to tick 640/);
@@ -131,9 +131,7 @@ describe("describeDecision + orderStatus", () => {
     expect(describeDecision({ kind: "wait", reason: "lastSpacing" }, words)).toMatch(
       /last COOKHOUSE/,
     );
-    expect(describeDecision({ kind: "wait", reason: "noLiquidity" }, words)).toMatch(
-      /stop_ratchet/,
-    );
+    expect(describeDecision({ kind: "wait", reason: "noLiquidity" }, words)).toMatch(/stop_zip/);
   });
 
   it("maps decisions to statuses when nothing is paused", () => {
@@ -146,8 +144,7 @@ describe("describeDecision + orderStatus", () => {
     };
     expect(orderStatus({ ...base, decision: { kind: "finish" } }).status).toBe("fully-filled");
     expect(
-      orderStatus({ ...base, decision: { kind: "ratchet", lower: 0, upper: 1, liquidity: 1n } })
-        .status,
+      orderStatus({ ...base, decision: { kind: "zip", lower: 0, upper: 1, liquidity: 1n } }).status,
     ).toBe("filling");
     expect(
       orderStatus({ ...base, decision: { kind: "wait", reason: "stepTooSmall" } }).status,
@@ -160,7 +157,7 @@ describe("describeDecision + orderStatus", () => {
 
   it("a lost delegation, a closed payout account or a missing tick array pauses it", () => {
     const base = {
-      decision: { kind: "ratchet", lower: 0, upper: 1, liquidity: 1n } as const,
+      decision: { kind: "zip", lower: 0, upper: 1, liquidity: 1n } as const,
       delegated: true,
       missingHookMetaLists: [] as string[],
       missingPayout: [] as string[],
@@ -170,11 +167,11 @@ describe("describeDecision + orderStatus", () => {
     expect(orderStatus({ ...base, delegated: false })).toMatchObject({
       status: "paused",
       detail: expect.stringMatching(
-        /no longer delegated.*start_ratchet with `position` set to this order's positionMint re-approves/,
+        /no longer delegated.*start_zip with `position` set to this order's positionMint re-approves/,
       ),
     });
     expect(orderStatus({ ...base, missingPayout: ["COOKHOUSE"] }).detail).toMatch(
-      /COOKHOUSE token account was closed.*start_ratchet with `position`.*recreates it/,
+      /COOKHOUSE token account was closed.*start_zip with `position`.*recreates it/,
     );
     expect(orderStatus({ ...base, missingTickArrays: 2 }).detail).toMatch(
       /2 tick array.*without stopping the order/,
@@ -195,7 +192,7 @@ describe("describeDecision + orderStatus", () => {
 });
 
 describe("pickStopOrder", () => {
-  const order = { owner: RATCHET_PROGRAM_ID };
+  const order = { owner: ZIP_PROGRAM_ID };
   const position = { owner: CLMM_PROGRAM_ID };
   const none = { arg: null, orderForMint: null, orderForAccount: null, positionForMint: null };
 

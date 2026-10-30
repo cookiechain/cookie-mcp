@@ -21,7 +21,7 @@ src/
     txVerify.ts        #   decode + refuse an aggregator-built tx before signing (shared by escrow flows)
     limitOrders.ts     #   Cookiebox limit / stop orders (+ curveOrders.ts for curve pairs)
     dca.ts             #   Cookiebox DCA schedules (separate program, same build-verify-sign shape)
-    ratchet/           #   Cookiebox Ratchet: trailing range orders on CLMM positions — decision (keeper rules, pure)
+    zip/           #   Cookiebox Zip: trailing range orders on CLMM positions — decision (keeper rules, pure)
                        #   + program (PDAs, decoders, owner-signed enable/disable) + index (the three tools)
     launchpad/         #   MomoSwap launchpad: api (HTTP client) + curve (quote math) + positions (PDAs)
                        #   + program (which deployment: PDA scope + error-code build)
