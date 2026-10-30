@@ -4,6 +4,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 # Unreleased
 
+# [0.9.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.9.0)
+
+_October 30, 2026_
+
 ### Added
 
 - **Cookiebox Zip.** Three tools for trailing range orders (program `ZiPzPbbM…`), behaving like
