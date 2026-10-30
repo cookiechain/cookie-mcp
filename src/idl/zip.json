@@ -1,7 +1,7 @@
 {
-  "address": "RTCHidURfYbbig1xAiXq39gyNYuBBLs3QQUL4mpqYRX",
+  "address": "ZiPzPbbMhmUxi6XrRGN6d9qHAKtpWRpGR6orR2y1wEC",
   "metadata": {
-    "name": "ratchet",
+    "name": "zip",
     "version": "0.1.0",
     "spec": "0.1.0",
     "description": "Trailing range orders for CookieBox CLMM positions: the filled part of the range is locked in and never reverses"
@@ -66,7 +66,7 @@
       "name": "enable",
       "docs": [
         "Owner: start the order in `direction` and delegate the position NFT to the `RangeOrder` PDA.",
-        "`cranker` is the only key allowed to `ratchet`; `None` lets anyone."
+        "`cranker` is the only key allowed to `zip`; `None` lets anyone."
       ],
       "discriminator": [159, 34, 127, 41, 193, 53, 124, 27],
       "accounts": [
@@ -235,9 +235,7 @@
     },
     {
       "name": "finish_v2",
-      "docs": [
-        "`finish` for a pool with a transfer-hook mint; remaining accounts as in `ratchet_v2`."
-      ],
+      "docs": ["`finish` for a pool with a transfer-hook mint; remaining accounts as in `zip_v2`."],
       "discriminator": [37, 212, 115, 233, 113, 99, 229, 187],
       "accounts": [
         {
@@ -340,12 +338,12 @@
       ]
     },
     {
-      "name": "ratchet",
+      "name": "zip",
       "docs": [
         "The chosen cranker (or anyone, if none was chosen): move the trailing edge to the current",
         "price and pay the filled part to the owner."
       ],
-      "discriminator": [221, 214, 205, 110, 12, 170, 24, 173],
+      "discriminator": [234, 148, 253, 137, 26, 215, 102, 61],
       "accounts": [
         {
           "name": "cranker",
@@ -458,13 +456,13 @@
       ]
     },
     {
-      "name": "ratchet_v2",
+      "name": "zip_v2",
       "docs": [
-        "`ratchet` for a pool with a transfer-hook mint: the remaining accounts are mint A's hook",
+        "`zip` for a pool with a transfer-hook mint: the remaining accounts are mint A's hook",
         "accounts (`hook_accounts_a` of them), then mint B's, each as the CLMM's v2 instructions take",
         "them (the resolved extra accounts, the hook program, its `ExtraAccountMetaList`)."
       ],
-      "discriminator": [108, 75, 121, 128, 165, 20, 40, 237],
+      "discriminator": [213, 94, 199, 138, 217, 86, 128, 206],
       "accounts": [
         {
           "name": "cranker",
@@ -605,8 +603,8 @@
       "discriminator": [234, 21, 140, 41, 107, 28, 68, 157]
     },
     {
-      "name": "Ratcheted",
-      "discriminator": [179, 132, 213, 65, 217, 49, 192, 119]
+      "name": "Zipped",
+      "discriminator": [225, 106, 19, 112, 59, 112, 90, 218]
     }
   ],
   "errors": [
@@ -698,7 +696,7 @@
     {
       "code": 6017,
       "name": "UnauthorizedCranker",
-      "msg": "Only the cranker chosen at enable may ratchet this order"
+      "msg": "Only the cranker chosen at enable may zip this order"
     },
     {
       "code": 6018,
@@ -835,7 +833,7 @@
           {
             "name": "cranker",
             "docs": [
-              "Who may call `ratchet`. `None` lets anyone, which exposes the order to a cranker that passes the",
+              "Who may call `zip`. `None` lets anyone, which exposes the order to a cranker that passes the",
               "old liquidity at every step and so returns most of it unconverted (see README, trust model)."
             ],
             "type": {
@@ -850,7 +848,7 @@
       }
     },
     {
-      "name": "Ratcheted",
+      "name": "Zipped",
       "type": {
         "kind": "struct",
         "fields": [

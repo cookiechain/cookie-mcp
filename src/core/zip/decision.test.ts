@@ -4,12 +4,12 @@ import { describe, expect, it } from "vitest";
 import {
   amountDeltaA,
   amountDeltaB,
-  decideRatchet,
+  decideZip,
   fullyFilled,
   maxLiquidity,
   nextRange,
   withdrawAmounts,
-  type RatchetDirection,
+  type ZipDirection,
 } from "./decision";
 
 const sqrtAt = (tick: number) => BigInt(PriceMath.tickIndexToSqrtPriceX64(tick).toString());
@@ -101,7 +101,7 @@ describe("amount math matches the CLMM's rounding", () => {
 });
 
 describe("maxLiquidity never asks for more than unfilled - 1", () => {
-  const cases: [RatchetDirection, number, number][] = [
+  const cases: [ZipDirection, number, number][] = [
     ["bToA", -39296, -38528],
     ["bToA", -1280, -512],
     ["aToB", 640, 1408],
@@ -126,10 +126,10 @@ describe("maxLiquidity never asks for more than unfilled - 1", () => {
   }
 });
 
-describe("decideRatchet", () => {
+describe("decideZip", () => {
   const L = 3505876075642183n; // the live position's liquidity
-  const order = (tickCurrent: number, over: Partial<Parameters<typeof decideRatchet>[0]> = {}) =>
-    decideRatchet({
+  const order = (tickCurrent: number, over: Partial<Parameters<typeof decideZip>[0]> = {}) =>
+    decideZip({
       direction: "bToA",
       minStep: 1,
       tickSpacing: 64,
@@ -146,10 +146,10 @@ describe("decideRatchet", () => {
     expect(order(UPPER)).toEqual({ kind: "wait", reason: "stepTooSmall" });
   });
 
-  it("ratchets with liquidity at least the old once the price moved a spacing", () => {
+  it("zips with liquidity at least the old once the price moved a spacing", () => {
     const d = order(-38500);
-    expect(d.kind).toBe("ratchet");
-    if (d.kind !== "ratchet") return;
+    expect(d.kind).toBe("zip");
+    if (d.kind !== "zip") return;
     expect([d.lower, d.upper]).toEqual([LOWER, -38528]);
     expect(d.liquidity >= L).toBe(true);
   });
@@ -163,12 +163,12 @@ describe("decideRatchet", () => {
     expect(order(LOWER + 3)).toEqual({ kind: "wait", reason: "lastSpacing" });
   });
 
-  it("an emptied position waits rather than predicting a doomed ratchet", () => {
+  it("an emptied position waits rather than predicting a doomed zip", () => {
     expect(order(-38500, { liquidity: 0n })).toEqual({ kind: "wait", reason: "noLiquidity" });
   });
 
   it("aToB mirrors it", () => {
-    const d = decideRatchet({
+    const d = decideZip({
       direction: "aToB",
       minStep: 1,
       tickSpacing: 64,
@@ -179,6 +179,6 @@ describe("decideRatchet", () => {
       upper: 1408,
       sqrtAt,
     });
-    expect(d).toMatchObject({ kind: "ratchet", lower: 640, upper: 1408 });
+    expect(d).toMatchObject({ kind: "zip", lower: 640, upper: 1408 });
   });
 });

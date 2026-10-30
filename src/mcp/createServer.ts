@@ -40,13 +40,7 @@ import {
   getDcaSchedules,
   openDca,
 } from "../core/dca";
-import {
-  getRatchetOrders,
-  MAX_RANGE_TICK_ARRAYS,
-  MIN_STEP_MAX,
-  startRatchet,
-  stopRatchet,
-} from "../core/ratchet";
+import { getZipOrders, MAX_RANGE_TICK_ARRAYS, MIN_STEP_MAX, startZip, stopZip } from "../core/zip";
 import { getStakeInfo, stake, unstake } from "../core/stake";
 import {
   createPool,
@@ -848,13 +842,13 @@ export function createServer(): McpServer {
   );
 
   registerTool(
-    "get_ratchet_orders",
+    "get_zip_orders",
     {
-      title: "Running Ratchet orders",
+      title: "Running Zip orders",
       description:
-        "Ratchet orders (trailing range orders on Cookiebox CLMM positions, program `RTCHidUR…`) " +
+        "Zip orders (trailing range orders on Cookiebox CLMM positions, program `ZiPzPbbM…`) " +
         "running for a wallet — yours by default, or `owner` = any address or .cook name. Read " +
-        "straight from the program; no key needed. A Ratchet turns a one-sided CLMM position into a " +
+        "straight from the program; no key needed. A Zip turns a one-sided CLMM position into a " +
         "sell (or, seen from the other token, a buy) that cannot convert back: the Cookiebox keeper " +
         "keeps moving the range's trailing edge up to the price, and each move pays the part that " +
         "has filled to the owner's wallet. Each order reports what it sells and receives, its range " +
@@ -864,9 +858,9 @@ export function createServer(): McpServer {
         "edge, or inside the last tick spacing), `fully-filled` (the keeper withdraws everything " +
         "and closes the order next), `paused` (the NFT delegation is gone, a transfer hook has no " +
         "published extra-account list, a payout account was closed, or a tick array is missing — " +
-        "start_ratchet with the order's `positionMint` repairs all but the hook without stopping " +
+        "start_zip with the order's `positionMint` repairs all but the hook without stopping " +
         "it), `empty`, or `stale` (the " +
-        "position is gone; stop_ratchet refunds the order's rent).",
+        "position is gone; stop_zip refunds the order's rent).",
       inputSchema: {
         owner: z
           .string()
@@ -876,13 +870,13 @@ export function createServer(): McpServer {
           .describe("wallet address or .cook name; defaults to the configured wallet"),
       },
     },
-    tool(async (a: { owner?: string }) => getRatchetOrders(a)),
+    tool(async (a: { owner?: string }) => getZipOrders(a)),
   );
 
   registerTool(
-    "start_ratchet",
+    "start_zip",
     {
-      title: "Start a Ratchet on a CLMM position",
+      title: "Start a Zip on a CLMM position",
       description:
         "Turn one of your Cookiebox CLMM positions into a trailing range order: sell the token the " +
         "position holds into the other as the price moves through the range, WITHOUT the fill " +
@@ -903,9 +897,9 @@ export function createServer(): McpServer {
         "for an external signer — call again to continue). `cranker` defaults to the Cookiebox " +
         "keeper; `anyone` leaves the order unpinned, which a hostile cranker can exploit to hand " +
         "most of it back unconverted. Payouts in COOK arrive as native COOK, never wCOOK. No " +
-        "protocol fee. Stop any time with stop_ratchet. " +
-        "OPEN AND RATCHET IN ONE GO: pass `pool`, `sell`, `amount` (how much of `sell` to deposit) " +
-        "and `priceLower`/`priceUpper` (tokenB per tokenA, as get_ratchet_orders reports prices) " +
+        "protocol fee. Stop any time with stop_zip. " +
+        "OPEN AND ZIP IN ONE GO: pass `pool`, `sell`, `amount` (how much of `sell` to deposit) " +
+        "and `priceLower`/`priceUpper` (tokenB per tokenA, as get_zip_orders reports prices) " +
         "to open a new one-sided position over that range first — the whole range must sit on the " +
         "`sell` side of the current price (above it to sell token A, below it to sell token B); the " +
         "result's `opened` carries the new position's NFT mint. REPAIR: on a position whose order " +
@@ -926,7 +920,7 @@ export function createServer(): McpServer {
           .max(44)
           .optional()
           .describe(
-            "a cookiebox-clmm pool address: ratchet your position in it (refused when you hold several — pass `position`)",
+            "a cookiebox-clmm pool address: zip your position in it (refused when you hold several — pass `position`)",
           ),
         sell: z
           .string()
@@ -981,16 +975,16 @@ export function createServer(): McpServer {
         amount?: string | number;
         priceLower?: string | number;
         priceUpper?: string | number;
-      }) => startRatchet(a),
+      }) => startZip(a),
     ),
   );
 
   registerTool(
-    "stop_ratchet",
+    "stop_zip",
     {
-      title: "Stop a Ratchet order",
+      title: "Stop a Zip order",
       description:
-        "Cancel a Ratchet order on one of your positions: closes the order (its rent goes back to " +
+        "Cancel a Zip order on one of your positions: closes the order (its rent goes back to " +
         "the owner) and revokes the delegation on the position NFT. The position and its liquidity " +
         "are untouched — what has filled so far is already in your wallet, the rest stays in the " +
         "position exactly as it is (remove_liquidity / claim_fees as usual). The order's owner, or " +
@@ -1005,7 +999,7 @@ export function createServer(): McpServer {
           .max(44)
           .optional()
           .describe(
-            "the position NFT mint, the position account, or the order address (get_ratchet_orders `order`). Pass this OR `pool`",
+            "the position NFT mint, the position account, or the order address (get_zip_orders `order`). Pass this OR `pool`",
           ),
         pool: z
           .string()
@@ -1015,7 +1009,7 @@ export function createServer(): McpServer {
           .describe("a cookiebox-clmm pool address: stop the order on your position in it"),
       },
     },
-    tool(async (a: { position?: string; pool?: string }) => stopRatchet(a)),
+    tool(async (a: { position?: string; pool?: string }) => stopZip(a)),
   );
 
   registerTool(

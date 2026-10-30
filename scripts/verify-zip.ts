@@ -1,35 +1,35 @@
 /**
- * Live, read-only check of the Ratchet integration against Cookie Chain — no key, nothing signed:
+ * Live, read-only check of the Zip integration against Cookie Chain — no key, nothing signed:
  *   - the deployed program is where the IDL says, and lists its RangeOrder accounts;
  *   - every open order decodes, its position + pool parse, and the keeper's next move is predicted;
  *   - the position-NFT lookup, payout-account and tick-array checks run on real accounts.
- * With COOKIE_PRIVATE_KEY set it also runs `get_ratchet_orders` for that wallet.
+ * With COOKIE_PRIVATE_KEY set it also runs `get_zip_orders` for that wallet.
  *
- *   npx tsx scripts/verify-ratchet.ts
+ *   npx tsx scripts/verify-zip.ts
  */
 import { PublicKey } from "@solana/web3.js";
 
-import { RATCHET_KEEPER } from "../src/core/config";
+import { ZIP_KEEPER } from "../src/core/config";
 import {
-  decideRatchet,
+  decideZip,
   decodePositionNft,
   describeDecision,
-  getRatchetOrders,
+  getZipOrders,
   listRangeOrders,
   parsePool,
   parsePosition,
   payoutAccounts,
-  RATCHET_PROGRAM_ID,
+  ZIP_PROGRAM_ID,
   sqrtAt,
-} from "../src/core/ratchet";
+} from "../src/core/zip";
 import { getConnection } from "../src/core/rpc";
 import { ownPublicKey } from "../src/core/wallet";
 
 async function main() {
   const conn = getConnection();
-  const info = await conn.getAccountInfo(RATCHET_PROGRAM_ID);
-  if (!info?.executable) throw new Error(`Ratchet program ${RATCHET_PROGRAM_ID} is not deployed`);
-  console.log(`✅ Ratchet program ${RATCHET_PROGRAM_ID.toBase58()} is executable`);
+  const info = await conn.getAccountInfo(ZIP_PROGRAM_ID);
+  if (!info?.executable) throw new Error(`Zip program ${ZIP_PROGRAM_ID} is not deployed`);
+  console.log(`✅ Zip program ${ZIP_PROGRAM_ID.toBase58()} is executable`);
 
   const all = await listRangeOrders(conn, null);
   console.log(`✅ ${all.length} open RangeOrder(s) on chain`);
@@ -60,7 +60,7 @@ async function main() {
     const atas = payout.ownerAtas.length
       ? await conn.getMultipleAccountsInfo(payout.ownerAtas.map((a) => a.address))
       : [];
-    const decision = decideRatchet({
+    const decision = decideZip({
       direction: order.direction,
       minStep: order.minStep,
       tickSpacing: pool.tickSpacing,
@@ -73,7 +73,7 @@ async function main() {
     });
     console.log(
       `   ${address.toBase58()}: owner ${order.owner.toBase58()} ${order.direction} min_step ` +
-        `${order.minStep} cranker ${order.cranker?.toBase58() === RATCHET_KEEPER ? "keeper" : (order.cranker?.toBase58() ?? "anyone")}`,
+        `${order.minStep} cranker ${order.cranker?.toBase58() === ZIP_KEEPER ? "keeper" : (order.cranker?.toBase58() ?? "anyone")}`,
     );
     console.log(
       `     range [${position.tickLowerIndex}, ${position.tickUpperIndex}] tick ${pool.tickCurrentIndex} ` +
@@ -90,19 +90,19 @@ async function main() {
 
   const me = ownPublicKey();
   if (me) {
-    const mine = await getRatchetOrders({});
-    console.log(`✅ get_ratchet_orders for ${me}: ${mine.count} order(s)`);
+    const mine = await getZipOrders({});
+    console.log(`✅ get_zip_orders for ${me}: ${mine.count} order(s)`);
     console.log(JSON.stringify(mine, null, 2));
   } else {
     // Exercise the full tool path on the first order's owner instead.
-    const owner = all[0]?.order.owner ?? new PublicKey(RATCHET_KEEPER);
-    const view = await getRatchetOrders({ owner: owner.toBase58() });
-    console.log(`✅ get_ratchet_orders for ${owner.toBase58()}: ${view.count} order(s)`);
+    const owner = all[0]?.order.owner ?? new PublicKey(ZIP_KEEPER);
+    const view = await getZipOrders({ owner: owner.toBase58() });
+    console.log(`✅ get_zip_orders for ${owner.toBase58()}: ${view.count} order(s)`);
     console.log(JSON.stringify(view, null, 2));
   }
 }
 
 main().catch((e) => {
-  console.error("❌ verify-ratchet failed:", e instanceof Error ? e.message : e);
+  console.error("❌ verify-zip failed:", e instanceof Error ? e.message : e);
   process.exit(1);
 });

@@ -1,6 +1,6 @@
-// Cookiebox Ratchet (`RTCHidUR…`): the on-chain side of a trailing range order. A `RangeOrder` PDA
+// Cookiebox Zip (`ZiPzPbbM…`): the on-chain side of a trailing range order. A `RangeOrder` PDA
 // at `["range_order", position]` becomes the position NFT's SPL delegate, which the CLMM accepts as
-// `position_authority`; a keeper then calls `ratchet` to move the range's trailing edge up to the
+// `position_authority`; a keeper then calls `zip` to move the range's trailing edge up to the
 // price (one CPI to `reposition_liquidity_v2`, which withdraws the filled part to the owner) and
 // `finish` once the whole range has filled. The program fixes everything except timing and the
 // liquidity amount, so the keeper can delay an order but cannot move its funds anywhere else.
@@ -8,8 +8,8 @@
 // This module holds the PDAs, the account decoders and the two instructions an OWNER signs —
 // `enable` (start) and `disable` (stop) — plus the owner-paid prerequisites the keeper refuses to
 // fund: the owner's payout token accounts and the tick arrays the range spans. The keeper's own
-// `ratchet` / `finish` are deliberately not built here; this server starts and stops orders, it
-// never cranks them. Ported from cookiebox `src/solana/ratchet/ratchetTx.ts`.
+// `zip` / `finish` are deliberately not built here; this server starts and stops orders, it
+// never cranks them. Ported from cookiebox `src/solana/zip/zipTx.ts`.
 import {
   AnchorProvider,
   BorshAccountsCoder,
@@ -47,19 +47,19 @@ import bs58 from "bs58";
 import { PROGRAM_IDS } from "../config";
 import { CookieMcpError } from "../errors";
 import { CLMM_PROGRAM_ID } from "../liquidity/clmm";
-import ratchetIdl from "../../idl/ratchet.json" with { type: "json" };
+import zipIdl from "../../idl/zip.json" with { type: "json" };
 import whirlpoolIdl from "../../idl/whirlpool.json" with { type: "json" };
-import type { RatchetDirection } from "./decision";
+import type { ZipDirection } from "./decision";
 
-export const RATCHET_PROGRAM_ID = new PublicKey(PROGRAM_IDS.ratchet);
+export const ZIP_PROGRAM_ID = new PublicKey(PROGRAM_IDS.zip);
 
 // The IDL ships its own `address`. A stale copy after a redeploy would make every PDA here derive
 // against the wrong program — fail at import (the boot smoke catches it) instead.
-const idlAddress = (ratchetIdl as { address?: string }).address;
-if (idlAddress !== PROGRAM_IDS.ratchet) {
+const idlAddress = (zipIdl as { address?: string }).address;
+if (idlAddress !== PROGRAM_IDS.zip) {
   throw new Error(
-    `src/idl/ratchet.json is for ${idlAddress}, but PROGRAM_IDS.ratchet is ${PROGRAM_IDS.ratchet} — ` +
-      "re-copy the IDL from the ratchet repo",
+    `src/idl/zip.json is for ${idlAddress}, but PROGRAM_IDS.zip is ${PROGRAM_IDS.zip} — ` +
+      "re-copy the IDL from the zip repo",
   );
 }
 
@@ -75,10 +75,10 @@ function readOnlyProvider(conn: Connection): AnchorProvider {
   return new AnchorProvider(conn, wallet as never, { commitment: "confirmed" });
 }
 
-/** The Ratchet `Program`, for building `enable` / `disable`. */
-export function ratchetProgram(conn: Connection): Program {
+/** The Zip `Program`, for building `enable` / `disable`. */
+export function zipProgram(conn: Connection): Program {
   return new AnchorProgram(
-    { ...(ratchetIdl as Idl), address: RATCHET_PROGRAM_ID.toBase58() },
+    { ...(zipIdl as Idl), address: ZIP_PROGRAM_ID.toBase58() },
     readOnlyProvider(conn),
   ) as unknown as Program;
 }
@@ -97,19 +97,19 @@ function clmmProgram(conn: Connection): Program {
 export function rangeOrderPda(position: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("range_order"), position.toBuffer()],
-    RATCHET_PROGRAM_ID,
+    ZIP_PROGRAM_ID,
   )[0];
 }
 
 /**
- * `["native_payout", range_order]` — the order's transient wrapped-COOK account. `ratchet` / `finish`
+ * `["native_payout", range_order]` — the order's transient wrapped-COOK account. `zip` / `finish`
  * create it, let the CLMM pay the COOK side into it and close it in the same instruction, so the
  * owner receives plain COOK rather than wCOOK. It never exists between transactions.
  */
 export function nativePayoutPda(order: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("native_payout"), order.toBuffer()],
-    RATCHET_PROGRAM_ID,
+    ZIP_PROGRAM_ID,
   )[0];
 }
 
@@ -125,10 +125,10 @@ export interface RangeOrder {
   position: PublicKey;
   positionMint: PublicKey;
   whirlpool: PublicKey;
-  direction: RatchetDirection;
+  direction: ZipDirection;
   /** The edge only moves once the price is this many tick spacings past it. */
   minStep: number;
-  /** Who may `ratchet`; `null` lets anyone (and exposes the order to griefing — see the README). */
+  /** Who may `zip`; `null` lets anyone (and exposes the order to griefing — see the README). */
   cranker: PublicKey | null;
   bump: number;
 }
@@ -137,7 +137,7 @@ export interface RangeOrder {
 export const RANGE_ORDER_DISCRIMINATOR = Uint8Array.from([115, 23, 17, 23, 102, 223, 93, 154]);
 
 // The raw coder keeps the IDL's snake_case field names (anchor's `Program` camel-cases them).
-const accountsCoder = new BorshAccountsCoder(ratchetIdl as Idl);
+const accountsCoder = new BorshAccountsCoder(zipIdl as Idl);
 
 /** Decode a `RangeOrder` account; refuses any other account (discriminator checked). */
 export function decodeRangeOrder(data: Buffer): RangeOrder {
@@ -155,8 +155,8 @@ export function decodeRangeOrder(data: Buffer): RangeOrder {
     raw = accountsCoder.decode("RangeOrder", data);
   } catch {
     throw new CookieMcpError(
-      "not a Ratchet range order account",
-      "the account exists but is not a RangeOrder of the Ratchet program",
+      "not a Zip range order account",
+      "the account exists but is not a RangeOrder of the Zip program",
     );
   }
   return {
@@ -184,7 +184,7 @@ export async function listRangeOrders(
   conn: Connection,
   owner: PublicKey | null,
 ): Promise<{ address: PublicKey; order: RangeOrder }[]> {
-  const accounts = await conn.getProgramAccounts(RATCHET_PROGRAM_ID, {
+  const accounts = await conn.getProgramAccounts(ZIP_PROGRAM_ID, {
     commitment: "confirmed",
     filters: rangeOrderFilters(owner),
   });
@@ -200,7 +200,7 @@ export function parsePool(address: PublicKey, info: AccountInfo<Buffer> | null):
   if (!data) {
     throw new CookieMcpError(
       `no Cookiebox CLMM pool at ${address.toBase58()}`,
-      "Ratchet works on Cookiebox CLMM positions only (pool owner CLMMmWqTt…)",
+      "Zip works on Cookiebox CLMM positions only (pool owner CLMMmWqTt…)",
     );
   }
   return data;
@@ -395,7 +395,7 @@ export async function findPositionNft(
 // --- payout accounts ------------------------------------------------------------------------------
 
 /**
- * Where `ratchet` / `finish` pay each side: the owner's associated token account, or for wrapped COOK
+ * Where `zip` / `finish` pay each side: the owner's associated token account, or for wrapped COOK
  * the order's transient account (`nativePayoutPda`). `ownerAtas` are the owner's accounts among them,
  * which must exist before the keeper will touch the order; the program refuses anything else.
  */
@@ -460,7 +460,7 @@ export function buildPayoutAtaIxs(p: {
 
 // --- owner instructions ---------------------------------------------------------------------------
 
-/** The owner starts an order; `cranker` pins who may `ratchet` it (`null` lets anyone). */
+/** The owner starts an order; `cranker` pins who may `zip` it (`null` lets anyone). */
 export function buildEnableIx(p: {
   program: Program;
   owner: PublicKey;
@@ -468,7 +468,7 @@ export function buildEnableIx(p: {
   position: PublicKey;
   nft: PublicKey;
   nftTokenProgram: PublicKey;
-  direction: RatchetDirection;
+  direction: ZipDirection;
   minStep: number;
   cranker: PublicKey | null;
 }): Promise<TransactionInstruction> {

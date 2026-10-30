@@ -210,7 +210,7 @@ describe("splitOpenPositionBuilder", () => {
 });
 
 describe("rangeTicksFromPrices", () => {
-  // COOK (9 dec) / COOKHOUSE (6 dec) on the 64-spacing tier, like the live Ratchet pool.
+  // COOK (9 dec) / COOKHOUSE (6 dec) on the 64-spacing tier, like the live Zip pool.
   const pool = { decA: 9, decB: 6, tickSpacing: 64 };
 
   it("rounds each price to an initializable tick, lower below upper", () => {

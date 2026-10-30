@@ -310,11 +310,11 @@ The open/close transactions are built by the aggregator and verified here exactl
 ones are — user, amounts, frequency, the band, the start time, the schedule PDA against the signing
 `base`, the pinned refund/payout accounts, the five allowed programs — and simulated before signing.
 
-**Ratchet — trailing range orders** ([Cookiebox](https://cookiebox.app) Ratchet, program `RTCHidUR…`,
-on CLMM positions): `get_ratchet_orders` lists a wallet's open orders with no key (yours, or any
-address / `.cook` name); `start_ratchet` and `stop_ratchet` need a signer. A one-sided CLMM position
+**Zip — trailing range orders** ([Cookiebox](https://cookiebox.app) Zip, program `ZiPzPbbM…`,
+on CLMM positions): `get_zip_orders` lists a wallet's open orders with no key (yours, or any
+address / `.cook` name); `start_zip` and `stop_zip` need a signer. A one-sided CLMM position
 already converts one token into the other as the price moves through its range — and converts it
-straight back when the price turns. A Ratchet keeps the fill: the Cookiebox keeper moves the range's
+straight back when the price turns. A Zip keeps the fill: the Cookiebox keeper moves the range's
 **trailing edge** up to the price one tick spacing at a time, and each move pays the part that has
 filled (plus the LP fees earned on the way) to your wallet, so nothing is left behind the price to
 convert back. Selling COOKHOUSE for COOK and buying COOK with COOKHOUSE are the same order.
@@ -323,9 +323,9 @@ convert back. Selling COOKHOUSE for COOK and buying COOK with COOKHOUSE are the 
   `pool` (your position in that pool; refused when you hold several). `sell` is the mint to sell (or
   `"COOK"`); a one-sided position infers it, a position holding both tokens must be told. Selling a
   token the position no longer holds is refused — that side has already converted.
-- **Open and ratchet in one go:** `start_ratchet` with `pool`, `sell`, `amount` and
+- **Open and zip in one go:** `start_zip` with `pool`, `sell`, `amount` and
   `priceLower`/`priceUpper` (tokenB per tokenA, the `priceUnit` the tools report) opens a new
-  one-sided position over that range and ratchets it. The whole range must sit on the `sell` side
+  one-sided position over that range and zips it. The whole range must sit on the `sell` side
   of the current price (above it to sell token A, below it to sell token B), so nothing counts as
   filled the moment it opens; prices round to the pool's tick spacing. Every refusal (including a
   transfer hook with no published extra-account list, and an `amount` the wallet doesn't hold)
@@ -334,7 +334,7 @@ convert back. Selling COOKHOUSE for COOK and buying COOK with COOKHOUSE are the 
   as is when it holds `amount`, deposited into when it is empty (an open that went out as open +
   deposit) — never opened twice; one holding a different amount is refused, naming it, and a
   refusal of the range (the price moved onto it between calls) names it too.
-- **Repair instead of restart:** `start_ratchet` on a position whose order is already running
+- **Repair instead of restart:** `start_zip` on a position whose order is already running
   (by `position`, or by `pool` when that order is your only position there) recreates what a
   `paused` order is missing — tick arrays, payout accounts, the NFT's delegation (re-approved when
   you still hold it, revoking any other delegate, which the result names) — without stopping the
@@ -359,16 +359,16 @@ convert back. Selling COOKHOUSE for COOK and buying COOK with COOKHOUSE are the 
 - **Payouts in COOK arrive as native COOK**, never wCOOK (the program routes the native side through
   a one-instruction transient account). A Token-2022 payout arrives net of its transfer fee; a hook
   that refuses a payout pauses the order and moves nothing else. No protocol fee.
-- `get_ratchet_orders` reports what each order sells and receives, its range and the current price
+- `get_zip_orders` reports what each order sells and receives, its range and the current price
   (as tokenB per tokenA, see `priceUnit`), what the position holds now, who may crank it, and a
   `status` with the keeper's next move in words: `filling`, `waiting` (price not far enough past the
   edge, or in the range's last spacing), `fully-filled` (the keeper withdraws and closes next),
   `paused` (delegation gone, a transfer hook with no published extra-account list, payout account
-  closed, or a tick array missing — `start_ratchet` on the position repairs all but the hook),
-  `empty`, or `stale` (position account closed; `stop_ratchet` with the order address or NFT mint
+  closed, or a tick array missing — `start_zip` on the position repairs all but the hook),
+  `empty`, or `stale` (position account closed; `stop_zip` with the order address or NFT mint
   refunds the rent). Predicted from the program's
-  own edge rule, which `src/core/ratchet/decision.ts` mirrors line for line.
-- `stop_ratchet` closes the order (rent back to its owner) and revokes the delegation; the position
+  own edge rule, which `src/core/zip/decision.ts` mirrors line for line.
+- `stop_zip` closes the order (rent back to its owner) and revokes the delegation; the position
   and whatever is still in it are untouched. The owner, or whoever holds the NFT now, may stop it.
   `position` may be the NFT mint, the position account or the order address — a stale order (position
   already closed) stops too.

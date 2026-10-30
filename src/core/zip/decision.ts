@@ -1,9 +1,9 @@
-// The Ratchet keeper's decision, ported from cookiebox `src/solana/ratchet/ratchetDecision.ts`: when
+// The Zip keeper's decision, ported from cookiebox `src/solana/zip/zipDecision.ts`: when
 // an order's trailing edge moves, where to, and with how much liquidity. This server never cranks an
 // order (the Cookiebox keeper does), but the same rules tell an agent what the keeper will do next
-// with an order it starts or lists, and whether a position can be ratcheted in a direction at all.
+// with an order it starts or lists, and whether a position can be zipped in a direction at all.
 //
-// `nextRange` mirrors `edge::next_range` in the program (`ratchet/programs/ratchet/src/edge.rs`)
+// `nextRange` mirrors `edge::next_range` in the program (`zip/programs/zip/src/edge.rs`)
 // line for line. The program recomputes the range itself and only takes `new_liquidity` from the
 // keeper, so a drift here costs a wrong prediction, never funds. Pure: bigints in, plain data out.
 //
@@ -11,13 +11,13 @@
 // `lower <= tickCurrent < upper`, and only token B once `tickCurrent >= upper`.
 
 /** `aToB` holds A and fills into B as the price rises; `bToA` holds B and fills into A as it falls. */
-export type RatchetDirection = "aToB" | "bToA";
+export type ZipDirection = "aToB" | "bToA";
 
 export type RangeWait = "fullyFilled" | "lastSpacing" | "stepTooSmall";
 
 /** The whole range has converted: nothing of the sold token is left in it. */
 export function fullyFilled(
-  direction: RatchetDirection,
+  direction: ZipDirection,
   tickCurrent: number,
   lower: number,
   upper: number,
@@ -25,9 +25,9 @@ export function fullyFilled(
   return direction === "aToB" ? tickCurrent >= upper : tickCurrent < lower;
 }
 
-/** The range after a ratchet, or why there is none. Mirrors `edge::next_range`. */
+/** The range after a zip, or why there is none. Mirrors `edge::next_range`. */
 export function nextRange(
-  direction: RatchetDirection,
+  direction: ZipDirection,
   tickCurrent: number,
   tickSpacing: number,
   lower: number,
@@ -116,7 +116,7 @@ export function withdrawAmounts(p: {
  * not the owner. Rounding is the CLMM's (deposits round up), so the deposit is <= unfilled - 1.
  */
 export function maxLiquidity(
-  direction: RatchetDirection,
+  direction: ZipDirection,
   unfilled: bigint,
   sqrtNewLower: bigint,
   sqrtNewUpper: bigint,
@@ -130,11 +130,11 @@ export function maxLiquidity(
   return (budget * sqrtNewLower * sqrtNewUpper) / (width * Q64);
 }
 
-/** `ratchet` refuses liquidity below the old minus this fraction (1 ppm, `LIQUIDITY_TOLERANCE_DENOM`). */
+/** `zip` refuses liquidity below the old minus this fraction (1 ppm, `LIQUIDITY_TOLERANCE_DENOM`). */
 export const LIQUIDITY_TOLERANCE_DENOM = 1_000_000n;
 
-export type RatchetDecision =
-  | { kind: "ratchet"; lower: number; upper: number; liquidity: bigint }
+export type ZipDecision =
+  | { kind: "zip"; lower: number; upper: number; liquidity: bigint }
   | { kind: "finish" }
   | { kind: "wait"; reason: RangeWait | "noLiquidity" | "liquidityBelowFloor" };
 
@@ -142,8 +142,8 @@ export type RatchetDecision =
  * One order's move on the keeper's next pass. `sqrtAt` is the CLMM's tick-to-sqrt-price (the SDK's
  * `PriceMath.tickIndexToSqrtPriceX64`), passed in so this module stays dependency-free.
  */
-export function decideRatchet(p: {
-  direction: RatchetDirection;
+export function decideZip(p: {
+  direction: ZipDirection;
   minStep: number;
   tickSpacing: number;
   tickCurrent: number;
@@ -152,7 +152,7 @@ export function decideRatchet(p: {
   lower: number;
   upper: number;
   sqrtAt: (tick: number) => bigint;
-}): RatchetDecision {
+}): ZipDecision {
   if (fullyFilled(p.direction, p.tickCurrent, p.lower, p.upper)) {
     // `finish` also collects fees, so it is worth sending even once the liquidity is gone.
     return { kind: "finish" };
@@ -177,5 +177,5 @@ export function decideRatchet(p: {
   if (liquidity < p.liquidity - p.liquidity / LIQUIDITY_TOLERANCE_DENOM) {
     return { kind: "wait", reason: "liquidityBelowFloor" };
   }
-  return { kind: "ratchet", lower: next.lower, upper: next.upper, liquidity };
+  return { kind: "zip", lower: next.lower, upper: next.upper, liquidity };
 }
