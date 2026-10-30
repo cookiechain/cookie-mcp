@@ -40,7 +40,8 @@ import {
   getDcaSchedules,
   openDca,
 } from "../core/dca";
-import { getZipOrders, MAX_RANGE_TICK_ARRAYS, MIN_STEP_MAX, startZip, stopZip } from "../core/zip";
+import { getZipOrders, MIN_STEP_MAX, startZip, stopZip } from "../core/zip";
+import { CLMM_FEE_TIER_TICK_SPACING } from "../core/liquidity/clmm";
 import { getStakeInfo, stake, unstake } from "../core/stake";
 import {
   createPool,
@@ -844,23 +845,22 @@ export function createServer(): McpServer {
   registerTool(
     "get_zip_orders",
     {
-      title: "Running Zip orders",
+      title: "Zip orders",
       description:
-        "Zip orders (trailing range orders on Cookiebox CLMM positions, program `ZiPzPbbM…`) " +
-        "running for a wallet — yours by default, or `owner` = any address or .cook name. Read " +
-        "straight from the program; no key needed. A Zip turns a one-sided CLMM position into a " +
-        "sell (or, seen from the other token, a buy) that cannot convert back: the Cookiebox keeper " +
-        "keeps moving the range's trailing edge up to the price, and each move pays the part that " +
-        "has filled to the owner's wallet. Each order reports what it sells and receives, its range " +
-        "and the current price (as tokenB per tokenA — see `priceUnit`), what the position holds " +
-        "right now (`inPosition`), who may crank it, and a `status` with the keeper's next move in " +
-        "words: `filling` (edge moves on the next pass), `waiting` (price not far enough past the " +
-        "edge, or inside the last tick spacing), `fully-filled` (the keeper withdraws everything " +
-        "and closes the order next), `paused` (the NFT delegation is gone, a transfer hook has no " +
-        "published extra-account list, a payout account was closed, or a tick array is missing — " +
-        "start_zip with the order's `positionMint` repairs all but the hook without stopping " +
-        "it), `empty`, or `stale` (the " +
-        "position is gone; stop_zip refunds the order's rent).",
+        "Zip orders (Cookiebox trailing range orders, program `ZiPzPbbM…`) of a wallet — yours by " +
+        "default, or `owner` = any address or .cook name. Read straight from the program; no key " +
+        "needed. A Zip sells one token for another across a price range and never fills back: it " +
+        "rests as a one-sided Cookiebox CLMM position that the Cookiebox keeper trails, each step " +
+        "paying the filled part (plus the LP fees earned) to the owner's wallet. Prices are " +
+        "**receive per sell** (what one sold token fetches; see `priceUnit`): each order reports " +
+        "what it sells and receives, its `from`–`to` range, the current price, what is left in it " +
+        "(`inPosition`), who may crank it, and a `status` with the keeper's next move in words: " +
+        "`filling`, `waiting` (price not far enough past the edge, or inside the last step), " +
+        "`fully-filled` (the keeper pays out and closes the order next), `paused` (NFT delegation " +
+        "gone, a transfer hook with no published extra-account list, a payout account closed, or a " +
+        "tick array missing — start_zip with the order's `positionMint` repairs all but the hook), " +
+        "`empty`, `filled` (paid out; the empty position is left — stop_zip with its NFT mint " +
+        "closes it and returns its rent), or `stale` (position gone; stop_zip refunds the order's rent).",
       inputSchema: {
         owner: z
           .string()
@@ -872,63 +872,79 @@ export function createServer(): McpServer {
     },
     tool(async (a: { owner?: string }) => getZipOrders(a)),
   );
-
   registerTool(
     "start_zip",
     {
-      title: "Start a Zip on a CLMM position",
+      title: "Place a Zip order",
       description:
-        "Turn one of your Cookiebox CLMM positions into a trailing range order: sell the token the " +
-        "position holds into the other as the price moves through the range, WITHOUT the fill " +
-        "converting back when the price turns. The Cookiebox keeper moves the range's trailing edge " +
-        "to the price one tick spacing at a time (`minStep` spacings, default 1) and pays each " +
-        "filled part — plus the LP fees earned on the way — to your wallet; once the whole range " +
-        "has filled it withdraws the rest and closes the order. The position NFT stays in your " +
-        "wallet: the order is only its SPL delegate, and the program lets that delegate move the " +
-        "edge and finish, nothing else (it cannot withdraw elsewhere, widen the range, or re-buy). " +
-        "Name the position by its NFT mint (`position`, as on cookiebox.app/position/<mint>) or by " +
-        '`pool` (your position in that pool). `sell` is the mint to sell (or "COOK"); a ' +
-        "one-sided position infers it, a position holding both tokens must be told. Refuses a " +
-        "locked or empty position, a position that already has an order, a sell of a token the " +
-        `position no longer holds, and a range wider than ${MAX_RANGE_TICK_ARRAYS} tick arrays. ` +
-        "Starting is owner-paid setup, idempotent: your payout token accounts (~0.002 COOK each) " +
-        "and any tick arrays the range spans (~0.002 COOK each, one-off per pool and range) are " +
-        "created before `enable`; a wide range may take a few transactions (`intermediate` steps " +
-        "for an external signer — call again to continue). `cranker` defaults to the Cookiebox " +
-        "keeper; `anyone` leaves the order unpinned, which a hostile cranker can exploit to hand " +
-        "most of it back unconverted. Payouts in COOK arrive as native COOK, never wCOOK. No " +
-        "protocol fee. Stop any time with stop_zip. " +
-        "OPEN AND ZIP IN ONE GO: pass `pool`, `sell`, `amount` (how much of `sell` to deposit) " +
-        "and `priceLower`/`priceUpper` (tokenB per tokenA, as get_zip_orders reports prices) " +
-        "to open a new one-sided position over that range first — the whole range must sit on the " +
-        "`sell` side of the current price (above it to sell token A, below it to sell token B); the " +
-        "result's `opened` carries the new position's NFT mint. REPAIR: on a position whose order " +
-        "is already running, this recreates what a `paused` order is missing (tick arrays, payout " +
-        "accounts, the NFT delegation) without stopping it, and refuses when nothing is missing. " +
-        "Simulates first." +
+        "Sell `amount` of `sell` for `receive` across a price range, like Cookiebox's /trade Zip " +
+        "tab: `from` and `to` are **receive per sell** (what one sold token fetches; `from` is the " +
+        "price nothing sells under, `to` the best). Whatever part of the range the market already " +
+        "beats is sold at once (in the pool, or through the router, never under `from`); the rest " +
+        "rests as a one-sided Cookiebox CLMM position that the Cookiebox keeper trails as the price " +
+        "moves through the range, paying each filled part — plus the LP fees earned — to your " +
+        "wallet, and never converting back. Omit `from`/`to` for a range from one price step past " +
+        "the market to 10% above it. `fee` (bps) picks the pool the order earns fees in; default is " +
+        "the pair's deepest pool, else the 0.25% tier. A pair with no pool at that fee gets one " +
+        "created, priced at `from`; an empty pool parked on the wrong side has its price moved " +
+        "(trading nothing). Owner-paid setup: the pool's and payout accounts' rent and any tick " +
+        "arrays the range spans (~0.002 COOK each), then `enable`, which delegates the position NFT " +
+        'to the order and pins the Cookiebox keeper as cranker (`cranker: "anyone"` leaves it ' +
+        "unpinned, which a hostile cranker can exploit to hand most of it back unconverted). " +
+        "Several transactions; each is simulated first, and with an external signer each is handed " +
+        "back as an `intermediate` step — submit it and call again, the flow re-prices and continues " +
+        "(nothing is sold twice). `minStep` (default 1) is how many tick spacings the price must " +
+        "move past the edge before it follows. Refuses a hooked mint with no published " +
+        "extra-account list, a mint the CLMM won't pool, and an `amount` you don't hold, all before " +
+        "anything is sent. Stop any time with stop_zip. " +
+        "ZIP A POSITION YOU HOLD: pass `position` (its NFT mint) instead — a one-sided position " +
+        "infers the direction, one holding both tokens needs `sell`; on a position whose order is " +
+        "already running this repairs a `paused` order (tick arrays, payout accounts, NFT " +
+        "delegation) without stopping it. Simulates first." +
         SIGNING_NOTE,
       inputSchema: {
-        position: z
-          .string()
-          .min(32)
-          .max(44)
-          .optional()
-          .describe("the position NFT mint (or the position account). Pass this OR `pool`"),
-        pool: z
-          .string()
-          .min(32)
-          .max(44)
-          .optional()
-          .describe(
-            "a cookiebox-clmm pool address: zip your position in it (refused when you hold several — pass `position`)",
-          ),
         sell: z
           .string()
           .min(3)
           .max(44)
           .optional()
           .describe(
-            'mint of the token to SELL (one of the pool\'s two mints, or "COOK"). Optional for a position holding only one token',
+            'mint of the token to SELL, or "COOK". With `position`: the side of it to sell',
+          ),
+        receive: z
+          .string()
+          .min(3)
+          .max(44)
+          .optional()
+          .describe('mint of the token to RECEIVE, or "COOK"'),
+        amount: z
+          .union([z.string(), z.number()])
+          .optional()
+          .describe("how much of `sell` to sell (UI units)"),
+        from: z
+          .union([z.string(), z.number()])
+          .optional()
+          .describe(
+            "the price nothing sells under, as RECEIVE per SELL (what one sold token fetches). Default: one price step past the market",
+          ),
+        to: z
+          .union([z.string(), z.number()])
+          .optional()
+          .describe("the best price of the range, RECEIVE per SELL. Default: 10% above `from`"),
+        fee: z
+          .number()
+          .int()
+          .optional()
+          .describe(
+            `LP fee the order earns, in bps (one of ${Object.keys(CLMM_FEE_TIER_TICK_SPACING).join(", ")}); default: the pair's deepest pool`,
+          ),
+        position: z
+          .string()
+          .min(32)
+          .max(44)
+          .optional()
+          .describe(
+            "instead of sell/receive/amount: a CLMM position you hold (NFT mint or position account) to zip, or whose paused order to repair",
           ),
         minStep: z
           .number()
@@ -937,7 +953,7 @@ export function createServer(): McpServer {
           .max(MIN_STEP_MAX)
           .optional()
           .describe(
-            "tick spacings the price must move past the trailing edge before it follows (default 1 = as close as the pool allows; larger = fewer, coarser moves)",
+            "tick spacings the price must move past the trailing edge before it follows (default 1 = as close as the pool allows)",
           ),
         cranker: z
           .string()
@@ -947,50 +963,36 @@ export function createServer(): McpServer {
           .describe(
             'who may crank the order: omit for the Cookiebox keeper (recommended), "anyone", or a public key you run a keeper with',
           ),
-        amount: z
-          .union([z.string(), z.number()])
-          .optional()
-          .describe(
-            "open a NEW position first: how much of `sell` to deposit (UI units). Needs `pool`, `sell`, `priceLower` and `priceUpper`",
-          ),
-        priceLower: z
-          .union([z.string(), z.number()])
-          .optional()
-          .describe(
-            "lower edge of the new position's range, as tokenB per tokenA (rounded to the pool's tick spacing)",
-          ),
-        priceUpper: z
-          .union([z.string(), z.number()])
-          .optional()
-          .describe("upper edge of the new position's range, as tokenB per tokenA"),
       },
     },
     tool(
       async (a: {
-        position?: string;
-        pool?: string;
         sell?: string;
+        receive?: string;
+        amount?: string | number;
+        from?: string | number;
+        to?: string | number;
+        fee?: number;
+        position?: string;
         minStep?: number;
         cranker?: string;
-        amount?: string | number;
-        priceLower?: string | number;
-        priceUpper?: string | number;
       }) => startZip(a),
     ),
   );
-
   registerTool(
     "stop_zip",
     {
       title: "Stop a Zip order",
       description:
-        "Cancel a Zip order on one of your positions: closes the order (its rent goes back to " +
-        "the owner) and revokes the delegation on the position NFT. The position and its liquidity " +
-        "are untouched — what has filled so far is already in your wallet, the rest stays in the " +
-        "position exactly as it is (remove_liquidity / claim_fees as usual). The order's owner, or " +
-        "whoever holds the position NFT now, may stop it. Name it by NFT mint, position account " +
-        "or order address (`position`), or by `pool`. A `stale` order (position already closed) " +
-        "stops too and refunds its rent. Simulates first." +
+        "Stop a Zip order and take everything back, as Cookiebox's Stop does: closes the order " +
+        "(its rent to the owner), revokes the NFT delegation, withdraws what is left in the " +
+        "position with its fees and rewards, and closes the position (its rent back too). What had " +
+        "filled is already in your wallet. On a `filled` order (the keeper already paid out and " +
+        "closed the order) this closes the empty position left behind and returns its rent. The " +
+        "order's owner, or whoever holds the position NFT now, may stop it (a holder who is not the " +
+        "owner only closes the order). Name it by NFT mint, position account or order address " +
+        "(`position`), or by `pool`. A `stale` order (position already closed) stops too and refunds " +
+        "its rent. Simulates first." +
         SIGNING_NOTE,
       inputSchema: {
         position: z

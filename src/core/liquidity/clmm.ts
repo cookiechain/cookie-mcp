@@ -61,7 +61,9 @@ import whirlpoolIdl from "../../idl/whirlpool.json" with { type: "json" };
 export const CLMM_PROGRAM_ID = new PublicKey("CLMMmWqTtyNSomqXP3kETJy2SGKPdr31USsm4GfbLyKs");
 
 /** WhirlpoolsConfig for permissionless CLMM pool creation + pool PDA derivation (Cookie deployment). */
-const WHIRLPOOL_CONFIG_ADDRESS = new PublicKey("7g1wZSihBx7TVx9Q1gtKh874RuJYviCaTw9EfLE2pPzX");
+export const WHIRLPOOL_CONFIG_ADDRESS = new PublicKey(
+  "7g1wZSihBx7TVx9Q1gtKh874RuJYviCaTw9EfLE2pPzX",
+);
 
 /** Cookie CLMM protocol treasury — also the Metaplex position-NFT metadata update authority on Cookie. */
 export const WHIRLPOOL_TREASURY = new PublicKey("Ba59QdKR9fYJ362zFWLmscBF625qsMmFategLzRSRZv2");
@@ -71,7 +73,7 @@ export const ORCA_METADATA_UPDATE_AUTH = new PublicKey(
   "3axbTs2z5GBy6usVbNVoqEgZMng3vZvMnAoX29BFfwhr",
 );
 
-const OPEN_POSITION_CU = 500_000;
+export const OPEN_POSITION_CU = 500_000;
 const INIT_POOL_CU = 400_000;
 const LOCK_POSITION_CU = 200_000;
 
@@ -126,7 +128,7 @@ export function patchMetadataAuth(tx: Transaction): void {
 }
 
 /** Turn an Orca TransactionBuilder into a legacy Transaction + its extra signers, metadata patched. */
-async function builderToTx(
+export async function builderToTx(
   builder: TransactionBuilder,
   computeUnits: number,
 ): Promise<{ tx: Transaction; signers: Signer[] }> {
@@ -144,7 +146,7 @@ async function builderToTx(
 }
 
 /** Build → send a single builder; returns its signature. The wallet signs as fee payer + extra signers. */
-async function sendBuilder(
+export async function sendBuilder(
   conn: Connection,
   signer: TxSigner,
   builder: TransactionBuilder,
@@ -157,7 +159,7 @@ async function sendBuilder(
 }
 
 /** The step/summary context an external signer sees (`signSendConfirm`'s last argument). */
-type SendExtra = Parameters<typeof signSendConfirm>[5];
+export type SendExtra = Parameters<typeof signSendConfirm>[5];
 
 /** Build → send a list of builders sequentially (skipping empty ones); returns the last signature. */
 async function sendBuilders(
@@ -430,7 +432,7 @@ export function clmmBadgeReasons(
  * Fail before spending anything when a mint needs a TokenBadge the CLMM does not have — the
  * program would otherwise reject `initialize_pool` with an opaque `UnsupportedTokenMint` (6047).
  */
-async function assertClmmMintsPoolable(conn: Connection, mints: PublicKey[]): Promise<void> {
+export async function assertClmmMintsPoolable(conn: Connection, mints: PublicKey[]): Promise<void> {
   const infos = await conn.getMultipleAccountsInfo(mints);
   const needBadge: { mint: PublicKey; reasons: string[] }[] = [];
   mints.forEach((m, i) => {

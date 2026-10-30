@@ -6,29 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- **Cookiebox Zip.** Three tools for trailing range orders on CLMM positions (program
-  `ZiPzPbbM…`): `get_zip_orders` (read, `.cook` names accepted), `start_zip` and
-  `stop_zip`. A Zip lets a one-sided CLMM position sell into the other token as the price
-  moves through its range without the fill converting back: the Cookiebox keeper moves the range's
-  trailing edge to the price and pays each filled part, with the LP fees earned, to the wallet. The
-  position NFT stays in the wallet (the order is only its SPL delegate, limited by the program to
-  moving the edge and finishing). Starting creates the owner's payout accounts and the range's tick
-  arrays at the owner's expense, pins the Cookiebox keeper as cranker unless told otherwise, and
-  refuses locked, empty or over-wide positions and a sell of a token the position no longer holds.
-  `start_zip` also **opens the position** when given `pool`, `sell`, `amount` and
-  `priceLower`/`priceUpper` (tokenB per tokenA): a new one-sided position over that range, which
-  must sit entirely on the `sell` side of the current price, zipped in the same call. Every
-  refusal, including an `amount` the wallet doesn't hold, comes before anything is sent. Re-entrant
-  for an external signer: a position of yours with exactly that range and no order is continued
-  (used when it holds `amount`, deposited into when it is empty), never opened twice, and a refusal
-  of the range names it; the result's `opened` carries the new NFT mint. On a position whose order
-  is already running, `start_zip` **repairs** a paused order instead — recreating the tick
-  arrays, payout accounts or NFT delegation the keeper needs, without stopping it — and refuses when
-  nothing is missing or the NFT is in another wallet. Every order's status predicts the keeper's
-  next move from the program's own edge rule, and reports a pause for a lost delegation, a closed
-  payout account, a missing tick array, or a Token-2022 transfer hook with no published
-  `ExtraAccountMetaList` (such a mint cannot move at all, so the keeper skips the order and
-  `start_zip` refuses to open one). Also importable from the library entry (`cookie-mcp`).
+- **Cookiebox Zip.** Three tools for trailing range orders (program `ZiPzPbbM…`), behaving like
+  Cookiebox's /trade Zip tab: `get_zip_orders` (read, `.cook` names accepted), `start_zip` and
+  `stop_zip`. A Zip sells one token for another across a price range and never fills back: it rests
+  as a one-sided Cookiebox CLMM position that the Cookiebox keeper trails, each move paying the
+  filled part (plus the LP fees earned) to the wallet. `start_zip` takes `sell`, `receive`, `amount`
+  and the prices `from`/`to` as **receive per sell** (what one sold token fetches; omit them for a
+  range from one price step past the market to 10% above it) and an optional `fee` (the pool the
+  order earns in; default the pair's deepest pool). The part of the range the market already beats is
+  sold at once, never under `from` (in the pool, or through the router); the rest starts one price
+  step past the market, and a range the market beats entirely is just swapped. A pair with no pool at
+  that fee gets one created at `from`; an empty pool parked on the wrong side has its price moved
+  there (trading nothing). Setup is owner-paid and idempotent (pool rent, payout accounts, the
+  range's tick arrays), `enable` pins the Cookiebox keeper as cranker unless told otherwise, and
+  every refusal — a hooked mint with no published `ExtraAccountMetaList`, a mint the CLMM won't pool,
+  an `amount` the wallet doesn't hold — comes before anything is sent. Re-entrant for an external
+  signer: each transaction is an `intermediate` step, a re-call re-prices against the market and
+  continues with a same-range position of yours, never selling or opening twice. `start_zip` with
+  `position` zips a CLMM position you already hold, or **repairs** a `paused` order running on it
+  (tick arrays, payout accounts, NFT delegation) without stopping it. `stop_zip` takes everything
+  back: closes the order, revokes the delegation, withdraws what is left with its fees and closes the
+  position; on a `filled` order it closes the empty position the keeper left behind. Every order's
+  status predicts the keeper's next move from the program's own edge rule (`filling`, `waiting`,
+  `fully-filled`, `paused` for a lost delegation, a closed payout account, a missing tick array or
+  an unpublished hook meta list, `empty`, `filled`, `stale`); all prices are receive per sell. Also
+  importable from the library entry (`cookie-mcp`).
 - **Several post-graduation NFT mint requests at once.** MomoSwap's NFT program now lets a wallet hold
   up to 10 requests open per drop (anchor-launchpad-momoswap#117), so `nft_drop_mint` with `count` > 1
   on a target-graduated drop places that many through `/v1/nft/tx/request-mint-many`, one transaction

@@ -14,6 +14,7 @@
 // fund either, because rent it paid could be reclaimed by the owner (close and let it recreate) or
 // billed to it by a hostile position. Everything the keeper may do afterwards is predicted here from
 // the program's own rules (`decision.ts`), so an agent can tell what happens next without a chain.
+import { Percentage } from "@orca-so/common-sdk";
 import { PriceMath } from "@orca-so/whirlpools-sdk";
 import {
   createApproveInstruction,
@@ -26,26 +27,59 @@ import {
 } from "@solana/spl-token";
 import { PublicKey, Transaction, type AccountInfo, type Connection } from "@solana/web3.js";
 import type BN from "bn.js";
+import Decimal from "decimal.js";
 
 import { COOK_MINT, ZIP_KEEPER, explorerTxUrl } from "../config";
 import { resolveWallet } from "../domains";
 import { CookieMcpError } from "../errors";
 import { rawToUi, shortAddr, uiToRaw } from "../format";
 import {
-  CLMM_PROGRAM_ID,
+  assertClmmMintsPoolable,
+  builderToTx,
   buildClmmClient,
+  CLMM_FEE_TIER_TICK_SPACING,
+  CLMM_PROGRAM_ID,
   clmmLockConfigAddress,
-  findClmmPositions,
+  DEFAULT_CLMM_FEE_TIER_BPS,
   depositClmmPosition,
+  findClmmPositions,
+  legacyTxWireSize,
+  OPEN_POSITION_CU,
   openClmmPosition,
-  rangeTicksFromPrices,
+  type SendExtra,
 } from "../liquidity/clmm";
 import { signSendConfirm } from "../liquidity/send";
 import { requireMintMeta, resolveMintMeta, type MintMeta } from "../mintMeta";
+import { getQuote } from "../quote";
 import { getConnection } from "../rpc";
 import type { TxSigner } from "../signer";
+import { trade } from "../trade";
 import { ownPublicKey, requireSigner } from "../wallet";
 import { decideZip, withdrawAmounts, type ZipDecision, type ZipDirection } from "./decision";
+import {
+  depositZipDirection,
+  fromEdgeTick,
+  pickFeeOption,
+  poolMarketTick,
+  prepZipPool,
+  sellNowInPool,
+  sendPrepared,
+  standardPoolPda,
+  tickOfReceivePerSell,
+  touchedByZip,
+  zipCrossedShare,
+  zipDefaultPrices,
+  zipExpectedReceive,
+  zipPriceAtTick,
+  zipRangeAbove,
+  zipRangeFromPrices,
+  zipRangePrices,
+  ZipMarketMoved,
+  ZIP_SELL_NOW_SLIPPAGE_BPS,
+  type ZipFeeOption,
+  type ZipOrderRange,
+  type ZipOrderSide,
+} from "./order";
 import {
   MAX_RANGE_TICK_ARRAYS,
   buildDisableIx,
@@ -73,6 +107,7 @@ import {
 } from "./program";
 
 export * from "./decision";
+export * from "./order";
 export * from "./program";
 
 export const ZIP_NAME = "Zip";
@@ -200,6 +235,11 @@ export function resolveCranker(input?: string): { cranker: PublicKey | null; kee
 
 export type OrderStatus = "filling" | "waiting" | "fully-filled" | "paused" | "empty";
 
+/** A finished order's leftover: the empty position, closed by `stop_zip` to return its rent. */
+export const FILLED_DETAIL =
+  "filled — the keeper paid everything out and closed the order; the empty position is left for " +
+  "you to close: stop_zip with `position` = its NFT mint returns the position's rent";
+
 /** What the keeper will do with an order on its next pass, in words. */
 export function describeDecision(
   d: ZipDecision,
@@ -230,7 +270,7 @@ export function describeDecision(
         `finishes once the price crosses the far edge and the last ${p.sold} has converted`
       );
     case "noLiquidity":
-      return "the position has no liquidity, so there is nothing to fill — stop_zip closes the order";
+      return "nothing is left to fill — stop_zip closes the order and the position";
     case "liquidityBelowFloor":
       return "waiting (the re-deposit would not fit the liquidity floor; the keeper retries)";
     case "fullyFilled":
@@ -367,12 +407,6 @@ function pairOf(ctx: PositionContext): PairTokens {
   };
 }
 
-function priceAtTick(tick: number, ctx: PositionContext): string {
-  return PriceMath.tickIndexToPrice(tick, ctx.metaA.dec, ctx.metaB.dec)
-    .toSignificantDigits(9)
-    .toString();
-}
-
 function currentPrice(ctx: PositionContext): string {
   return PriceMath.sqrtPriceX64ToPrice(ctx.pool.sqrtPrice as BN, ctx.metaA.dec, ctx.metaB.dec)
     .toSignificantDigits(9)
@@ -401,16 +435,37 @@ export interface TokenRef {
 export interface RangeView {
   lowerTick: number;
   upperTick: number;
-  /** Prices as tokenB per tokenA (the pool's canonical orientation; see `priceUnit`). */
-  lowerPrice: string;
-  upperPrice: string;
+  /** The order's prices in `priceUnit` (receive per sell): `from` is the worst fill, `to` the best. */
+  from: string;
+  to: string;
 }
 
-/** The position's shape, shared by every result: pair, range, price and what it holds now. */
-function positionView(ctx: PositionContext) {
+/** The side a direction sells, as the price helpers take it. */
+function sideOf(ctx: PositionContext, direction: ZipDirection): ZipOrderSide {
+  return {
+    sellIsA: direction === "aToB",
+    decA: ctx.metaA.dec,
+    decB: ctx.metaB.dec,
+    tickSpacing: ctx.pool.tickSpacing,
+  };
+}
+
+/**
+ * The position's shape, shared by every result: pair, range, price and what it holds now. Prices
+ * are **receive per sell** (what one sold token fetches), as Cookiebox's Zip tab shows them; with
+ * no direction (a filled order, whose account is gone) they are tokenB per tokenA.
+ */
+function positionView(ctx: PositionContext, direction: ZipDirection | null) {
   const pair = pairOf(ctx);
   const a = label(pair.mintA, pair.symA);
   const b = label(pair.mintB, pair.symB);
+  const side = sideOf(ctx, direction ?? "aToB");
+  const sells = side.sellIsA ? a : b;
+  const receives = side.sellIsA ? b : a;
+  const lower = ctx.position.tickLowerIndex;
+  const upper = ctx.position.tickUpperIndex;
+  const [fromTick, toTick] = side.sellIsA ? [lower, upper] : [upper, lower];
+  const fmt = (d: Decimal) => d.toSignificantDigits(9).toString();
   const held = withdrawAmounts({
     liquidity: BigInt(ctx.position.liquidity.toString()),
     tickCurrent: ctx.pool.tickCurrentIndex,
@@ -427,14 +482,21 @@ function positionView(ctx: PositionContext) {
     pair: `${a}/${b}`,
     tokenA: { mint: pair.mintA, symbol: pair.symA } as TokenRef,
     tokenB: { mint: pair.mintB, symbol: pair.symB } as TokenRef,
-    priceUnit: `${b} per ${a}`,
+    priceUnit: `${receives} per ${sells}`,
     range: {
-      lowerTick: ctx.position.tickLowerIndex,
-      upperTick: ctx.position.tickUpperIndex,
-      lowerPrice: priceAtTick(ctx.position.tickLowerIndex, ctx),
-      upperPrice: priceAtTick(ctx.position.tickUpperIndex, ctx),
+      lowerTick: lower,
+      upperTick: upper,
+      from: fmt(zipPriceAtTick(side, fromTick)),
+      to: fmt(zipPriceAtTick(side, toTick)),
     } as RangeView,
-    price: { tick: ctx.pool.tickCurrentIndex, current: currentPrice(ctx) },
+    price: {
+      tick: ctx.pool.tickCurrentIndex,
+      current: fmt(
+        side.sellIsA
+          ? new Decimal(currentPrice(ctx))
+          : new Decimal(1).div(new Decimal(currentPrice(ctx))),
+      ),
+    },
     tickSpacing: ctx.pool.tickSpacing,
     liquidity: ctx.position.liquidity.toString(),
     inPosition: {
@@ -572,9 +634,12 @@ async function resolvePosition(
       "confirmed",
     );
     const withOrder = mine.filter((_, i) => orderInfos[i] != null);
+    // Stop: a running order, else a filled order's leftover (an empty position) to close.
     const usable =
       mode === "stop"
-        ? withOrder
+        ? withOrder.length
+          ? withOrder
+          : mine.filter((p) => p.liquidity.isZero())
         : mine.filter((p, i) => !orderInfos[i] && !p.locked && p.liquidity.gtn(0));
     // Nothing left to start but one running order: that one is meant — start repairs it.
     if (mode === "start" && usable.length === 0 && withOrder.length === 1) {
@@ -641,12 +706,22 @@ const NO_ORDER = () =>
     "nothing to stop — get_zip_orders lists the ones that do",
   );
 
-/** The order `stop_zip` names, read straight from the program (its position may be gone). */
+type StopTarget = {
+  /** The running (or stale) order, or null for a filled order's leftover position. */
+  order: { orderPk: PublicKey; order: RangeOrder } | null;
+  /** Set when `order` is null: the empty position to close. */
+  positionPk?: PublicKey;
+};
+
+/**
+ * What `stop_zip` names, read straight from the program: a running order (its position may be
+ * gone), or a position with no order left — a filled order's leftover, which the stop closes.
+ */
 async function resolveStopOrder(
   conn: Connection,
   args: { position?: string; pool?: string },
   signer: TxSigner,
-): Promise<{ orderPk: PublicKey; order: RangeOrder }> {
+): Promise<StopTarget> {
   if (args.position) {
     const arg = positionKey(args.position);
     const positionForMint = positionPdaForMint(arg);
@@ -666,28 +741,35 @@ async function resolveStopOrder(
       orderForAccount: orderForAccount ?? null,
     };
     const pick = pickStopOrder({ ...infos, positionForMint: positionInfo ?? null });
-    if (pick === "noOrder") throw NO_ORDER();
+    if (pick === "noOrder") {
+      // A position without an order: closable here only when it is a filled order's leftover.
+      const positionPk = positionInfo?.owner.equals(CLMM_PROGRAM_ID) ? positionForMint : arg;
+      const info = positionPk.equals(arg) ? argInfo! : positionInfo!;
+      if (!parsePosition(positionPk, info).liquidity.isZero()) throw NO_ORDER();
+      return { order: null, positionPk };
+    }
     if (pick === "notFound") {
       throw new CookieMcpError(
         `no Cookiebox CLMM position or Zip order for ${args.position}`,
         "pass the position NFT mint, the position account or the order address (get_zip_orders lists them)",
       );
     }
-    return { orderPk: keys[pick], order: decodeRangeOrder(infos[pick]!.data) };
+    return { order: { orderPk: keys[pick], order: decodeRangeOrder(infos[pick]!.data) } };
   }
   const { positionPk } = await resolvePosition(conn, args, signer, "stop");
   const orderPk = rangeOrderPda(positionPk);
   const info = await conn.getAccountInfo(orderPk, "confirmed");
-  if (!info) throw NO_ORDER();
-  return { orderPk, order: decodeRangeOrder(info.data) };
+  if (!info) return { order: null, positionPk };
+  return { order: { orderPk, order: decodeRangeOrder(info.data) } };
 }
 
 // --- reads ----------------------------------------------------------------------------------------
 
 export interface ZipOrderView {
+  /** The order account; for a filled order (account closed) its former address. */
   order: string;
   owner: string;
-  status: OrderStatus | "stale";
+  status: OrderStatus | "stale" | "filled";
   /** What the status means and what the keeper does next, in words. */
   detail: string;
   direction: ZipDirection;
@@ -736,7 +818,7 @@ async function describeOrder(
     };
   }
   const ctx = await loadPositionContext(conn, order.position, positionInfo);
-  const view = positionView(ctx);
+  const view = positionView(ctx, order.direction);
   const { sells, receives } = soldReceived(ctx, order.direction);
   const decision = decisionFor(ctx, order.direction, order.minStep);
   const next = describeDecision(decision, {
@@ -842,27 +924,134 @@ export async function getZipOrders(args: { owner?: string }): Promise<ZipOrdersR
     owner = own;
   }
   const conn = getConnection();
-  const found = await listRangeOrders(conn, new PublicKey(owner));
+  const ownerPk = new PublicKey(owner);
+  const [found, filled] = await Promise.all([
+    listRangeOrders(conn, ownerPk),
+    filledZipPositions(conn, ownerPk),
+  ]);
   const orders = await Promise.all(found.map((f) => describeOrder(conn, f.address, f.order)));
+  for (const f of filled) {
+    const ctx = await loadPositionContext(conn, f.positionPk, f.info);
+    orders.push({
+      order: ctx.orderPk.toBase58(),
+      owner,
+      status: "filled",
+      detail: FILLED_DETAIL,
+      direction: "aToB",
+      sells: { mint: "", symbol: null },
+      receives: { mint: "", symbol: null },
+      minStep: 0,
+      cranker: null,
+      keeper: "cookiebox",
+      ...positionView(ctx, null),
+    });
+  }
   return { owner, ...(ownerName ? { ownerName } : {}), count: orders.length, orders };
 }
+
+/** Recent order-PDA transactions read to tell a finished order from a stray transfer. */
+const FILLED_HISTORY_SIGS = 5;
+
+/**
+ * The wallet's empty CLMM positions left behind by a finished Zip order (the keeper's `finish`
+ * closed the order; only the owner can close the position). Found through the wallet's position
+ * NFTs, then the order PDA's history: one of its recent transactions must name the Zip program.
+ */
+async function filledZipPositions(
+  conn: Connection,
+  owner: PublicKey,
+): Promise<{ positionPk: PublicKey; info: AccountInfo<Buffer> }[]> {
+  const [spl, spl2022] = await Promise.all([
+    conn.getParsedTokenAccountsByOwner(owner, { programId: new PublicKey(SPL_TOKEN_ID) }),
+    conn.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }),
+  ]);
+  const mints: PublicKey[] = [];
+  for (const { account } of [...spl.value, ...spl2022.value]) {
+    const parsed = (
+      account.data as {
+        parsed?: { info?: { tokenAmount?: { amount?: string; decimals?: number }; mint?: string } };
+      }
+    ).parsed?.info;
+    if (parsed?.tokenAmount?.amount === "1" && parsed.tokenAmount.decimals === 0 && parsed.mint) {
+      mints.push(new PublicKey(parsed.mint));
+    }
+  }
+  if (mints.length === 0) return [];
+  const pdas = mints.map(positionPdaForMint);
+  const infos: (AccountInfo<Buffer> | null)[] = [];
+  for (let i = 0; i < pdas.length; i += 100) {
+    infos.push(...(await conn.getMultipleAccountsInfo(pdas.slice(i, i + 100), "confirmed")));
+  }
+  const empty = pdas
+    .map((pk, i) => ({ pk, info: infos[i] }))
+    .filter((x): x is { pk: PublicKey; info: AccountInfo<Buffer> } => {
+      if (!x.info || !x.info.owner.equals(CLMM_PROGRAM_ID)) return false;
+      return parsePosition(x.pk, x.info).liquidity.isZero();
+    });
+  if (empty.length === 0) return [];
+  const orderInfos = await conn.getMultipleAccountsInfo(
+    empty.map((x) => rangeOrderPda(x.pk)),
+    "confirmed",
+  );
+  const out: { positionPk: PublicKey; info: AccountInfo<Buffer> }[] = [];
+  await Promise.all(
+    empty.map(async (x, i) => {
+      // An open order (Zip-owned PDA) is listed by `listRangeOrders`, not here.
+      if (orderInfos[i]?.owner.equals(ZIP_PROGRAM_ID)) return;
+      try {
+        if (await orderPdaTouchedByZip(conn, rangeOrderPda(x.pk))) {
+          out.push({ positionPk: x.pk, info: x.info });
+        }
+      } catch {
+        // Unknown stays unlisted: a flaky read must not invent an order.
+      }
+    }),
+  );
+  return out;
+}
+
+async function orderPdaTouchedByZip(conn: Connection, orderPk: PublicKey): Promise<boolean> {
+  const sigs = (
+    await conn.getSignaturesForAddress(orderPk, { limit: FILLED_HISTORY_SIGS }, "confirmed")
+  ).filter((s) => !s.err);
+  if (sigs.length === 0) return false;
+  const txs = await conn.getTransactions(
+    sigs.map((s) => s.signature),
+    { commitment: "confirmed", maxSupportedTransactionVersion: 0 },
+  );
+  return touchedByZip(
+    ZIP_PROGRAM_ID,
+    txs.map((tx) => tx?.transaction.message.getAccountKeys().staticAccountKeys ?? null),
+  );
+}
+
+const SPL_TOKEN_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
 // --- writes ---------------------------------------------------------------------------------------
 
 export interface StartZipArgs {
-  /** The position NFT mint (or the position account). */
-  position?: string;
-  /** Alternatively: your position in this CLMM pool (or, with `amount`, the pool to open one in). */
-  pool?: string;
-  /** The token to sell: either pool mint, or "COOK". Optional for a one-sided position. */
+  /** The token to sell: a mint, or "COOK". With `position`, which side of that position to sell. */
   sell?: string;
-  /**
-   * Open a NEW one-sided position first: deposit this much of `sell` (UI units) into `pool` over
-   * `priceLower`..`priceUpper` (tokenB per tokenA), then zip it. All three go together.
-   */
+  /** The token to receive: a mint, or "COOK". */
+  receive?: string;
+  /** How much of `sell` the order sells (UI units). */
   amount?: string | number;
-  priceLower?: string | number;
-  priceUpper?: string | number;
+  /**
+   * The order's prices, **receive per sell** (what one sold token fetches): `from` is the price
+   * nothing sells under, `to` the best one. Default: from one price step past the market to 10%
+   * above it. Whatever part of the range the market already beats is sold at once, never under
+   * `from`; the rest waits above the market.
+   */
+  from?: string | number;
+  to?: string | number;
+  /** The LP fee the order earns, in bps (the pool it goes into). Default: the pair's deepest pool. */
+  fee?: number;
+  /**
+   * Instead of sell/receive/amount: a CLMM position you already hold, by NFT mint (or position
+   * account). Zips it as it is (one-sided; `sell` picks the side of one holding both), or repairs a
+   * paused order already running on it.
+   */
+  position?: string;
   /** Tick spacings the price must move past the edge before it follows (default 1). */
   minStep?: number;
   /** Who may crank: omitted = the Cookiebox keeper; "anyone"; or a public key. */
@@ -872,6 +1061,8 @@ export interface StartZipArgs {
 export interface StartZipResult extends ReturnType<typeof positionView> {
   signature: string;
   explorerUrl: string;
+  /** Every transaction this call landed, oldest first (a sale, a pool, tick arrays, the open, the start). */
+  signatures: string[];
   order: string;
   direction: ZipDirection;
   sells: TokenRef;
@@ -882,26 +1073,43 @@ export interface StartZipResult extends ReturnType<typeof positionView> {
   /** What the keeper does next, from the program's rules and the current price. */
   next: string;
   /** Owner-paid setup this start included (idempotent: 0 when they already existed). */
-  created: { tickArrays: number; payoutAccounts: number };
-  /** Set when this call opened the position too (`amount` given); `signature` null = it existed already. */
+  created: { tickArrays: number; payoutAccounts: number; pool: boolean };
+  /** Sold at once because the market already paid more than those prices (UI units of `sell`). */
+  soldNow?: { amount: string; signature: string | null };
+  /** Set when this call opened the position too; `signature` null = it existed already. */
   opened?: { positionMint: string; signature: string | null; explorerUrl: string | null };
   /** Set when the order was already running and this call only recreated what the keeper needs. */
   repaired?: { delegation: boolean };
   notes: string[];
 }
 
+/** `start_zip` sold the whole order at once: the market already beat every price in the range. */
+export interface SwappedResult {
+  swapped: true;
+  signature: string;
+  explorerUrl: string;
+  signatures: string[];
+  sold: string;
+  sells: TokenRef;
+  receives: TokenRef;
+  note: string;
+}
+
 export const MIN_STEP_MAX = 65_535;
 
 /**
- * Start a Zip order on one of the wallet's CLMM positions. Creates the owner's payout token
- * accounts and any tick arrays the range spans (owner-paid, idempotent), then `enable`s the order —
- * delegating the position NFT to the order PDA and pinning the cranker. Each transaction is
- * simulated before signing; with an external signer a tick-array batch is handed back as an
- * intermediate step and the tool is called again to continue.
+ * Place a Zip order the way Cookiebox's /trade tab does: `sell` `amount` for `receive` between
+ * `from` and `to` (receive per sell). In order: sell what the market already beats (in the pool
+ * when it is live, else through the router, never under `from`); get the pool ready (created if
+ * the pair has none at that fee, an empty one moved to the order); open a one-sided position with
+ * the rest and `enable` the order. Every transaction is simulated before signing; with an external
+ * signer each step is handed back (`intermediate`) and the tool is called again to continue — the
+ * flow re-prices against the market on every call, so nothing is sold twice.
+ *
+ * With `position`, zips (or repairs) a CLMM position the wallet already holds.
  */
-export async function startZip(args: StartZipArgs): Promise<StartZipResult> {
+export async function startZip(args: StartZipArgs): Promise<StartZipResult | SwappedResult> {
   const signer = requireSigner();
-  const owner = signer.publicKey;
   const conn = getConnection();
 
   const minStep = args.minStep ?? 1;
@@ -912,14 +1120,38 @@ export async function startZip(args: StartZipArgs): Promise<StartZipResult> {
     );
   }
   const { cranker, keeper } = resolveCranker(args.cranker);
+  const settings = { minStep, cranker, keeper };
 
-  const opening = args.amount != null || args.priceLower != null || args.priceUpper != null;
-  const opened = opening ? await openPositionForZip(conn, signer, args) : null;
-  const { positionPk, info } = opened
-    ? { positionPk: opened.positionPk, info: undefined }
-    : await resolvePosition(conn, args, signer, "start");
-  const ctx = await loadPositionContext(conn, positionPk, info);
+  if (args.position) {
+    if (args.receive != null || args.amount != null || args.from != null || args.to != null) {
+      throw new CookieMcpError(
+        "`position` zips a position you hold; receive/amount/from/to place a new order",
+        "pass one or the other",
+      );
+    }
+    const { positionPk, info } = await resolvePosition(conn, args, signer, "start");
+    const ctx = await loadPositionContext(conn, positionPk, info);
+    return zipExisting(conn, signer, ctx, args.sell, settings, null, { sigs: [], pool: false });
+  }
+  return placeZip(conn, signer, args, settings);
+}
+
+type Settings = { minStep: number; cranker: PublicKey | null; keeper: KeeperKind };
+
+/** Zip a position the wallet holds (opened by this call, or held before): checks, setup, `enable`. */
+async function zipExisting(
+  conn: Connection,
+  signer: TxSigner,
+  ctx: PositionContext,
+  sell: string | undefined,
+  settings: Settings,
+  opened: OpenedForZip | null,
+  landed: { sigs: string[]; soldNow?: { amount: string; signature: string | null }; pool: boolean },
+): Promise<StartZipResult> {
+  const owner = signer.publicKey;
+  const { minStep, cranker, keeper } = settings;
   const pair = pairOf(ctx);
+  const args = { sell };
 
   if (ctx.order) return repairZip(conn, signer, { ...ctx, order: ctx.order });
   if (!ctx.nft || !ctx.nft.holder.equals(owner)) {
@@ -1078,9 +1310,11 @@ export async function startZip(args: StartZipArgs): Promise<StartZipResult> {
   } else if (keeper === "custom") {
     notes.push(`only ${cranker!.toBase58()} may crank this order; the Cookiebox keeper will not`);
   }
+  const signatures = [...landed.sigs, ...(opened?.signature ? [opened.signature] : []), signature];
   return {
     signature,
     explorerUrl: explorerTxUrl(signature),
+    signatures,
     order: ctx.orderPk.toBase58(),
     direction,
     sells,
@@ -1089,7 +1323,12 @@ export async function startZip(args: StartZipArgs): Promise<StartZipResult> {
     cranker: cranker?.toBase58() ?? null,
     keeper,
     next,
-    created: { tickArrays: missing.length, payoutAccounts: payoutAccountsCreated },
+    created: {
+      tickArrays: missing.length,
+      payoutAccounts: payoutAccountsCreated,
+      pool: landed.pool,
+    },
+    ...(landed.soldNow ? { soldNow: landed.soldNow } : {}),
     ...(opened
       ? {
           opened: {
@@ -1099,163 +1338,422 @@ export async function startZip(args: StartZipArgs): Promise<StartZipResult> {
           },
         }
       : {}),
-    ...positionView(ctx),
+    ...positionView(ctx, direction),
     notes,
   };
 }
 
+/** Re-pricing rounds when the live pool moves into the range between a read and a send. */
+const PLACE_ATTEMPTS = 3;
+
+/** A token the order names: a mint or "COOK", with its decimals and symbol. */
+async function resolveOrderMints(
+  sell: string | undefined,
+  receive: string | undefined,
+): Promise<{ sell: MintMeta & { mint: PublicKey }; receive: MintMeta & { mint: PublicKey } }> {
+  const parse = (v: string | undefined, name: string): PublicKey => {
+    const t = v?.trim() ?? "";
+    if (!t) {
+      throw new CookieMcpError(
+        `pass \`${name}\`: the token to ${name} (a mint, or "COOK")`,
+        "a Zip order sells `amount` of `sell` for `receive` between `from` and `to`",
+      );
+    }
+    try {
+      return new PublicKey(t.toUpperCase() === "COOK" ? COOK_MINT : t);
+    } catch {
+      throw new CookieMcpError(`invalid ${name} mint: ${t}`, 'pass a base58 mint or "COOK"');
+    }
+  };
+  const s = parse(sell, "sell");
+  const r = parse(receive, "receive");
+  if (s.equals(r)) {
+    throw new CookieMcpError("sell and receive are the same token", "pick two different tokens");
+  }
+  const meta = await resolveMintMeta([s.toBase58(), r.toBase58()]);
+  return {
+    sell: { ...requireMintMeta(meta, s.toBase58()), mint: s },
+    receive: { ...requireMintMeta(meta, r.toBase58()), mint: r },
+  };
+}
+
+/** The pair's standard-tier pools, one per fee the config knows, existing or not. */
+async function readFeeOptions(
+  conn: Connection,
+  mintA: PublicKey,
+  mintB: PublicKey,
+): Promise<ZipFeeOption[]> {
+  const tiers = Object.entries(CLMM_FEE_TIER_TICK_SPACING).map(([bps, spacing]) => ({
+    feeBps: Number(bps),
+    tickSpacing: spacing,
+    poolPk: standardPoolPda(mintA, mintB, spacing),
+  }));
+  const infos = await conn.getMultipleAccountsInfo(
+    tiers.map((t) => t.poolPk),
+    "confirmed",
+  );
+  return tiers.map((t, i) => ({
+    ...t,
+    pool: infos[i]?.owner.equals(CLMM_PROGRAM_ID) ? parsePool(t.poolPk, infos[i]!) : null,
+  }));
+}
+
+type Market = { tick: number; venue: "pool" } | { tick: number; venue: "router" };
+
 /**
- * `start_zip` with `amount` + `priceLower` + `priceUpper`: open a one-sided position in `pool`
- * first. The range must sit entirely on the `sell` side of the current price (above it to sell
- * token A, below it to sell token B), so nothing counts as filled the moment it opens. Re-entrant
- * for an external signer: a position of this wallet with exactly this range, liquidity and no order
- * is used instead of opening another, so "submit, then call again" lands on the enable step.
+ * The market as a pool tick: the chosen pool's own price when it has liquidity, else what the
+ * router pays for `amount` right now (an empty pool's price is whatever it was left at). `null`
+ * when nothing prices the pair.
  */
-async function openPositionForZip(
+async function readMarket(
+  conn: Connection,
+  option: ZipFeeOption,
+  side: ZipOrderSide,
+  sell: MintMeta & { mint: PublicKey },
+  receive: MintMeta & { mint: PublicKey },
+  amountRaw: bigint,
+): Promise<Market | null> {
+  const info = await conn.getAccountInfo(option.poolPk, "confirmed");
+  const pool = info?.owner.equals(CLMM_PROGRAM_ID) ? parsePool(option.poolPk, info) : null;
+  const own = poolMarketTick(pool);
+  if (own != null) return { tick: own, venue: "pool" };
+  try {
+    const q = await getQuote({
+      inputMint: sell.mint.toBase58(),
+      outputMint: receive.mint.toBase58(),
+      amount: rawToUi(amountRaw, sell.dec),
+      slippageBps: ZIP_SELL_NOW_SLIPPAGE_BPS,
+    });
+    const perSell = new Decimal(q.output.outAfterFee).div(rawToUi(amountRaw, sell.dec));
+    if (!perSell.isFinite() || perSell.lte(0)) return null;
+    const tick = tickOfReceivePerSell(side, perSell);
+    return tick == null ? null : { tick, venue: "router" };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sell `amountRaw` through the router with a floor at `from` on the whole fill: halves the amount
+ * while the market can't take it at that floor, and sells nothing if it never can — the order
+ * then rests at `from` and fills there.
+ */
+async function sellNowViaRouter(
+  side: ZipOrderSide,
+  sell: MintMeta & { mint: PublicKey },
+  receive: MintMeta & { mint: PublicKey },
+  range: ZipOrderRange,
+  amountRaw: bigint,
+): Promise<{ takes: bigint; signature: string | null }> {
+  const perSell = zipPriceAtTick(side, fromEdgeTick(range));
+  for (let amount = amountRaw, i = 0; amount > 0n && i < 4; amount /= 2n, i++) {
+    const ui = rawToUi(amount, sell.dec);
+    const floor = perSell.mul(ui);
+    let minOut: Decimal;
+    try {
+      const q = await getQuote({
+        inputMint: sell.mint.toBase58(),
+        outputMint: receive.mint.toBase58(),
+        amount: ui,
+        slippageBps: ZIP_SELL_NOW_SLIPPAGE_BPS,
+      });
+      minOut = new Decimal(q.output.minOut);
+    } catch {
+      return { takes: 0n, signature: null };
+    }
+    if (minOut.lt(floor)) continue;
+    const r = await trade({
+      inputMint: sell.mint.toBase58(),
+      outputMint: receive.mint.toBase58(),
+      amount: ui,
+      slippageBps: ZIP_SELL_NOW_SLIPPAGE_BPS,
+      aggregator: "cookiebox",
+    });
+    return { takes: amount, signature: r.signature };
+  }
+  return { takes: 0n, signature: null };
+}
+
+/**
+ * The trade-style `start_zip`: see {@link startZip}. Every refusal (tokens, amount, balance, a
+ * hook with no meta list, a mint the CLMM won't pool) runs before the first send.
+ */
+async function placeZip(
   conn: Connection,
   signer: TxSigner,
   args: StartZipArgs,
-): Promise<OpenedForZip> {
-  if (args.amount == null || args.priceLower == null || args.priceUpper == null) {
-    throw new CookieMcpError(
-      "to open a position, pass amount, priceLower and priceUpper together",
-      "or leave all three out to zip a position you already hold (`position` or `pool`)",
-    );
+  settings: Settings,
+): Promise<StartZipResult | SwappedResult> {
+  const owner = signer.publicKey;
+  const { sell, receive } = await resolveOrderMints(args.sell, args.receive);
+  if (args.amount == null) {
+    throw new CookieMcpError("pass `amount`: how much of `sell` to sell (UI units)", "");
   }
-  if (args.position) {
-    throw new CookieMcpError(
-      "`position` and amount/priceLower/priceUpper don't go together: the first zips a position " +
-        "you hold, the others open a new one",
-      "drop `position` to open a new one in `pool`, or drop the other three to zip it",
-    );
-  }
-  if (!args.pool) {
-    throw new CookieMcpError(
-      "opening a position needs `pool` (the cookiebox-clmm pool to open it in)",
-      "see get_pools",
-    );
-  }
-  if (!args.sell || !args.sell.trim()) {
-    throw new CookieMcpError(
-      "opening a position needs `sell`: the token you deposit and sell (a pool mint, or COOK)",
-      "the position is one-sided, so what you deposit is what the order sells",
-    );
-  }
-  let poolPk: PublicKey;
+  let amountRaw: bigint;
   try {
-    poolPk = new PublicKey(args.pool.trim());
-  } catch {
-    throw new CookieMcpError(`invalid pool address: ${args.pool}`, "pass a valid pool pubkey");
-  }
-  const pool = parsePool(poolPk, await conn.getAccountInfo(poolPk, "confirmed"));
-  const [meta, [mintAInfo, mintBInfo]] = await Promise.all([
-    resolveMintMeta([pool.tokenMintA.toBase58(), pool.tokenMintB.toBase58()]),
-    conn.getMultipleAccountsInfo([pool.tokenMintA, pool.tokenMintB], "confirmed"),
-  ]);
-  const metaA = requireMintMeta(meta, pool.tokenMintA.toBase58());
-  const metaB = requireMintMeta(meta, pool.tokenMintB.toBase58());
-  const pair: PairTokens = {
-    mintA: pool.tokenMintA.toBase58(),
-    mintB: pool.tokenMintB.toBase58(),
-    symA: metaA.sym,
-    symB: metaB.sym,
-  };
-  const current = PriceMath.sqrtPriceX64ToPrice(pool.sqrtPrice as BN, metaA.dec, metaB.dec)
-    .toSignificantDigits(9)
-    .toString();
-  const priceUnit = `${label(pair.mintB, pair.symB)} per ${label(pair.mintA, pair.symA)}`;
-  const [lower, upper] = rangeTicksFromPrices({
-    lower: args.priceLower,
-    upper: args.priceUpper,
-    decA: metaA.dec,
-    decB: metaB.dec,
-    tickSpacing: pool.tickSpacing,
-    unit: `${priceUnit}, now ${current}`,
-  });
-  const holdings = positionHoldings(pool.tickCurrentIndex, lower, upper);
-  const price = (tick: number) =>
-    PriceMath.tickIndexToPrice(tick, metaA.dec, metaB.dec).toSignificantDigits(9).toString();
-  // Our same-range positions come first: with an external signer each call stops at the next
-  // unsigned tx, so an earlier call of this request may already have opened (and funded) one. The
-  // refusals below name it, so a price that moved meanwhile never strands it.
-  const sameRange = await sameRangePositions(conn, signer, pool, poolPk, lower, upper);
-  const stranded = strandedPositionHint(sameRange.map((p) => p.positionMint.toBase58()));
-  if (holdings === "both") {
-    throw new CookieMcpError(
-      `the range ${price(lower)}–${price(upper)} contains the current price ${current} (${priceUnit})`,
-      `a Zip starts from a one-sided range: to sell ${label(pair.mintA, pair.symA)} put the ` +
-        `whole range above the price, to sell ${label(pair.mintB, pair.symB)} put it below` +
-        stranded,
-    );
-  }
-  // A range on one side of the price holds one token, so it can only sell that one.
-  let direction: ZipDirection;
-  try {
-    direction = directionForSell(args.sell, pair, holdings);
+    amountRaw = uiToRaw(args.amount, sell.dec);
   } catch (e) {
-    if (!(e instanceof CookieMcpError) || !/holds no/.test(e.message)) throw e;
-    const holds = holdings === "a" ? label(pair.mintA, pair.symA) : label(pair.mintB, pair.symB);
-    const other = holdings === "a" ? label(pair.mintB, pair.symB) : label(pair.mintA, pair.symA);
     throw new CookieMcpError(
-      `a range ${holdings === "a" ? "above" : "below"} the current price ${current} (${priceUnit}) ` +
-        `holds only ${holds}, so it can only sell ${holds}, not ${other}`,
-      `to sell ${other}, put the whole range ${holdings === "a" ? "below" : "above"} the price` +
-        stranded,
+      (e as Error).message,
+      `amount is how much ${label(sell.mint.toBase58(), sell.sym)} to sell`,
     );
   }
-  const spanned = rangeTickArrayCount(lower, upper, pool.tickSpacing);
-  if (spanned > MAX_RANGE_TICK_ARRAYS) {
-    throw new CookieMcpError(
-      `this range spans ${spanned} tick arrays; Zip supports up to ${MAX_RANGE_TICK_ARRAYS}`,
-      "narrow the range",
-    );
-  }
-  // Everything that can refuse runs before the first send, so a refusal never leaves a funded
-  // position without an order behind.
+  if (amountRaw <= 0n) throw new CookieMcpError("amount must be above zero", "");
+  const sellLabel = label(sell.mint.toBase58(), sell.sym);
+  const receiveLabel = label(receive.mint.toBase58(), receive.sym);
+
+  // The pool's canonical mint order: prices, ticks and the pool PDA all use it.
+  const sellIsA = Buffer.compare(sell.mint.toBuffer(), receive.mint.toBuffer()) < 0;
+  const [mintA, mintB] = sellIsA ? [sell.mint, receive.mint] : [receive.mint, sell.mint];
+  const [metaA, metaB] = sellIsA ? [sell, receive] : [receive, sell];
+  const [mintAInfo, mintBInfo] = await conn.getMultipleAccountsInfo([mintA, mintB], "confirmed");
   if (!mintAInfo || !mintBInfo) {
-    throw new CookieMcpError(
-      `the pool's ${!mintAInfo ? "token A" : "token B"} mint account was not found`,
-      "the pool may be misconfigured or the RPC lagging; retry, or pick another pool",
-    );
+    throw new CookieMcpError("a token's mint account was not found on chain", "check the mints");
   }
   const noMetaLists = await missingHookMetaLists(conn, [
-    { mint: pool.tokenMintA, info: mintAInfo, sym: metaA.sym },
-    { mint: pool.tokenMintB, info: mintBInfo, sym: metaB.sym },
+    { mint: mintA, info: mintAInfo, sym: metaA.sym },
+    { mint: mintB, info: mintBInfo, sym: metaB.sym },
   ]);
   if (noMetaLists.length) throw hookRefusal(noMetaLists);
-  const sold =
-    direction === "aToB" ? { ...metaA, mint: pair.mintA } : { ...metaB, mint: pair.mintB };
-  const soldLabel = label(sold.mint, sold.sym);
-  let wantRaw: bigint;
-  try {
-    wantRaw = uiToRaw(args.amount, sold.dec);
-  } catch (e) {
-    throw new CookieMcpError((e as Error).message, `amount is how much ${soldLabel} to deposit`);
-  }
-  if (wantRaw <= 0n) {
-    throw new CookieMcpError("amount must be above zero", `how much ${soldLabel} to deposit`);
-  }
-  const amounts = {
-    amountA: direction === "aToB" ? args.amount : undefined,
-    amountB: direction === "bToA" ? args.amount : undefined,
-  };
-  const summary = {
-    action: "open position for zip",
-    pool: poolPk.toBase58(),
-    deposit: `${String(args.amount)} ${soldLabel}`,
-    range: `${price(lower)}–${price(upper)} ${priceUnit} (ticks ${lower}..${upper})`,
-    currentPrice: `${current} ${priceUnit}`,
-    direction,
-    then: WAIT_BEFORE_RECALL,
-  };
+  const balance = await soldBalanceRaw(
+    conn,
+    owner,
+    sell.mint,
+    (sellIsA ? mintAInfo : mintBInfo).owner,
+  );
+  const short = depositShortfall({
+    balance,
+    want: amountRaw,
+    dec: sell.dec,
+    label: sellLabel,
+    native: sell.mint.toBase58() === COOK_MINT,
+  });
+  if (short) throw short;
 
-  // Re-entry: a same-range position of ours is this request's earlier call — funded, or empty when
-  // the open went out as open + deposit and only the open landed. Use it rather than open another.
-  const candidates: ReentryCandidate[] = sameRange.map((p) => ({
-    ...p,
-    held: direction === "aToB" ? p.held.a : p.held.b,
+  const options = await readFeeOptions(conn, mintA, mintB);
+  const option = pickFeeOption(options, args.fee, DEFAULT_CLMM_FEE_TIER_BPS);
+  if (!option.pool) await assertClmmMintsPoolable(conn, [mintA, mintB]);
+  const side: ZipOrderSide = {
+    sellIsA,
+    decA: metaA.dec,
+    decB: metaB.dec,
+    tickSpacing: option.tickSpacing,
+  };
+  const client = buildClmmClient(conn, signer);
+
+  // The range: typed prices, or the default just above the market.
+  let market = await readMarket(conn, option, side, sell, receive, amountRaw);
+  const typed = args.from != null || args.to != null;
+  if (!typed && !market) {
+    throw new CookieMcpError(
+      `nothing prices ${sellLabel}/${receiveLabel} right now (no live pool, no route), so there is no default range`,
+      "pass `from` and `to` (what one sold token fetches)",
+    );
+  }
+  let range: ZipOrderRange | null = zipRangeFromPrices(
+    side,
+    typed ? { from: args.from, to: args.to } : zipDefaultPrices(side, market!.tick),
+  );
+  const asked = zipRangePrices(side, range);
+  const sigs: string[] = [];
+  let soldNowRaw = 0n;
+  let soldSig: string | null = null;
+  let poolCreated = false;
+  const summaryBase = {
+    action: "zip order",
+    sell: `${String(args.amount)} ${sellLabel}`,
+    receive: receiveLabel,
+    prices: `${asked.from}–${asked.to} ${receiveLabel} per ${sellLabel}`,
+    fee: `${option.feeBps / 100}%`,
+    pool: option.poolPk.toBase58(),
+  };
+  const step = (action: string, more: Record<string, unknown> = {}): SendExtra => ({
+    step: "intermediate",
+    summary: { ...summaryBase, action, ...more, then: WAIT_BEFORE_RECALL },
+  });
+
+  for (let attempt = 0; attempt < PLACE_ATTEMPTS; attempt++) {
+    // 1–2: sell the part of the range the market beats; the rest starts one step past the market.
+    if (market && range) {
+      const share = zipCrossedShare(range, market.tick);
+      const left = amountRaw - soldNowRaw;
+      const crossed = share.gte(1) ? left : BigInt(share.mul(left.toString()).floor().toFixed(0));
+      if (crossed > 0n) {
+        const sale =
+          market.venue === "pool"
+            ? await sellNowInPool(
+                conn,
+                signer,
+                client,
+                option.poolPk,
+                range,
+                crossed,
+                step("zip: sell the part the market already beats", {
+                  sellsNow: `${rawToUi(crossed, sell.dec)} ${sellLabel}`,
+                  floor: `${asked.from} ${receiveLabel} per ${sellLabel}`,
+                }),
+              )
+            : await sellNowViaRouter(side, sell, receive, range, crossed);
+        soldNowRaw += sale.takes;
+        if (sale.signature) {
+          soldSig = sale.signature;
+          sigs.push(sale.signature);
+        }
+        if (sale.takes > 0n)
+          market = await readMarket(conn, option, side, sell, receive, amountRaw);
+      }
+      range = market ? zipRangeAbove(side, range, market.tick) : range;
+    }
+    const orderRaw = amountRaw - soldNowRaw;
+    if (orderRaw <= 0n || !range) {
+      const signature = sigs[sigs.length - 1] ?? "";
+      return {
+        swapped: true,
+        signature,
+        explorerUrl: explorerTxUrl(signature),
+        signatures: sigs,
+        sold: `${rawToUi(soldNowRaw, sell.dec)} ${sellLabel}`,
+        sells: { mint: sell.mint.toBase58(), symbol: sell.sym },
+        receives: { mint: receive.mint.toBase58(), symbol: receive.sym },
+        note:
+          "the market already paid more than every price in the range, so the whole amount was " +
+          "sold at once (never under `from`); no order was opened",
+      };
+    }
+
+    // 3: the pool.
+    let prep;
+    try {
+      prep = await prepZipPool({
+        conn,
+        client,
+        owner,
+        mintA,
+        mintB,
+        tickSpacing: option.tickSpacing,
+        poolPk: option.poolPk,
+        range,
+        tokenProgramA: mintAInfo.owner,
+        tokenProgramB: mintBInfo.owner,
+      });
+    } catch (e) {
+      if (e instanceof ZipMarketMoved) {
+        market = await readMarket(conn, option, side, sell, receive, amountRaw);
+        continue;
+      }
+      throw e;
+    }
+    if (prep.kind === "create") {
+      sigs.push(
+        ...(await sendPrepared(
+          conn,
+          signer,
+          prep.txs,
+          prep.signers,
+          "zip: create pool",
+          step("zip: create the pool", {
+            creates: "the pool at this fee, priced at `from`, and its tick arrays",
+          }),
+        )),
+      );
+      poolCreated = true;
+    } else if (prep.kind === "move") {
+      sigs.push(
+        ...(await sendPrepared(
+          conn,
+          signer,
+          prep.txs,
+          [],
+          "zip: move empty pool price",
+          step("zip: move the empty pool's price to `from`", {
+            trades: "nothing (the pool has no liquidity)",
+          }),
+        )),
+      );
+    }
+
+    // 4: the position, then the order on it (`zipExisting` does the setup and `enable`).
+    const fitted = zipRangePrices(side, range);
+    let opened: OpenedForZip;
+    try {
+      opened = await openOneSided(conn, signer, client, {
+        poolPk: option.poolPk,
+        range,
+        side,
+        amountRaw: orderRaw,
+        sold: { ...sell, label: sellLabel },
+        extra: step("zip: open the position", {
+          deposits: `${rawToUi(orderRaw, sell.dec)} ${sellLabel}`,
+          prices: `${fitted.from}–${fitted.to} ${receiveLabel} per ${sellLabel}`,
+        }),
+      });
+    } catch (e) {
+      if (e instanceof ZipMarketMoved) {
+        market = await readMarket(conn, option, side, sell, receive, amountRaw);
+        continue;
+      }
+      throw e;
+    }
+    const ctx = await loadPositionContext(conn, opened.positionPk);
+    const result = await zipExisting(conn, signer, ctx, sell.mint.toBase58(), settings, opened, {
+      sigs,
+      ...(soldNowRaw > 0n
+        ? {
+            soldNow: {
+              amount: `${rawToUi(soldNowRaw, sell.dec)} ${sellLabel}`,
+              signature: soldSig,
+            },
+          }
+        : {}),
+      pool: poolCreated,
+    });
+    const human = new Decimal(rawToUi(orderRaw, sell.dec));
+    result.notes.unshift(
+      `expect about ${zipExpectedReceive(side, range, human, market?.tick ?? null)
+        .toSignificantDigits(6)
+        .toString()} ${receiveLabel} for the ${rawToUi(orderRaw, sell.dec)} ${sellLabel} in the order, plus the LP fees it earns` +
+        (fitted.from !== asked.from || fitted.to !== asked.to
+          ? `; placed at ${fitted.from}–${fitted.to} ${receiveLabel} per ${sellLabel} (prices snap to the pool's steps, a range the market already beats starts one step past it, and one too wide to run is cut at the \`to\` end)`
+          : ""),
+    );
+    return result;
+  }
+  throw new CookieMcpError(
+    "the market kept moving into the order's range while it was being placed",
+    "try again; what was sold so far is in your wallet",
+  );
+}
+
+/**
+ * Open the one-sided position an order rests on. Re-entrant for an external signer: a position of
+ * this wallet with exactly this range and no order is continued (used when it holds the amount,
+ * deposited into when it is empty), never opened twice. Re-checks on a fresh pool read that the
+ * range still sits on the sell side of the price (`ZipMarketMoved` otherwise).
+ */
+async function openOneSided(
+  conn: Connection,
+  signer: TxSigner,
+  client: ReturnType<typeof buildClmmClient>,
+  p: {
+    poolPk: PublicKey;
+    range: ZipOrderRange;
+    side: ZipOrderSide;
+    amountRaw: bigint;
+    sold: MintMeta & { mint: PublicKey; label: string };
+    extra: SendExtra;
+  },
+): Promise<OpenedForZip> {
+  const { range, poolPk } = p;
+  const pool = parsePool(poolPk, await conn.getAccountInfo(poolPk, "confirmed"));
+  if (depositZipDirection(pool.tickCurrentIndex, range.lower, range.upper) !== range.direction) {
+    throw new ZipMarketMoved();
+  }
+  const sameRange = await sameRangePositions(conn, signer, pool, poolPk, range.lower, range.upper);
+  const candidates: ReentryCandidate[] = sameRange.map((x) => ({
+    ...x,
+    held: range.direction === "aToB" ? x.held.a : x.held.b,
   }));
-  const reentry = pickReentry(candidates, wantRaw);
+  const reentry = pickReentry(candidates, p.amountRaw);
   if (reentry?.kind === "reuse") {
     return {
       positionPk: reentry.c.positionPk,
@@ -1266,38 +1764,24 @@ async function openPositionForZip(
   }
   if (reentry?.kind === "conflict") {
     const mint = reentry.c.positionMint.toBase58();
-    const more = reentry.more.map((c) => c.positionMint.toBase58());
     throw new CookieMcpError(
       `you already hold a position with exactly this range and no order (NFT ${mint}), holding ` +
-        `${rawToUi(reentry.c.held, sold.dec)} ${soldLabel} rather than ${String(args.amount)}` +
-        (more.length ? ` (and ${more.length} more like it: NFT ${more.join(", ")})` : ""),
-      `zip that one with \`position: "${mint}"\` (no amount/prices), or nudge ` +
-        "priceLower/priceUpper so the new range differs",
+        `${rawToUi(reentry.c.held, p.sold.dec)} ${p.sold.label} rather than ${rawToUi(p.amountRaw, p.sold.dec)}`,
+      `zip that one with \`position: "${mint}"\`, or nudge \`from\`/\`to\` so the new range differs`,
     );
   }
-  // The open sends its tick arrays (rent, never refunded) before the deposit is simulated, so a
-  // shortfall must be caught here, not by that simulation.
-  const soldMint = new PublicKey(sold.mint);
-  const balance = await soldBalanceRaw(
-    conn,
-    signer.publicKey,
-    soldMint,
-    (direction === "aToB" ? mintAInfo : mintBInfo).owner,
-  );
-  const short = depositShortfall({
-    balance,
-    want: wantRaw,
-    dec: sold.dec,
-    label: soldLabel,
-    native: soldMint.toBase58() === COOK_MINT,
-  });
-  if (short) throw short;
+  const ui = rawToUi(p.amountRaw, p.sold.dec);
+  const amounts = {
+    amountA: range.direction === "aToB" ? ui : undefined,
+    amountB: range.direction === "bToA" ? ui : undefined,
+  };
+  void client;
   if (reentry?.kind === "deposit") {
     const signature = await depositClmmPosition(
       conn,
       signer,
       { poolPk, positionPk: reentry.c.positionPk, ...amounts },
-      { step: "intermediate", summary: { ...summary, action: "deposit into opened position" } },
+      p.extra,
     );
     return {
       positionPk: reentry.c.positionPk,
@@ -1306,12 +1790,11 @@ async function openPositionForZip(
       reused: "empty",
     };
   }
-
   const opened = await openClmmPosition(
     conn,
     signer,
-    { poolPk, tickLower: lower, tickUpper: upper, ...amounts },
-    { step: "intermediate", summary },
+    { poolPk, tickLower: range.lower, tickUpper: range.upper, ...amounts },
+    p.extra,
   );
   return {
     positionPk: opened.positionAddress,
@@ -1648,9 +2131,10 @@ async function repairZip(
     cranker: order.cranker?.toBase58() ?? null,
     keeper,
     next,
-    created: { tickArrays: missingArrays.length, payoutAccounts: missingAtas },
+    signatures: [signature],
+    created: { tickArrays: missingArrays.length, payoutAccounts: missingAtas, pool: false },
     repaired: { delegation: reapprove },
-    ...positionView(ctx),
+    ...positionView(ctx, order.direction),
     notes: [
       "the order kept running and nothing about it changed; this only recreated what the keeper " +
         "needs to crank it (the keeper never pays that rent itself)",
@@ -1674,70 +2158,148 @@ async function repairZip(
 export interface StopZipResult {
   signature: string;
   explorerUrl: string;
-  order: string;
+  /** Every transaction this call landed, oldest first. */
+  signatures: string[];
+  /** The order account (closed by this call), or null when it was already gone (a filled order). */
+  order: string | null;
   position: string;
   positionMint: string;
   pool: string;
-  /** True when this wallet holds the NFT and the stop revoked the order's delegation on it. */
+  /** True when this wallet held the NFT and the stop revoked the order's delegation on it. */
   delegationRevoked: boolean;
+  /** True when the position's liquidity, fees and rewards were withdrawn and the position closed. */
+  positionClosed: boolean;
   rentRefundedTo: string;
   note: string;
 }
 
+/** Slippage on the withdraw when an order is stopped: the position is one-sided, so small. */
+const ZIP_STOP_SLIPPAGE_BPS = 100;
+
 /**
- * Stop a Zip order: closes the `RangeOrder` (rent back to its owner) and, when this wallet holds
- * the NFT, revokes the delegation. The position and its liquidity are untouched — whatever has
- * filled so far is already in the wallet, the rest stays in the position as it is. Works on a stale
- * order too (position closed): `disable` needs neither the position nor the NFT.
+ * Stop a Zip order and leave nothing behind, as Cookiebox's Stop does: `disable` (closes the
+ * order, revokes the NFT delegation), then the pool's own close path — withdraw all liquidity,
+ * collect fees and rewards, close the position and burn its NFT — so the wallet gets back
+ * everything that was not filled yet. On a filled order (the keeper's `finish` already paid
+ * everything out and closed the order) only the empty position is closed, returning its rent.
+ * When the NFT is in another wallet only the order is closed; a stale order (position already
+ * closed) stops too, refunding its rent.
  */
 export async function stopZip(args: { position?: string; pool?: string }): Promise<StopZipResult> {
   const signer = requireSigner();
   const me = signer.publicKey;
   const conn = getConnection();
-  const { orderPk, order } = await resolveStopOrder(conn, args, signer);
-  // Closing a position burns its NFT, so on a stale order the mint may hold nothing (or be gone).
-  const [mintInfo, positionInfo] = await conn.getMultipleAccountsInfo(
-    [order.positionMint, order.position],
-    "confirmed",
-  );
-  const nft = mintInfo ? await findPositionNft(conn, order.positionMint) : null;
+  const found = await resolveStopOrder(conn, args, signer);
+  const positionPk = found.order ? found.order.order.position : found.positionPk!;
+  const positionInfo = await conn.getAccountInfo(positionPk, "confirmed");
+  const position = positionInfo ? parsePosition(positionPk, positionInfo) : null;
+  const positionMint = found.order ? found.order.order.positionMint : position!.positionMint;
+  const mintInfo = await conn.getAccountInfo(positionMint, "confirmed");
+  const nft = mintInfo ? await findPositionNft(conn, positionMint) : null;
   const holdsNft = nft?.holder.equals(me) ?? false;
-  if (!order.owner.equals(me) && !holdsNft) {
+  const owner = found.order?.order.owner ?? me;
+  if (found.order && !owner.equals(me) && !holdsNft) {
     throw new CookieMcpError(
-      `that order belongs to ${order.owner.toBase58()}`,
+      `that order belongs to ${owner.toBase58()}`,
       "only the order's owner, or whoever holds the position NFT now, can stop it",
     );
   }
-  const program = zipProgram(conn);
-  const ix = await buildDisableIx({
-    program,
-    signer: me,
-    owner: order.owner,
-    position: order.position,
-    nft: holdsNft && nft ? { address: nft.address, tokenProgram: nft.tokenProgram } : null,
-  });
-  const tx = new Transaction().add(ix);
-  const signature = await signSendConfirm(conn, tx, signer, [], "stop zip", {
-    summary: {
-      action: "stop zip",
-      order: orderPk.toBase58(),
-      position: order.position.toBase58(),
-      revokesDelegation: holdsNft,
-    },
-  });
-  const delegated = nft?.delegate?.equals(orderPk) ?? false;
+  if (!found.order && !holdsNft) {
+    throw new CookieMcpError(
+      "this position has no Zip order running, and this wallet does not hold its NFT",
+      "nothing to stop — get_zip_orders lists the ones that do",
+    );
+  }
+  const orderPk = found.order?.orderPk ?? null;
+  const pool = found.order?.order.whirlpool ?? position!.whirlpool;
+  const summary = {
+    action: found.order ? "stop zip" : "close filled zip position",
+    order: orderPk?.toBase58() ?? null,
+    position: positionPk.toBase58(),
+    revokesDelegation: holdsNft && found.order != null,
+    withdrawsAndClosesPosition: holdsNft && position != null,
+  };
+  const sigs: string[] = [];
+
+  // The pool's close path, when this wallet can run it (it holds the NFT and the position exists).
+  const closeTxs: Transaction[] = [];
+  if (position && holdsNft) {
+    const client = buildClmmClient(conn, signer);
+    const whirlpool = await client.getPool(pool);
+    const builders = await whirlpool.closePosition(
+      positionPk,
+      Percentage.fromFraction(ZIP_STOP_SLIPPAGE_BPS, 10_000),
+      me,
+      me,
+      me,
+    );
+    for (const b of builders) {
+      if (b.isEmpty()) continue;
+      closeTxs.push((await builderToTx(b, OPEN_POSITION_CU)).tx);
+    }
+  }
+  if (found.order) {
+    // `disable` first, while the NFT still exists: the close burns it.
+    const disable = await buildDisableIx({
+      program: zipProgram(conn),
+      signer: me,
+      owner,
+      position: positionPk,
+      nft: holdsNft && nft ? { address: nft.address, tokenProgram: nft.tokenProgram } : null,
+    });
+    const first = closeTxs[0];
+    if (first) {
+      first.instructions.splice(1, 0, disable);
+      first.feePayer = me;
+      if (legacyTxWireSize(first, me) > 1232) {
+        first.instructions.splice(1, 1);
+        closeTxs.unshift(new Transaction().add(disable));
+      }
+    } else {
+      closeTxs.push(new Transaction().add(disable));
+    }
+  }
+  if (closeTxs.length === 0) {
+    throw new CookieMcpError("nothing to close for this order", "it may already be closed");
+  }
+  for (let i = 0; i < closeTxs.length; i++) {
+    const last = i === closeTxs.length - 1;
+    sigs.push(
+      await signSendConfirm(
+        conn,
+        closeTxs[i]!,
+        signer,
+        [],
+        found.order ? "stop zip" : "close zip position",
+        {
+          step: last ? "final" : "intermediate",
+          summary: last ? summary : { ...summary, then: WAIT_BEFORE_RECALL },
+        },
+      ),
+    );
+  }
+  const signature = sigs[sigs.length - 1]!;
+  const delegated = nft?.delegate && orderPk ? nft.delegate.equals(orderPk) : false;
+  const positionClosed = position != null && holdsNft;
   return {
     signature,
     explorerUrl: explorerTxUrl(signature),
-    order: orderPk.toBase58(),
-    position: order.position.toBase58(),
-    positionMint: order.positionMint.toBase58(),
-    pool: order.whirlpool.toBase58(),
+    signatures: sigs,
+    order: orderPk?.toBase58() ?? null,
+    position: positionPk.toBase58(),
+    positionMint: positionMint.toBase58(),
+    pool: pool.toBase58(),
     delegationRevoked: holdsNft && delegated,
-    rentRefundedTo: order.owner.toBase58(),
-    note: positionInfo
-      ? "the position and its liquidity are unchanged; what had filled is already in the wallet, the " +
-        "rest stays in the position (remove_liquidity / claim_fees as usual)"
-      : "the position was already closed; this only closed the order and refunded its rent",
+    positionClosed,
+    rentRefundedTo: owner.toBase58(),
+    note: !found.order
+      ? "the filled order's empty position was closed and its rent returned to the wallet"
+      : positionClosed
+        ? "the order was closed and the position withdrawn in full — what had filled was already " +
+          "in the wallet, the rest, the fees and the position's rent are now too; the position NFT was burned"
+        : position
+          ? "the order was closed and its rent refunded; the position is held by another wallet, so it " +
+            "stays as it is (its holder can remove_liquidity)"
+          : "the position was already closed; this only closed the order and refunded its rent",
   };
 }

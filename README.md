@@ -310,68 +310,63 @@ The open/close transactions are built by the aggregator and verified here exactl
 ones are — user, amounts, frequency, the band, the start time, the schedule PDA against the signing
 `base`, the pinned refund/payout accounts, the five allowed programs — and simulated before signing.
 
-**Zip — trailing range orders** ([Cookiebox](https://cookiebox.app) Zip, program `ZiPzPbbM…`,
-on CLMM positions): `get_zip_orders` lists a wallet's open orders with no key (yours, or any
-address / `.cook` name); `start_zip` and `stop_zip` need a signer. A one-sided CLMM position
-already converts one token into the other as the price moves through its range — and converts it
-straight back when the price turns. A Zip keeps the fill: the Cookiebox keeper moves the range's
-**trailing edge** up to the price one tick spacing at a time, and each move pays the part that has
-filled (plus the LP fees earned on the way) to your wallet, so nothing is left behind the price to
-convert back. Selling COOKHOUSE for COOK and buying COOK with COOKHOUSE are the same order.
+**Zip — trailing range orders** ([Cookiebox](https://cookiebox.app) Zip, program `ZiPzPbbM…`):
+`get_zip_orders` lists a wallet's orders with no key (yours, or any address / `.cook` name);
+`start_zip` and `stop_zip` need a signer. A Zip order sells one token for another across a price
+range and **never fills back**: it rests as a one-sided Cookiebox CLMM position that the Cookiebox
+keeper trails, moving the range's trailing edge up to the price one tick spacing at a time, and each
+move pays the part that has filled (plus the LP fees earned on the way) to your wallet. The three
+tools behave exactly like Cookiebox's /trade Zip tab and its Zip orders list.
 
-- Name the position by its **NFT mint** (`position`, as on `cookiebox.app/position/<mint>`) or by
-  `pool` (your position in that pool; refused when you hold several). `sell` is the mint to sell (or
-  `"COOK"`); a one-sided position infers it, a position holding both tokens must be told. Selling a
-  token the position no longer holds is refused — that side has already converted.
-- **Open and zip in one go:** `start_zip` with `pool`, `sell`, `amount` and
-  `priceLower`/`priceUpper` (tokenB per tokenA, the `priceUnit` the tools report) opens a new
-  one-sided position over that range and zips it. The whole range must sit on the `sell` side
-  of the current price (above it to sell token A, below it to sell token B), so nothing counts as
-  filled the moment it opens; prices round to the pool's tick spacing. Every refusal (including a
-  transfer hook with no published extra-account list, and an `amount` the wallet doesn't hold)
-  comes before anything is sent. Re-entrant for
-  an external signer: a position of yours with exactly that range and no order is continued — used
-  as is when it holds `amount`, deposited into when it is empty (an open that went out as open +
-  deposit) — never opened twice; one holding a different amount is refused, naming it, and a
-  refusal of the range (the price moved onto it between calls) names it too.
-- **Repair instead of restart:** `start_zip` on a position whose order is already running
-  (by `position`, or by `pool` when that order is your only position there) recreates what a
-  `paused` order is missing — tick arrays, payout accounts, the NFT's delegation (re-approved when
-  you still hold it, revoking any other delegate, which the result names) — without stopping the
-  order. It refuses when nothing is missing (stop first to change direction, step or cranker) and
-  while the NFT is in another wallet, since the order can't resume until it is back.
+- **Place an order like a swap:** `start_zip` with `sell`, `receive` (mints, or `"COOK"`), `amount`
+  and the prices `from`/`to` — **receive per sell**, what one sold token fetches, so `from` is the
+  price nothing sells under and `to` the best one (the `priceUnit` every result carries). Omit the
+  prices for a range from one price step past the market to 10% above it. `fee` (bps) picks the pool
+  the order earns fees in; the default is the pair's deepest pool, else the 0.25% tier.
+- **The market is honoured, `from` is a floor.** Whatever part of the range the market already
+  beats is sold at once — in the pool when it is live (price limit at `from`), else through the
+  router (floor at `from` on the whole fill; the amount is halved until it fits, or nothing is sold
+  and the order rests at `from`). The rest starts one price step past the market. A range the market
+  beats entirely is just swapped (`swapped: true`). The result's note says what to expect and names
+  the range actually placed when prices snapped to the pool's steps or the range was cut.
+- **Any pair, any fee:** a pair with no pool at the chosen fee gets one created (standard tier,
+  priced right at `from`, with the range's tick arrays); an empty pool parked on the wrong side of
+  the order has its price moved there (with no liquidity a swap trades nothing). A pool with
+  liquidity is never moved — its price is the market.
+- **Owner-paid setup**, idempotent: the pool's rent when one is created, your payout token accounts
+  and any tick arrays the range spans (~0.002 COOK each, once per pool and range), then `enable`.
+  The keeper refuses to fund any of it. Several transactions: with an external signer each is handed
+  back as an `intermediate` step — submit, then call again; the flow re-prices against the market on
+  every call, continues with a same-range position of yours an earlier call opened, and never sells
+  or opens twice. Every refusal (a hooked mint with no published extra-account list, a mint the CLMM
+  won't pool, an `amount` you don't hold) comes before anything is sent.
+- **Zip a position you hold:** `start_zip` with `position` (its NFT mint) instead. A one-sided
+  position infers the direction, one holding both tokens needs `sell`. On a position whose order is
+  already running this **repairs** a `paused` order — tick arrays, payout accounts, the NFT's
+  delegation (re-approved when you still hold it) — without stopping it.
 - **The NFT never leaves your wallet.** `enable` makes the order PDA the NFT's SPL delegate, and the
   program lets that delegate do exactly two things: move the trailing edge (one CPI to the CLMM's
   `reposition_liquidity_v2`, with the received-token deposit capped at 0 so the range can never
-  contain the price again) and `finish` once the whole range has filled. It cannot withdraw
-  elsewhere, widen the range, or top the position up from your wallet.
-- **Starting is owner-paid setup**, idempotent: your payout token accounts and any tick arrays the
-  range spans (~0.002 COOK each, once per pool and range) are created before `enable`. The keeper
-  refuses to fund either — rent it paid for an account you control is rent you could reclaim, and a
-  hostile position could bill it one array per step. A wide range takes a few transactions
-  (`intermediate` steps for an external signer: submit, then call again). Ranges over 200 tick
-  arrays (a full range on the 0.25% tier) are refused.
+  contain the price again) and `finish` once the whole range has filled.
 - `cranker` defaults to the **Cookiebox keeper** and is pinned into the order. `"anyone"` leaves it
   unpinned, which the trust model warns against: a hostile cranker passing the old liquidity at
   every step hands about `1 − 1/minStep` of the order back unconverted (no loss, but no fill).
   `minStep` (default 1) is how many tick spacings the price must move past the edge before it
-  follows.
-- **Payouts in COOK arrive as native COOK**, never wCOOK (the program routes the native side through
-  a one-instruction transient account). A Token-2022 payout arrives net of its transfer fee; a hook
-  that refuses a payout pauses the order and moves nothing else. No protocol fee.
-- `get_zip_orders` reports what each order sells and receives, its range and the current price
-  (as tokenB per tokenA, see `priceUnit`), what the position holds now, who may crank it, and a
-  `status` with the keeper's next move in words: `filling`, `waiting` (price not far enough past the
-  edge, or in the range's last spacing), `fully-filled` (the keeper withdraws and closes next),
-  `paused` (delegation gone, a transfer hook with no published extra-account list, payout account
-  closed, or a tick array missing — `start_zip` on the position repairs all but the hook),
-  `empty`, or `stale` (position account closed; `stop_zip` with the order address or NFT mint
-  refunds the rent). Predicted from the program's
-  own edge rule, which `src/core/zip/decision.ts` mirrors line for line.
-- `stop_zip` closes the order (rent back to its owner) and revokes the delegation; the position
-  and whatever is still in it are untouched. The owner, or whoever holds the NFT now, may stop it.
-  `position` may be the NFT mint, the position account or the order address — a stale order (position
-  already closed) stops too.
+  follows. Payouts in COOK arrive as native COOK, never wCOOK; a Token-2022 payout arrives net of its
+  transfer fee. No protocol fee.
+- `get_zip_orders` reports what each order sells and receives, its `from`–`to` range and the
+  current price (receive per sell), what is left in it, who may crank it, and a `status` with the
+  keeper's next move in words: `filling`, `waiting`, `fully-filled` (the keeper pays out and closes
+  next), `paused` (delegation gone, a transfer hook with no published extra-account list, payout
+  account closed, or a tick array missing — `start_zip` on the position repairs all but the hook),
+  `empty`, `filled` (paid out; the empty position is left for you to close) or `stale` (position
+  gone). Predicted from the program's own edge rule, which `src/core/zip/decision.ts` mirrors.
+- `stop_zip` **takes everything back**: closes the order (rent to its owner), revokes the
+  delegation, withdraws what is left in the position with its fees and rewards, and closes the
+  position (its rent back too). On a `filled` order it closes the empty position left behind. The
+  owner, or whoever holds the NFT now, may stop it (a holder who is not the owner only closes the
+  order). `position` may be the NFT mint, the position account or the order address; a stale order
+  stops too.
 
 **Launchpad** (need `COOKIE_PRIVATE_KEY`, [MomoSwap](https://momoswap.fun)): `deploy_token` launches a
 token on a COOK bonding curve (a logo is **required** — pass `imageBase64` and it is pinned to IPFS, or
