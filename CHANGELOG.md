@@ -4,6 +4,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 # Unreleased
 
+# [0.10.1](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.10.1)
+
+_November 21, 2026_
+
 ### Fixed
 
 - **The server starts on Node 22 again.** 0.9.0 and 0.10.0 crash at startup on Node 22, the minimum
