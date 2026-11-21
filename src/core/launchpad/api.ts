@@ -5,6 +5,7 @@
 import { MOMOSWAP_API_URL } from "../config";
 import { CookieMcpError } from "../errors";
 import { fetchJson } from "../http";
+import type { PairAssetRef, PairedPhase } from "./paired";
 
 const LP = `${MOMOSWAP_API_URL}/v1/launchpad`;
 
@@ -104,6 +105,15 @@ export interface LaunchpadPool {
   creatorVestBps?: number;
   /** i64 seconds — the pool's own linear creator-vest duration. */
   creatorVestSeconds?: string;
+  // --- paired launches (backend #246) -------------------------------------------------------------
+  // Absent on deployments that predate paired launches; treat absent as "standard".
+  kind?: "paired" | "standard";
+  /** The holder tax, bps (0 for a standard pool). */
+  taxBps?: number;
+  /** The asset holders are paid in. Null for a standard pool (or when its display data is unknown). */
+  pair?: PairAssetRef | null;
+  /** Paired pools only: `migrating` = target reached, market not open yet. Null for a standard pool. */
+  phase?: PairedPhase | null;
 }
 
 /** A wallet's bonding-curve position. `shares` are program-tracked, NOT SPL tokens. */
@@ -354,6 +364,143 @@ export async function buildCreatePoolTx(body: {
   txVersion?: 0;
 }): Promise<BuiltTx> {
   return post<BuiltTx>("/tx/create-pool", body, "launch build", UPLOAD_TIMEOUT_MS);
+}
+
+/** One pair asset a paired launch may name (the on-chain allowlist, active entries only). */
+export interface PairAsset {
+  mint: string;
+  symbol: string;
+  name?: string;
+  logo?: string | null;
+  decimals: number;
+  tokenProgram?: string;
+  priceUsd?: number | null;
+}
+
+export interface PairAssetsView {
+  /** The holder-tax tiers a launch may pick, bps. */
+  taxTiers: number[];
+  /** Where the harvested tax is collected before it is sold and paid out. */
+  rewardsWallet?: string;
+  assets: PairAsset[];
+}
+
+/** `GET /pair-assets` — the active allowlist and the tax tiers (backend caches it 60 s). */
+export async function fetchPairAssets(): Promise<PairAssetsView> {
+  const res = await get<Partial<PairAssetsView>>("/pair-assets", "pair assets");
+  return {
+    taxTiers: (res.taxTiers ?? []).map(Number).filter((t) => Number.isInteger(t) && t > 0),
+    ...(res.rewardsWallet ? { rewardsWallet: res.rewardsWallet } : {}),
+    assets: res.assets ?? [],
+  };
+}
+
+/** A paired build's quote, as the API returns it (raw amounts as decimal strings). */
+export interface ApiPairedQuote {
+  side: "buy" | "sell";
+  taxBps: number;
+  taxAmount: string;
+  amountOut: string;
+  minOut: string;
+  amountInUsed: string;
+  feeRaw: string;
+}
+
+/**
+ * Build a paired launch. Session-gated like `/tx/create-pool`. `params` carries only what a paired
+ * pool has: name, symbol, launch_ts, min_buy (no window, expiry mode, anti-snipe or wallet cap).
+ */
+export async function buildCreatePairedPoolTx(body: {
+  creator: string;
+  pairMint: string;
+  taxBps: number;
+  params: { name: string; symbol: string; launch_ts: number; min_buy: string };
+  metadata: LaunchpadMetadata;
+  devBuyCook?: string;
+  txVersion?: 0;
+  session: string;
+}): Promise<BuiltTx & { pool?: string; devBuyQuote?: ApiPairedQuote }> {
+  return post<BuiltTx & { pool?: string; devBuyQuote?: ApiPairedQuote }>(
+    "/tx/create-paired-pool",
+    body,
+    "paired launch build",
+    UPLOAD_TIMEOUT_MS,
+  );
+}
+
+/**
+ * `buy_paired`. `minOutRaw` is the minimum WE quoted (tokens net of tax); the API uses it as the
+ * on-chain floor as-is, or answers 409 when the price has already moved below it.
+ */
+export async function buildBuyPairedTx(body: {
+  buyer: string;
+  pool: string;
+  paymentAmount: string;
+  slippageBps: number;
+  minOutRaw: string;
+  referrer?: string | null;
+}): Promise<BuiltTx & { quote?: ApiPairedQuote }> {
+  return post<BuiltTx & { quote?: ApiPairedQuote }>("/tx/buy-paired", body, "paired buy build");
+}
+
+/** `sell_paired` — same `minOutRaw` contract (COOK net of the fee). Proceeds unwrap unless `unwrap: false`. */
+export async function buildSellPairedTx(body: {
+  seller: string;
+  pool: string;
+  tokens: string;
+  slippageBps: number;
+  minOutRaw: string;
+  unwrap?: boolean;
+}): Promise<BuiltTx & { quote?: ApiPairedQuote; unwrapped?: boolean }> {
+  return post<BuiltTx & { quote?: ApiPairedQuote; unwrapped?: boolean }>(
+    "/tx/sell-paired",
+    body,
+    "paired sell build",
+  );
+}
+
+/** A wallet's paired-launch holder rewards (`GET /v1/rewards/:wallet`). Paid automatically, daily. */
+export interface HolderRewards {
+  /** COOK owed to this wallet per token, carried until it clears the payout minimum. Raw lamports. */
+  carryCook?: { mint: string; cook: string }[];
+  /** Allocated in a run that has not paid yet. */
+  upcoming?: { mint: string; symbol?: string; amountCook?: string }[];
+  payouts?: {
+    runId: string;
+    mint: string;
+    symbol?: string;
+    pair?: PairAssetRef;
+    amountRaw: string;
+    amountCook?: string;
+    signature?: string;
+    paidAt?: number;
+  }[];
+}
+
+/** Null when the rewards service is unavailable (503 without its database) — never throws. */
+export async function fetchHolderRewards(wallet: string): Promise<HolderRewards | null> {
+  try {
+    return unwrap(
+      await fetchJson<Envelope<HolderRewards>>(
+        `${MOMOSWAP_API_URL}/v1/rewards/${encodeURIComponent(wallet)}`,
+      ),
+      "holder rewards",
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** The next payout window (`GET /v1/rewards`), or null. */
+export async function fetchRewardsSchedule(): Promise<{ nextRunAt?: number } | null> {
+  try {
+    const res = await fetchJson<Envelope<{ nextRunAt?: number }>>(`${MOMOSWAP_API_URL}/v1/rewards`);
+    return res.success === false
+      ? null
+      : { ...(res.nextRunAt ? { nextRunAt: res.nextRunAt } : {}) };
+  } catch {
+    return null;
+  }
 }
 
 export async function buildBuyTx(body: {

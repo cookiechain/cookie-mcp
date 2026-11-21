@@ -7,6 +7,10 @@
 // NOT show up in `get_balance` and cannot be swapped with `trade`. Selling back to the curve
 // (launchpad_sell) is the only exit until the pool graduates; after graduation the holder claims the
 // real SPL token (claim_launchpad) and trades it normally.
+//
+// PAIRED launches (see ./paired) are the exception: their curve trades real Token-2022 tokens with a
+// holder tax, through `buy_paired` / `sell_paired`, with no deadline and nothing to claim. Every tool
+// here dispatches on `isPairedPool`.
 import {
   PublicKey,
   SystemProgram,
@@ -19,6 +23,7 @@ import {
   createSyncNativeInstruction,
   getAssociatedTokenAddressSync,
   getMint,
+  TOKEN_2022_PROGRAM_ID,
 } from "@solana/spl-token";
 
 import {
@@ -42,6 +47,7 @@ import { assertLocalFilesAllowed, readImageFile } from "../imageFile";
 import { getConnection } from "../rpc";
 import {
   LAUNCH_RENT_ALLOWANCE,
+  NATIVE_FEE_ALLOWANCE,
   nativeBudget,
   simulateWithinBudget,
   type SpendBudget,
@@ -50,12 +56,18 @@ import { ownPublicKey, requireSigner } from "../wallet";
 import type { TxSigner } from "../signer";
 import { withProvidedSignatures, type ProvidedSignature } from "../context";
 import {
+  buildBuyPairedTx,
   buildBuyTx,
   buildClaimCreatorFeesTx,
   buildClaimTx,
+  buildCreatePairedPoolTx,
   buildCreatePoolTx,
+  buildSellPairedTx,
   buildSellTx,
+  fetchHolderRewards,
   fetchLaunchpadConfig,
+  fetchPairAssets,
+  fetchRewardsSchedule,
   fetchPendingCreatorFees,
   fetchPoolByAddress,
   fetchPoolByMint,
@@ -71,6 +83,7 @@ import {
   type LaunchpadMetadata,
   type LaunchpadPool,
   type LaunchpadPosition,
+  type PairAsset,
   type PoolStatus,
 } from "./api";
 import {
@@ -88,6 +101,18 @@ import {
   fetchPoolPrograms,
   fetchPositionsForPools,
 } from "./positions";
+import {
+  grossUpForTax,
+  pairedPhaseNote,
+  pairedSeedCappedAtTarget,
+  poolTimeIso,
+  quotePairedBuy,
+  quotePairedSell,
+  taxPct,
+  type PairedCurveState,
+  type PairedPhase,
+  type PairedQuote,
+} from "./paired";
 import { launchpadErrorMessage, launchpadProgramIdFromTx } from "./program";
 import { launchpadSessionToken, resetLaunchpadSession } from "./session";
 
@@ -628,9 +653,30 @@ export function launchpadRouteMessage(
     | "endTs"
     | "paymentRaisedNet"
     | "graduationTarget"
+    | "kind"
+    | "state"
+    | "phase"
   > & { status: PoolPhase },
 ): { error: string; hint: string } | null {
   const sym = pool.symbol || "this token";
+  if (isPairedPool(pool)) {
+    const phase = pairedPhaseOf(pool);
+    if (phase === "migrating") {
+      return {
+        error: `${sym} has no swap route yet: its paired launch hit the graduation target and is migrating to its market`,
+        hint: "the market opens once the launchpad seeds it (usually within minutes) — retry then",
+      };
+    }
+    if (phase === "live" || phase === "soon") {
+      return {
+        error: `${sym} has no swap route: it is still on its MomoSwap paired-launch curve, which DEX aggregators may not route`,
+        hint:
+          `buy it with launchpad_buy and sell it with launchpad_sell (pool ${pool.pubkey}); holdings are real ` +
+          `tokens, and it moves to a market when the raise reaches the target (${graduationProgressPct(pool.paymentRaisedNet, pool.graduationTarget)}% so far)`,
+      };
+    }
+    return null;
+  }
   switch (pool.status) {
     case "ended":
       return {
@@ -712,7 +758,10 @@ export async function noRouteError(mints: string[], upstream?: unknown): Promise
 /** The launch token's decimals, read from the mint (falls back to the launchpad default). */
 async function tokenDecimals(pool: LaunchpadPool, cfg: LaunchpadConfig): Promise<number> {
   try {
-    return (await getMint(getConnection(), new PublicKey(pool.tokenMint))).decimals;
+    // A paired launch's mint is Token-2022; `getMint` refuses it under the classic program.
+    const program = isPairedPool(pool) ? TOKEN_2022_PROGRAM_ID : undefined;
+    return (await getMint(getConnection(), new PublicKey(pool.tokenMint), "confirmed", program))
+      .decimals;
   } catch {
     return cfg.defaultTokenDecimals;
   }
@@ -738,12 +787,68 @@ export interface LaunchpadPoolView {
   saleSupply: string;
   participants: number;
   launchAt: string;
-  /** When trading closes. Past this, `status` reads `ended` until the pool is settled on-chain. */
-  endsAt: string;
+  /**
+   * When trading closes. Past this, `status` reads `ended` until the pool is settled on-chain. Null for
+   * a paired launch, which has no deadline (its on-chain `end_ts` is i64::MAX).
+   */
+  endsAt: string | null;
   antiSnipe: boolean;
   minBuyCook: string;
   maxBuyPerWalletCook: string | null;
+  /** Present only on a paired launch (Token-2022 token with a holder tax, paid out in `pairAsset`). */
+  paired?: PairedView;
   links: { launchpad: string; token: string };
+}
+
+/** What a paired launch adds to the pool view. */
+export interface PairedView {
+  /** `live` / `soon` (near the target) / `migrating` (target hit, market not open yet) / `graduated`. */
+  phase: PairedPhase;
+  holderTaxPct: string;
+  holderTaxBps: number;
+  /** The asset the harvested tax is paid out to holders in. */
+  pairAsset: { mint: string; symbol: string; decimals: number } | null;
+  note: string;
+}
+
+/** Is this a paired launch? `kind` from the API; the on-chain state name as a fallback. */
+export function isPairedPool(pool: Pick<LaunchpadPool, "kind" | "state">): boolean {
+  return pool.kind === "paired" || pool.state === "pairedOpen";
+}
+
+/**
+ * A paired pool's phase (pure). The API derives it (it alone knows whether the AMM pool exists yet);
+ * absent that, fall back to the raw state + the raise, which can tell everything but `migrating` after
+ * graduation.
+ */
+export function pairedPhaseOf(
+  pool: Pick<LaunchpadPool, "phase" | "status" | "paymentRaisedNet" | "graduationTarget">,
+): PairedPhase {
+  if (pool.phase) return pool.phase;
+  if (pool.status === "graduated") return "graduated";
+  const raised = BigInt(pool.paymentRaisedNet);
+  const target = BigInt(pool.graduationTarget);
+  if (target > 0n && raised >= target) return "migrating";
+  return "live";
+}
+
+/** The `paired` block of a pool view (pure); undefined for a standard pool. */
+export function pairedView(pool: LaunchpadPool): PairedView | undefined {
+  if (!isPairedPool(pool)) return undefined;
+  const phase = pairedPhaseOf(pool);
+  const bps = pool.taxBps ?? 0;
+  const pair = pool.pair ?? null;
+  return {
+    phase,
+    holderTaxPct: taxPct(bps),
+    holderTaxBps: bps,
+    pairAsset: pair ? { mint: pair.mint, symbol: pair.symbol, decimals: pair.decimals } : null,
+    note: pairedPhaseNote(phase, {
+      symbol: pool.symbol || "the token",
+      taxBps: bps,
+      pairSymbol: pair?.symbol ?? "its pair asset",
+    }),
+  };
 }
 
 /**
@@ -793,12 +898,13 @@ export function mapPoolView(
     tokensSold: rawToUi(pool.tokensSold, tokenDecs),
     saleSupply: rawToUi(pool.saleTokenSupply, tokenDecs),
     participants: Number(pool.participantCount),
-    launchAt: new Date(pool.launchTs * 1000).toISOString(),
-    endsAt: new Date(pool.endTs * 1000).toISOString(),
+    launchAt: poolTimeIso(pool.launchTs) ?? new Date(0).toISOString(),
+    endsAt: poolTimeIso(pool.endTs),
     antiSnipe: pool.antiSnipe,
     minBuyCook: rawToUi(pool.minBuy, paymentDecs),
     maxBuyPerWalletCook:
       BigInt(pool.maxBuyPerWallet) > 0n ? rawToUi(pool.maxBuyPerWallet, paymentDecs) : null,
+    ...(isPairedPool(pool) ? { paired: pairedView(pool) } : {}),
     links: { launchpad: launchpadPoolUrl(pool.pubkey), token: launchpadTokenUrl(pool.tokenMint) },
   };
 }
@@ -959,15 +1065,46 @@ export interface LaunchpadCreatorEntry {
   symbol: string;
   status: PoolPhase;
   unclaimedFeesCook: string;
-  /** Creator vesting is denominated in the LAUNCH TOKEN, not COOK — hence the explicit name. */
-  unclaimedVestTokens: string | null;
+  /**
+   * The creator's vest is a share of the RAISE, paid in COOK out of the payment vault
+   * (`claim_creator_vest`), linear from graduation. It was once reported here as launch tokens with
+   * the token's decimals — 1000× too large and in the wrong unit.
+   */
+  unclaimedVestCook: string | null;
   actions: PositionAction[];
+}
+
+/** A paired launch's tokens in the wallet (they are real tokens, so there is no curve position). */
+export interface PairedHoldingEntry {
+  pool: string;
+  mint: string;
+  symbol: string;
+  phase: PairedPhase;
+  balance: string;
+  holderTaxPct: string;
+  pairAsset: string | null;
+  /** What selling it all back to the live curve would pay; null off the curve. */
+  estimatedValueCook: string | null;
+  /** COOK of holder rewards allocated to this wallet for this token and carried to a later payout. */
+  rewardsWaitingCook: string | null;
+  action: { tool: "launchpad_sell" | "trade" | null; reason: string };
 }
 
 export interface GetLaunchpadPositionsResult {
   owner: string;
   poolsScanned: number;
   positions: LaunchpadPositionEntry[];
+  /** Paired launches held as tokens, with their holder rewards (paid out automatically). */
+  pairedHoldings: PairedHoldingEntry[];
+  /** Recent holder-reward payouts to this wallet (newest first), when the rewards service answers. */
+  recentRewardPayouts?: {
+    symbol: string;
+    amount: string;
+    asset: string;
+    paidAt: string | null;
+    signature: string | null;
+  }[];
+  nextRewardPayoutAt?: string | null;
   created: LaunchpadCreatorEntry[];
   totals: {
     investedCook: string;
@@ -1027,6 +1164,7 @@ export async function getLaunchpadPositions(args: {
   let actionsPending = 0;
 
   const now = nowSeconds();
+  const notes: string[] = [];
   const entries: LaunchpadPositionEntry[] = [];
   for (const pool of pools) {
     const position = positions.get(pool.pubkey);
@@ -1062,6 +1200,14 @@ export async function getLaunchpadPositions(args: {
     });
   }
 
+  const paired = await pairedHoldings(conn, owner, pools, cfg);
+  if (paired.holdings.length) {
+    notes.push(
+      "Paired launches hold real Token-2022 tokens (pairedHoldings), not curve shares; their holder " +
+        "rewards are paid to the wallet automatically each day — there is nothing to claim.",
+    );
+  }
+
   let feesRaw = 0n;
   const createdEntries: LaunchpadCreatorEntry[] = [];
   for (const pool of created) {
@@ -1082,7 +1228,7 @@ export async function getLaunchpadPositions(args: {
       actions.push({
         tool: "claim_launchpad",
         kind: "creator_vest",
-        reason: `${rawToUi(vest, decs)} ${pool.symbol} of your creator allocation is still vesting/unclaimed — claim the vested portion with kind=creator_vest`,
+        reason: `${rawToUi(vest, COOK_DECIMALS)} ${COOK_SYMBOL} of your creator vest is still vesting/unclaimed — claim the vested portion with kind=creator_vest`,
       });
     }
     actionsPending += actions.length;
@@ -1092,12 +1238,11 @@ export async function getLaunchpadPositions(args: {
       symbol: pool.symbol,
       status: poolPhase(pool, now),
       unclaimedFeesCook: rawToUi(fees, COOK_DECIMALS),
-      unclaimedVestTokens: vest > 0n ? rawToUi(vest, decs) : null,
+      unclaimedVestCook: vest > 0n ? rawToUi(vest, COOK_DECIMALS) : null,
       actions,
     });
   }
 
-  const notes: string[] = [];
   if (entries.length) {
     notes.push(
       "Shares on a live curve are program state, not SPL tokens — they never appear in get_balance.",
@@ -1108,7 +1253,7 @@ export async function getLaunchpadPositions(args: {
   }
   const empty = emptyPositionsNote({
     poolsScanned: pools.length,
-    found: entries.length + createdEntries.length,
+    found: entries.length + createdEntries.length + paired.holdings.length,
     includeClosed: args.includeClosed === true,
   });
   if (empty) notes.push(empty);
@@ -1117,6 +1262,9 @@ export async function getLaunchpadPositions(args: {
     owner,
     poolsScanned: pools.length,
     positions: entries,
+    pairedHoldings: paired.holdings,
+    ...(paired.recentPayouts ? { recentRewardPayouts: paired.recentPayouts } : {}),
+    ...(paired.holdings.length ? { nextRewardPayoutAt: paired.nextPayoutAt } : {}),
     created: createdEntries,
     totals: {
       investedCook: rawToUi(investedRaw, COOK_DECIMALS),
@@ -1126,6 +1274,113 @@ export async function getLaunchpadPositions(args: {
       actionsPending,
     },
     notes,
+  };
+}
+
+/** What to do with a paired holding (pure). */
+export function pairedHoldingAction(phase: PairedPhase): PairedHoldingEntry["action"] {
+  if (phase === "graduated") {
+    return { tool: "trade", reason: "graduated — it trades on its market (get_quote / trade)" };
+  }
+  if (phase === "migrating") {
+    return {
+      tool: null,
+      reason:
+        "migrating — the curve is closed and its market opens shortly; hold or trade once it does",
+    };
+  }
+  return { tool: "launchpad_sell", reason: "on its curve — launchpad_sell sells it back for COOK" };
+}
+
+/**
+ * The wallet's paired-launch tokens: one Token-2022 read for the whole wallet, matched against the
+ * paired pools, plus the holder-rewards service's view (best effort — a rewards outage must not fail
+ * a positions read).
+ */
+async function pairedHoldings(
+  conn: Connection,
+  owner: string,
+  pools: LaunchpadPool[],
+  cfg: LaunchpadConfig,
+): Promise<{
+  holdings: PairedHoldingEntry[];
+  recentPayouts?: GetLaunchpadPositionsResult["recentRewardPayouts"];
+  nextPayoutAt: string | null;
+}> {
+  const pairedPools = new Map(pools.filter(isPairedPool).map((p) => [p.tokenMint, p]));
+  if (!pairedPools.size) return { holdings: [], nextPayoutAt: null };
+  const { value } = await conn.getParsedTokenAccountsByOwner(
+    new PublicKey(owner),
+    { programId: TOKEN_2022_PROGRAM_ID },
+    "confirmed",
+  );
+  const balances = new Map<string, { raw: bigint; decimals: number }>();
+  for (const { account } of value) {
+    const info = (account.data as { parsed?: { info?: { mint?: string; tokenAmount?: any } } })
+      .parsed?.info;
+    if (!info?.mint || !pairedPools.has(info.mint)) continue;
+    const prev = balances.get(info.mint)?.raw ?? 0n;
+    balances.set(info.mint, {
+      raw: prev + BigInt(info.tokenAmount?.amount ?? "0"),
+      decimals: Number(info.tokenAmount?.decimals ?? cfg.defaultTokenDecimals),
+    });
+  }
+  const [rewards, schedule] = await Promise.all([
+    fetchHolderRewards(owner),
+    fetchRewardsSchedule(),
+  ]);
+  const carry = new Map((rewards?.carryCook ?? []).map((c) => [c.mint, BigInt(c.cook)]));
+
+  const holdings: PairedHoldingEntry[] = [];
+  for (const [mint, pool] of pairedPools) {
+    const bal = balances.get(mint);
+    const waiting = carry.get(mint) ?? 0n;
+    if ((!bal || bal.raw === 0n) && waiting === 0n) continue;
+    const phase = pairedPhaseOf(pool);
+    const raw = bal?.raw ?? 0n;
+    const decs = bal?.decimals ?? cfg.defaultTokenDecimals;
+    let value: string | null = null;
+    if (raw > 0n && (phase === "live" || phase === "soon") && (pool.taxBps ?? 0) > 0) {
+      try {
+        value = rawToUi(
+          quotePairedSell(pairedCurveState(pool, cfg), raw, pool.taxBps!, 0).amountOut,
+          COOK_DECIMALS,
+        );
+      } catch {
+        value = null;
+      }
+    }
+    holdings.push({
+      pool: pool.pubkey,
+      mint,
+      symbol: pool.symbol,
+      phase,
+      balance: rawToUi(raw, decs),
+      holderTaxPct: taxPct(pool.taxBps ?? 0),
+      pairAsset: pool.pair?.symbol ?? null,
+      estimatedValueCook: value,
+      rewardsWaitingCook: waiting > 0n ? rawToUi(waiting, COOK_DECIMALS) : null,
+      action: pairedHoldingAction(phase),
+    });
+  }
+  const payouts = rewards?.payouts
+    ?.slice()
+    .sort((a, b) => (b.paidAt ?? 0) - (a.paidAt ?? 0))
+    .slice(0, 10)
+    .map((p) => {
+      const decimals = p.pair?.decimals ?? COOK_DECIMALS;
+      return {
+        symbol: p.symbol ?? pairedPools.get(p.mint)?.symbol ?? p.mint,
+        amount: rawToUi(p.amountRaw, decimals),
+        asset: p.pair?.symbol ?? COOK_SYMBOL,
+        paidAt: p.paidAt ? poolTimeIso(p.paidAt) : null,
+        signature: p.signature ?? null,
+      };
+    });
+  return {
+    holdings,
+    ...(payouts && payouts.length ? { recentPayouts: payouts } : {}),
+    nextPayoutAt: schedule?.nextRunAt ? poolTimeIso(schedule.nextRunAt) : null,
   };
 }
 
@@ -1159,8 +1414,11 @@ export function emptyPositionsNote(args: {
 
 export interface GetLaunchpadTokenResult extends LaunchpadPoolView {
   fees: { tradePct: number; creatorSharePct: number; referralSharePct: number };
-  quote: { cookIn: string; tokensOut: string } | null;
+  /** For a paired launch `tokensOut` is net of the holder tax; `taxWithheld` / `chargedCook` say why. */
+  quote: { cookIn: string; tokensOut: string; taxWithheld?: string; chargedCook?: string } | null;
   position: PositionView | null;
+  /** Paired launches: the wallet's token balance (real Token-2022 tokens, not curve shares). */
+  holding?: { balance: string; estimatedValueCook: string | null } | null;
   pendingCreatorFeesCook: number | null;
   notes: string[];
 }
@@ -1223,6 +1481,8 @@ export async function getLaunchpadToken(args: {
   ]);
 
   const view = mapPoolView(pool, decs);
+  if (isPairedPool(pool))
+    return pairedTokenView(pool, cfg, decs, view, owner, pendingCreatorFees, args);
   const phase = poolPhase(pool, nowSeconds());
   const tradeable = phase === "live";
 
@@ -1305,6 +1565,103 @@ export async function getLaunchpadToken(args: {
   };
 }
 
+/** `get_launchpad_token` for a paired launch: no curve position, the wallet's real tokens instead. */
+async function pairedTokenView(
+  pool: LaunchpadPool,
+  cfg: LaunchpadConfig,
+  decs: number,
+  view: LaunchpadPoolView,
+  owner: string | null,
+  pendingCreatorFees: number | null,
+  args: { quoteCook?: string | number },
+): Promise<GetLaunchpadTokenResult> {
+  const phase = pairedPhaseOf(pool);
+  const onCurve = phase === "live" || phase === "soon";
+  const taxBps = pool.taxBps ?? 0;
+  const state = pairedCurveState(pool, cfg);
+
+  let quote: GetLaunchpadTokenResult["quote"] = null;
+  if (args.quoteCook != null && onCurve && taxBps > 0) {
+    const cookIn = uiToRaw(args.quoteCook, COOK_DECIMALS);
+    const q = quotePairedBuy(state, cookIn, taxBps, 0);
+    quote = {
+      cookIn: rawToUi(cookIn, COOK_DECIMALS),
+      tokensOut: rawToUi(q.amountOut, decs),
+      taxWithheld: rawToUi(q.taxAmount, decs),
+      ...(q.amountInUsed < cookIn ? { chargedCook: rawToUi(q.amountInUsed, COOK_DECIMALS) } : {}),
+    };
+  }
+
+  let holding: GetLaunchpadTokenResult["holding"] = null;
+  if (owner) {
+    const balance = await pairedTokenBalance(
+      new PublicKey(owner),
+      new PublicKey(pool.tokenMint),
+    ).catch(() => null);
+    if (balance !== null) {
+      let value: string | null = null;
+      if (balance > 0n && onCurve && taxBps > 0) {
+        try {
+          value = rawToUi(quotePairedSell(state, balance, taxBps, 0).amountOut, COOK_DECIMALS);
+        } catch {
+          value = null; // e.g. more than the curve has sold (bought on the market) — no curve exit
+        }
+      }
+      holding = { balance: rawToUi(balance, decs), estimatedValueCook: value };
+    }
+  }
+
+  return {
+    ...view,
+    fees: {
+      tradePct: poolTradeFeeBps(pool, cfg) / 100,
+      creatorSharePct: poolFeeShareBps(pool, cfg, "creator") / 100,
+      referralSharePct: poolFeeShareBps(pool, cfg, "referral") / 100,
+    },
+    quote,
+    position: null,
+    holding,
+    pendingCreatorFeesCook: pendingCreatorFees,
+    notes: [view.paired?.note ?? "Paired launch."],
+  };
+}
+
+export interface PairAssetsResult {
+  /** Holder-tax tiers a paired launch may pick, as percents (pass as `holderTaxPct`). */
+  holderTaxTiersPct: number[];
+  /** Tiers the current launch curve refuses (their graduation seed would be capped). */
+  unavailableTiersPct: number[];
+  assets: {
+    mint: string;
+    symbol: string;
+    name?: string;
+    decimals: number;
+    priceUsd: number | null;
+  }[];
+  note: string;
+}
+
+/** The pair assets and tax tiers a paired launch may use (`get_launchpad_pair_assets`). No key. */
+export async function getLaunchpadPairAssets(): Promise<PairAssetsResult> {
+  const [view, cfg] = await Promise.all([fetchPairAssets(), fetchLaunchpadConfig()]);
+  const unavailable = view.taxTiers.filter((t) => pairedSeedCappedAtTarget(cfg, t) === true);
+  return {
+    holderTaxTiersPct: view.taxTiers.map((t) => t / 100),
+    unavailableTiersPct: unavailable.map((t) => t / 100),
+    assets: view.assets.map((a) => ({
+      mint: a.mint,
+      symbol: a.symbol,
+      ...(a.name ? { name: a.name } : {}),
+      decimals: a.decimals,
+      priceUsd: a.priceUsd ?? null,
+    })),
+    note:
+      "A paired launch (deploy_token with pairAsset + holderTaxPct) mints a Token-2022 token whose " +
+      "every transfer withholds the holder tax; the launchpad sells the harvested tax and pays it to " +
+      "holders daily in the pair asset. No deadline: it graduates when the raise hits the target.",
+  };
+}
+
 // --- deploy_token -------------------------------------------------------------------------------
 
 export interface DeployTokenArgs {
@@ -1342,6 +1699,13 @@ export interface DeployTokenArgs {
    * when the launchpad's numbers exceed it; required with `devBuyPctOfTotalSupply`.
    */
   maxCostCook?: string | number;
+  /**
+   * PAIRED LAUNCH: the asset holders are paid in (mint or symbol, e.g. "COOK", "bCOOK"), from
+   * `get_launchpad_pair_assets`. Requires `holderTaxPct`.
+   */
+  pairAsset?: string;
+  /** PAIRED LAUNCH: the holder tax on every transfer, in percent — one of the launchpad's tiers. */
+  holderTaxPct?: number;
 }
 
 /**
@@ -1627,7 +1991,15 @@ export interface DeployTokenResult {
   symbol: string;
   metadataUri: string | null;
   costCook: { creationFee: string; devBuy: string; total: string };
-  launch: { opensAt: string; endsAt: string | null; expiryMode: ExpiryMode; antiSnipe: boolean };
+  /** `expiryMode` / `antiSnipe` are null for a paired launch, which has neither (nor a deadline). */
+  launch: {
+    opensAt: string;
+    endsAt: string | null;
+    expiryMode: ExpiryMode | null;
+    antiSnipe: boolean | null;
+  };
+  /** Paired launches only. */
+  paired?: { pairAsset: { mint: string; symbol: string }; holderTaxPct: string };
   graduationTargetCook: string;
   links: { launchpad: string | null; token: string };
   warning?: string;
@@ -1639,6 +2011,27 @@ export interface DeployTokenResult {
  * mint (required on-chain) and partial-signs the mint/vault keypairs; we simulate, sign and send.
  * Costs the launchpad's creation fee (read live from `/config`) plus rent and any dev buy.
  */
+/**
+ * Pin the logo and return its URL for the metadata JSON (never inline the base64 blob). Undefined only
+ * for a `noLogo` launch.
+ */
+async function pinLogo(args: DeployTokenArgs): Promise<string | undefined> {
+  if (args.imageUrl) {
+    // Re-pin rather than storing the link: the metadata is immutable, so a URL that later rots
+    // would leave the token with a dead logo and no way to replace it.
+    const remote = await fetchRemoteImage(args.imageUrl);
+    return uploadImage(remote.base64, remote.mimeType);
+  }
+  if (args.imagePath) {
+    // Read from disk here, not in the tool layer: a bad path must fail before the session and the
+    // config call, alongside every other free failure.
+    const file = readImageFile(args.imagePath);
+    return uploadImage(file.base64, file.mimeType);
+  }
+  if (args.imageBase64) return uploadImage(args.imageBase64, args.imageMimeType!);
+  return undefined;
+}
+
 export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenResult> {
   // The signer is resolved inside the context so an external one can see `loginSignature`.
   return withProvidedSignatures(args.loginSignature ? [args.loginSignature] : undefined, () =>
@@ -1697,6 +2090,10 @@ async function deployTokenInner(args: DeployTokenArgs): Promise<DeployTokenResul
     );
   }
 
+  if (args.pairAsset != null || args.holderTaxPct != null) {
+    return deployPairedToken(args, signer, cfg);
+  }
+
   const params = buildCreateParams(args);
   const devBuyRaw =
     args.devBuyPctOfTotalSupply != null
@@ -1722,21 +2119,7 @@ async function deployTokenInner(args: DeployTokenArgs): Promise<DeployTokenResul
     wrapSignature = await ensureWrappedCook(getConnection(), signer, devBuyRaw);
   }
 
-  // Pin the logo first and reference its URL from the metadata JSON (never inline the base64 blob).
-  let imageUrl: string | undefined;
-  if (args.imageUrl) {
-    // Re-pin rather than storing the link: the metadata is immutable, so a URL that later rots
-    // would leave the token with a dead logo and no way to replace it.
-    const remote = await fetchRemoteImage(args.imageUrl);
-    imageUrl = await uploadImage(remote.base64, remote.mimeType);
-  } else if (args.imagePath) {
-    // Read from disk here, not in the tool layer: a bad path must fail before the session and the
-    // config call, alongside every other free failure.
-    const file = readImageFile(args.imagePath);
-    imageUrl = await uploadImage(file.base64, file.mimeType);
-  } else if (args.imageBase64) {
-    imageUrl = await uploadImage(args.imageBase64, args.imageMimeType!);
-  }
+  const imageUrl = await pinLogo(args);
   const metadata = buildMetadata(args, imageUrl);
 
   const built = await withLaunchSession(signer, (session) =>
@@ -1814,7 +2197,7 @@ async function deployTokenInner(args: DeployTokenArgs): Promise<DeployTokenResul
     },
     launch: {
       opensAt: new Date((pool?.launchTs ?? Math.floor(Date.now() / 1000)) * 1000).toISOString(),
-      endsAt: pool ? new Date(pool.endTs * 1000).toISOString() : null,
+      endsAt: pool ? poolTimeIso(pool.endTs) : null,
       expiryMode: params.expiry_mode,
       // Report what the POOL says, not what we asked for. A bundled dev buy makes the program force
       // anti_snipe off (the dev buy is protected by being atomic and first, and the opening-window cap
@@ -1840,10 +2223,273 @@ async function deployTokenInner(args: DeployTokenArgs): Promise<DeployTokenResul
   };
 }
 
+// --- paired launch ------------------------------------------------------------------------------
+
+/** Options a paired pool does not have; passing one with `pairAsset` is refused rather than ignored. */
+const STANDARD_ONLY_LAUNCH_ARGS = [
+  "durationSecs",
+  "expiryMode",
+  "antiSnipe",
+  "maxBuyPerWalletCook",
+] as const;
+
+/**
+ * Resolve a paired launch's asset and tax tier against the live allowlist (pure). `pairAsset` matches
+ * a mint exactly or a symbol case-insensitively; `holderTaxPct` must be one of the tiers, and not one
+ * the current curve would refuse.
+ */
+export function resolvePairedLaunch(
+  args: Pick<DeployTokenArgs, "pairAsset" | "holderTaxPct">,
+  view: { taxTiers: number[]; assets: PairAsset[] },
+  cappedTiers: number[] = [],
+): { asset: PairAsset; taxBps: number } {
+  const tiers = view.taxTiers.map((t) => `${t / 100}%`).join(", ") || "none";
+  const listed = view.assets.map((a) => a.symbol).join(", ") || "none";
+  if (!args.pairAsset?.trim()) {
+    throw new CookieMcpError(
+      "a paired launch needs `pairAsset` — the asset its holders are paid in",
+      `one of: ${listed} (get_launchpad_pair_assets)`,
+    );
+  }
+  if (args.holderTaxPct == null) {
+    throw new CookieMcpError(
+      "a paired launch needs `holderTaxPct` — the tax every transfer of the token pays to holders",
+      `one of: ${tiers}`,
+    );
+  }
+  const ref = args.pairAsset.trim();
+  const matches = view.assets.filter(
+    (a) => a.mint === ref || a.symbol.toLowerCase() === ref.toLowerCase(),
+  );
+  if (matches.length !== 1) {
+    throw new CookieMcpError(
+      matches.length
+        ? `"${ref}" matches several pair assets — pass the mint`
+        : `"${ref}" is not an active pair asset on the launchpad`,
+      `active pair assets: ${view.assets.map((a) => `${a.symbol} (${a.mint})`).join(", ") || "none"}`,
+    );
+  }
+  const taxBps = Math.round(Number(args.holderTaxPct) * 100);
+  if (!Number.isFinite(taxBps) || !view.taxTiers.includes(taxBps)) {
+    throw new CookieMcpError(
+      `holderTaxPct ${String(args.holderTaxPct)} is not one of the launchpad's tiers`,
+      `pick one of: ${tiers}`,
+    );
+  }
+  if (cappedTiers.includes(taxBps)) {
+    throw new CookieMcpError(
+      `the ${taxBps / 100}% tier is not available under the current launch curve (its graduation seed would be capped)`,
+      `pick a lower tier from: ${tiers}`,
+    );
+  }
+  return { asset: matches[0]!, taxBps };
+}
+
+/** COOK for `pct`% of the total supply on a fresh paired curve, NET of the holder tax (pure). */
+export function pairedDevBuyCookForSupplyPct(
+  cfg: LaunchpadConfig,
+  pct: number,
+  taxBps: number,
+): bigint {
+  if (!Number.isFinite(pct) || pct <= 0) {
+    throw new CookieMcpError("devBuyPctOfTotalSupply must be greater than 0", "e.g. 1 for 1%");
+  }
+  const net = (BigInt(cfg.defaultTotalSupply) * BigInt(Math.round(pct * 100))) / 10_000n;
+  if (net <= 0n)
+    throw new CookieMcpError(`${pct}% of the supply rounds to zero tokens`, "ask for more");
+  const curve = launchCurve(cfg);
+  if (!curve) {
+    throw new CookieMcpError(
+      "this launchpad does not publish its launch curve, so a supply share cannot be priced",
+      "pass devBuyCook with an explicit COOK amount instead",
+    );
+  }
+  // The buyer receives tokens_out − tax, so the curve has to send the grossed-up amount.
+  return paymentForTokens(curve, grossUpForTax(net, taxBps), cfg.tradeFeeBps);
+}
+
+/** The fresh curve a paired launch opens on, for quoting its first buy (null when unpublished). */
+function freshPairedCurve(cfg: LaunchpadConfig, minBuyRaw: bigint): PairedCurveState | null {
+  const curve = launchCurve(cfg);
+  if (!curve) return null;
+  return {
+    ...curve,
+    tradeFeeBps: cfg.tradeFeeBps,
+    graduationTarget: cfg.graduationTarget,
+    saleTokenSupply: cfg.defaultSaleSupply,
+    minBuy: minBuyRaw.toString(),
+  };
+}
+
+/**
+ * Launch a PAIRED token: a Token-2022 mint with a holder tax, paid to holders in `pairAsset`. Same
+ * session-gated build as a standard launch (`/tx/create-paired-pool`); the API wraps a dev buy itself
+ * inside the launch transaction, so nothing is wrapped here first.
+ */
+async function deployPairedToken(
+  args: DeployTokenArgs,
+  signer: TxSigner,
+  cfg: LaunchpadConfig,
+): Promise<DeployTokenResult> {
+  const creator = signer.publicKey.toBase58();
+  const given = STANDARD_ONLY_LAUNCH_ARGS.filter((k) => args[k] != null);
+  if (given.length) {
+    throw new CookieMcpError(
+      `${given.join(", ")} ${given.length > 1 ? "do" : "does"} not apply to a paired launch`,
+      "a paired launch has no deadline, expiry mode, anti-snipe window or per-wallet cap — drop " +
+        (given.length > 1 ? "them" : "it") +
+        ", or omit pairAsset/holderTaxPct for a standard launch",
+    );
+  }
+  const view = await fetchPairAssets();
+  const capped = view.taxTiers.filter((t) => pairedSeedCappedAtTarget(cfg, t) === true);
+  const { asset, taxBps } = resolvePairedLaunch(args, view, capped);
+
+  // Name/symbol rules are the program's, shared with a standard launch.
+  const base = buildCreateParams({ ...args, durationSecs: undefined, expiryMode: undefined });
+  const minBuyRaw = args.minBuyCook != null ? uiToRaw(args.minBuyCook, COOK_DECIMALS) : 0n;
+  const devBuyRaw =
+    args.devBuyPctOfTotalSupply != null
+      ? pairedDevBuyCookForSupplyPct(cfg, args.devBuyPctOfTotalSupply, taxBps)
+      : args.devBuyCook != null
+        ? uiToRaw(args.devBuyCook, COOK_DECIMALS)
+        : 0n;
+  if (devBuyRaw > 0n && devBuyRaw < minBuyRaw) {
+    throw new CookieMcpError(
+      "the dev buy is below this launch's minBuyCook",
+      "raise it or lower minBuyCook",
+    );
+  }
+  assertLaunchCost({
+    creationFeeRaw: BigInt(cfg.creationFeeLamports),
+    devBuyRaw,
+    devBuyFromCurve: args.devBuyPctOfTotalSupply != null,
+    maxCostCook: args.maxCostCook,
+  });
+  // Our own quote of the first buy, so the build can be held to it (null if the curve is unpublished).
+  const fresh = freshPairedCurve(cfg, minBuyRaw);
+  const devQuote = devBuyRaw > 0n && fresh ? quotePairedBuy(fresh, devBuyRaw, taxBps, 0) : null;
+
+  const imageUrl = await pinLogo(args);
+  const metadata = buildMetadata(args, imageUrl);
+  const built = await withLaunchSession(signer, (session) =>
+    buildCreatePairedPoolTx({
+      creator,
+      pairMint: asset.mint,
+      taxBps,
+      params: { name: base.name, symbol: base.symbol, launch_ts: 0, min_buy: minBuyRaw.toString() },
+      metadata,
+      // Create + first buy goes v0 over the pinned lookup table, as for a standard launch.
+      ...(devBuyRaw > 0n ? { devBuyCook: devBuyRaw.toString(), txVersion: 0 as const } : {}),
+      session,
+    }),
+  );
+  if (devQuote && built.devBuyQuote && built.devBuyQuote.minOut !== devQuote.minOut.toString()) {
+    throw new CookieMcpError(
+      `refusing this launch: the launchpad priced the dev buy at ${built.devBuyQuote.minOut} tokens, not the ${devQuote.minOut} the launch curve gives`,
+      "nothing was signed or sent; retry — report it if it persists",
+    );
+  }
+  const mint = built.mint ?? null;
+  const devMin = devQuote?.minOut ?? (built.devBuyQuote ? BigInt(built.devBuyQuote.minOut) : null);
+  const budget: SpendBudget = {
+    ...nativeBudget(BigInt(cfg.creationFeeLamports) + devBuyRaw, LAUNCH_RENT_ALLOWANCE),
+    ...(mint && devMin ? { receive: { mint, min: devMin } } : {}),
+  };
+  const signature = await submitBuilt(built, signer, "paired launch", budget, undefined, {
+    name: args.name,
+    symbol: args.symbol,
+    mint,
+    pairAsset: asset.symbol,
+    holderTaxPct: taxBps / 100,
+    ...(devBuyRaw > 0n ? { devBuyCook: rawToUi(devBuyRaw, COOK_DECIMALS) } : {}),
+  });
+  if (!mint) {
+    throw new CookieMcpError(
+      "the launch was sent but the launchpad did not report the token mint",
+      `the transaction ${signature} confirmed — check ${explorerTxUrl(signature)} for the new mint`,
+    );
+  }
+  const pool = await fetchPoolByMint(mint)
+    .then((r) => r.pool)
+    .catch(() => null);
+  const decs = cfg.defaultTokenDecimals;
+
+  const notes = [
+    `Paired launch: ${base.symbol} is a Token-2022 token; every transfer (buys and sells included) ` +
+      `withholds a ${taxPct(taxBps)} holder tax, which the launchpad sells and pays to holders daily in ` +
+      `${asset.symbol}. Holdings are real tokens from the first buy (no curve shares, nothing to ` +
+      `claim). No deadline: it graduates to a market when the raise reaches ` +
+      `${rawToUi(pool?.graduationTarget ?? cfg.graduationTarget, COOK_DECIMALS)} ${COOK_SYMBOL}.`,
+  ];
+  if (devQuote) {
+    notes.push(
+      `The dev buy was bundled into the launch transaction: ${rawToUi(devQuote.amountOut, decs)} ` +
+        `${base.symbol} received after ${rawToUi(devQuote.taxAmount, decs)} of tax.`,
+    );
+  }
+  return {
+    signature,
+    explorerUrl: explorerTxUrl(signature),
+    mint,
+    pool: pool?.pubkey ?? built.pool ?? null,
+    name: base.name,
+    symbol: base.symbol,
+    metadataUri: pool?.uri ?? null,
+    costCook: {
+      creationFee: rawToUi(cfg.creationFeeLamports, COOK_DECIMALS),
+      devBuy: rawToUi(devBuyRaw, COOK_DECIMALS),
+      total: rawToUi(BigInt(cfg.creationFeeLamports) + devBuyRaw, COOK_DECIMALS),
+    },
+    launch: {
+      opensAt: new Date((pool?.launchTs ?? Math.floor(Date.now() / 1000)) * 1000).toISOString(),
+      endsAt: null,
+      expiryMode: null,
+      antiSnipe: null,
+    },
+    paired: { pairAsset: { mint: asset.mint, symbol: asset.symbol }, holderTaxPct: taxPct(taxBps) },
+    graduationTargetCook: rawToUi(pool?.graduationTarget ?? cfg.graduationTarget, COOK_DECIMALS),
+    links: {
+      launchpad: pool
+        ? launchpadPoolUrl(pool.pubkey)
+        : built.pool
+          ? launchpadPoolUrl(built.pool)
+          : null,
+      token: launchpadTokenUrl(mint),
+    },
+    ...(imageUrl
+      ? {}
+      : {
+          warning:
+            "launched with noLogo — most launchpad UIs will show a blank image, and the metadata is " +
+            "immutable so this cannot be changed",
+        }),
+    notes,
+  };
+}
+
 // --- curve trading ------------------------------------------------------------------------------
 
 /** Guard that a pool is currently tradeable, with a status-specific hint. */
 function assertTradeable(pool: LaunchpadPool, action: string): void {
+  if (isPairedPool(pool)) {
+    const paired = pairedPhaseOf(pool);
+    if (paired === "migrating" || paired === "graduated") {
+      throw new CookieMcpError(
+        `cannot ${action} on the curve: this paired launch is ${paired}`,
+        paired === "graduated"
+          ? "it trades on its market now — use get_quote / trade"
+          : "the curve hit its graduation target and is closed; its market opens once the launchpad seeds it (usually within minutes) — then use trade",
+      );
+    }
+    if (pool.launchTs > nowSeconds()) {
+      throw new CookieMcpError(
+        `cannot ${action}: this paired launch has not opened yet`,
+        `trading opens at ${poolTimeIso(pool.launchTs)}`,
+      );
+    }
+    return;
+  }
   const phase = poolPhase(pool, nowSeconds());
   if (phase === "live") return;
   const hint =
@@ -1866,8 +2512,10 @@ export interface LaunchpadBuyResult {
   mint: string;
   symbol: string;
   spent: { amount: string; symbol: string };
-  received: { estimate: string; symbol: string; kind: "curve shares" };
+  received: { estimate: string; symbol: string; kind: "curve shares" | "tokens" };
   tradeFee: { amount: string; symbol: string; pct: number };
+  /** Paired launches only: the holder tax and the floor the build carried. */
+  paired?: PairedTradeInfo;
   priceCookPerToken: number;
   graduationProgressPct: number;
   links: { token: string };
@@ -1916,6 +2564,8 @@ export async function launchpadBuy(args: {
   ref: string;
   amountCook: string | number;
   referrer?: string;
+  /** Paired launches only (their buy carries an on-chain floor): default 100 = 1%. */
+  slippageBps?: number;
 }): Promise<LaunchpadBuyResult> {
   const signer = requireSigner();
   const buyer = signer.publicKey.toBase58();
@@ -1936,6 +2586,9 @@ export async function launchpadBuy(args: {
 
   const [cfg, pool] = await Promise.all([fetchLaunchpadConfig(), resolvePool(args.ref)]);
   assertTradeable(pool, "buy");
+  if (isPairedPool(pool)) {
+    return launchpadBuyPaired({ signer, pool, cfg, paymentRaw, referrer, args });
+  }
   if (BigInt(pool.minBuy) > 0n && paymentRaw < BigInt(pool.minBuy)) {
     throw new CookieMcpError(
       `this pool has a minimum buy of ${rawToUi(pool.minBuy, COOK_DECIMALS)} ${COOK_SYMBOL}`,
@@ -2000,7 +2653,9 @@ export interface LaunchpadSellResult {
   sold: { shares: string; symbol: string };
   received: { estimate: string; symbol: string };
   tradeFee: { amount: string; symbol: string; pct: number };
+  /** Curve shares left (standard), or tokens left in the wallet (paired). */
   remainingShares: string;
+  paired?: PairedTradeInfo;
   links: { token: string };
 }
 
@@ -2009,6 +2664,8 @@ export async function launchpadSell(args: {
   ref: string;
   shares: string | number;
   unwrap?: boolean;
+  /** Paired launches only (their sell carries an on-chain floor): default 100 = 1%. */
+  slippageBps?: number;
 }): Promise<LaunchpadSellResult> {
   const signer = requireSigner();
   const seller = signer.publicKey.toBase58();
@@ -2016,6 +2673,7 @@ export async function launchpadSell(args: {
   const [cfg, pool] = await Promise.all([fetchLaunchpadConfig(), resolvePool(args.ref)]);
   assertTradeable(pool, "sell");
   const decs = await tokenDecimals(pool, cfg);
+  if (isPairedPool(pool)) return launchpadSellPaired({ signer, pool, cfg, decs, args });
 
   let sharesRaw: bigint;
   try {
@@ -2073,6 +2731,245 @@ export async function launchpadSell(args: {
       pct: feeBps / 100,
     },
     remainingShares: rawToUi(BigInt(position.shares) - sharesRaw, decs),
+    links: { token: launchpadTokenUrl(pool.tokenMint) },
+  };
+}
+
+// --- paired curve trading ------------------------------------------------------------------------
+
+export interface PairedTradeInfo {
+  holderTaxPct: string;
+  /** Tokens the tax withholds on this trade (on the buyer's receipt, or on the way into the pool). */
+  taxWithheld: string;
+  /** The on-chain floor the transaction carries: tokens (buy) or COOK (sell). */
+  minimum: string;
+  slippagePct: number;
+  /** Buy only, when the buy stops at the graduation target: what the program charges instead. */
+  chargedCook?: string;
+  priceImpactPct: number;
+  pairAsset: string | null;
+}
+
+export const DEFAULT_PAIRED_SLIPPAGE_BPS = 100;
+
+function slippageOf(bps: number | undefined): number {
+  const v = bps ?? DEFAULT_PAIRED_SLIPPAGE_BPS;
+  if (!Number.isInteger(v) || v < 0 || v > 5_000) {
+    throw new CookieMcpError(
+      `invalid slippageBps ${String(bps)}`,
+      "pass a whole number of basis points between 0 and 5000 (100 = 1%)",
+    );
+  }
+  return v;
+}
+
+/** A paired pool's curve state for `paired.ts`, with the pool's own snapshotted trade fee (pure). */
+export function pairedCurveState(pool: LaunchpadPool, cfg: LaunchpadConfig): PairedCurveState {
+  return {
+    virtualPaymentReserve: pool.virtualPaymentReserve,
+    virtualTokenReserve: pool.virtualTokenReserve,
+    tokensSold: pool.tokensSold,
+    paymentRaisedNet: pool.paymentRaisedNet,
+    tradeFeeBps: poolTradeFeeBps(pool, cfg),
+    graduationTarget: pool.graduationTarget,
+    saleTokenSupply: pool.saleTokenSupply,
+    minBuy: pool.minBuy,
+  };
+}
+
+/** The holder-tax rate of a paired pool; refuses a pool whose rate the API did not report. */
+function pairedTaxBps(pool: LaunchpadPool): number {
+  const bps = pool.taxBps;
+  if (!Number.isInteger(bps) || (bps as number) <= 0 || (bps as number) >= 10_000) {
+    throw new CookieMcpError(
+      "the launchpad did not report this paired launch's holder tax, so it cannot be quoted",
+      "nothing was sent; retry, and update cookie-mcp if it persists",
+    );
+  }
+  return bps as number;
+}
+
+/**
+ * The build must carry exactly the floor we asked for: the API's contract is to use `minOutRaw` as
+ * is. Anything else means the transaction is not the trade we quoted (pure).
+ */
+export function assertPairedFloor(
+  built: { quote?: { minOut?: string } },
+  minOut: bigint,
+  what: string,
+): void {
+  const theirs = built.quote?.minOut;
+  if (theirs !== undefined && theirs !== minOut.toString()) {
+    throw new CookieMcpError(
+      `refusing this paired ${what}: the launchpad built it with a minimum of ${theirs}, not the ${minOut} quoted`,
+      "nothing was signed or sent; retry — report it if it persists",
+    );
+  }
+}
+
+function pairedInfo(
+  pool: LaunchpadPool,
+  q: PairedQuote,
+  decs: number,
+  slippageBps: number,
+  offeredRaw?: bigint,
+): PairedTradeInfo {
+  return {
+    holderTaxPct: taxPct(q.taxBps),
+    taxWithheld: rawToUi(q.taxAmount, decs),
+    minimum: rawToUi(q.minOut, q.side === "buy" ? decs : COOK_DECIMALS),
+    slippagePct: slippageBps / 100,
+    ...(offeredRaw !== undefined && q.amountInUsed < offeredRaw
+      ? { chargedCook: rawToUi(q.amountInUsed, COOK_DECIMALS) }
+      : {}),
+    priceImpactPct: q.priceImpactBps / 100,
+    pairAsset: pool.pair?.symbol ?? null,
+  };
+}
+
+/** `buy_paired`: real Token-2022 tokens land in the wallet, net of the holder tax. */
+async function launchpadBuyPaired(p: {
+  signer: TxSigner;
+  pool: LaunchpadPool;
+  cfg: LaunchpadConfig;
+  paymentRaw: bigint;
+  referrer: string | null;
+  args: { ref: string; amountCook: string | number; slippageBps?: number };
+}): Promise<LaunchpadBuyResult> {
+  const { signer, pool, cfg, paymentRaw } = p;
+  const slippageBps = slippageOf(p.args.slippageBps);
+  const taxBps = pairedTaxBps(pool);
+  const decs = await tokenDecimals(pool, cfg);
+  const q = quotePairedBuy(pairedCurveState(pool, cfg), paymentRaw, taxBps, slippageBps);
+
+  const built = await buildBuyPairedTx({
+    buyer: signer.publicKey.toBase58(),
+    pool: pool.pubkey,
+    paymentAmount: paymentRaw.toString(),
+    slippageBps,
+    minOutRaw: q.minOut.toString(),
+    referrer: p.referrer,
+  });
+  assertPairedFloor(built, q.minOut, "buy");
+  // At most the COOK offered (the wrap) plus fees and the token account's rent may leave, and at
+  // least our floor of the token must arrive — whatever the API put in the transaction.
+  const budget: SpendBudget = {
+    ...nativeBudget(paymentRaw),
+    receive: { mint: pool.tokenMint, min: q.minOut },
+  };
+  const signature = await submitBuilt(built, signer, "paired buy", budget, undefined, {
+    ref: p.args.ref,
+    amountCook: String(p.args.amountCook),
+    minimumTokens: rawToUi(q.minOut, decs),
+  });
+
+  const after = {
+    ...pool,
+    paymentRaisedNet: (BigInt(pool.paymentRaisedNet) + q.curvePayment).toString(),
+    tokensSold: (BigInt(pool.tokensSold) + q.curveTokens).toString(),
+  };
+  return {
+    signature,
+    explorerUrl: explorerTxUrl(signature),
+    pool: pool.pubkey,
+    mint: pool.tokenMint,
+    symbol: pool.symbol,
+    spent: { amount: rawToUi(q.amountInUsed, COOK_DECIMALS), symbol: COOK_SYMBOL },
+    received: { estimate: rawToUi(q.amountOut, decs), symbol: pool.symbol, kind: "tokens" },
+    tradeFee: {
+      amount: rawToUi(q.feeRaw, COOK_DECIMALS),
+      symbol: COOK_SYMBOL,
+      pct: poolTradeFeeBps(pool, cfg) / 100,
+    },
+    paired: pairedInfo(pool, q, decs, slippageBps, paymentRaw),
+    priceCookPerToken: spotPriceCook(after, COOK_DECIMALS, decs),
+    graduationProgressPct: graduationProgressPct(after.paymentRaisedNet, pool.graduationTarget),
+    links: { token: launchpadTokenUrl(pool.tokenMint) },
+    note:
+      `Real ${pool.symbol} tokens (Token-2022), net of the ${taxPct(taxBps)} holder tax — they show in ` +
+      `get_balance. Sell back to the curve with launchpad_sell while it is live; after graduation, ` +
+      `trade them with trade.` +
+      (q.amountInUsed < paymentRaw
+        ? ` This buy reached the graduation target, so only ${rawToUi(q.amountInUsed, COOK_DECIMALS)} ${COOK_SYMBOL} was charged; the rest stayed in the wallet.`
+        : ""),
+  };
+}
+
+/** The wallet's balance of a paired token in its Token-2022 associated account (raw). */
+async function pairedTokenBalance(owner: PublicKey, mint: PublicKey): Promise<bigint> {
+  const ata = getAssociatedTokenAddressSync(mint, owner, false, TOKEN_2022_PROGRAM_ID);
+  const info = await getConnection().getAccountInfo(ata, "confirmed");
+  return decodeTokenAmount(info?.data) ?? 0n;
+}
+
+/** `sell_paired`: spends tokens from the wallet; the tax comes off them on the way into the pool. */
+async function launchpadSellPaired(p: {
+  signer: TxSigner;
+  pool: LaunchpadPool;
+  cfg: LaunchpadConfig;
+  decs: number;
+  args: { ref: string; shares: string | number; unwrap?: boolean; slippageBps?: number };
+}): Promise<LaunchpadSellResult> {
+  const { signer, pool, cfg, decs } = p;
+  const slippageBps = slippageOf(p.args.slippageBps);
+  const taxBps = pairedTaxBps(pool);
+  let tokensRaw: bigint;
+  try {
+    tokensRaw = uiToRaw(p.args.shares, decs);
+  } catch {
+    throw new CookieMcpError(
+      `invalid amount "${p.args.shares}"`,
+      `pass a positive ${pool.symbol} amount with at most ${decs} decimals`,
+    );
+  }
+  if (tokensRaw <= 0n) {
+    throw new CookieMcpError("the amount must be greater than 0", "pass a positive token amount");
+  }
+  const held = await pairedTokenBalance(signer.publicKey, new PublicKey(pool.tokenMint));
+  if (tokensRaw > held) {
+    throw new CookieMcpError(
+      `you hold ${rawToUi(held, decs)} ${pool.symbol}, less than the ${rawToUi(tokensRaw, decs)} requested`,
+      held > 0n ? "lower the amount" : `buy ${pool.symbol} first with launchpad_buy`,
+    );
+  }
+  const q = quotePairedSell(pairedCurveState(pool, cfg), tokensRaw, taxBps, slippageBps);
+
+  const built = await buildSellPairedTx({
+    seller: signer.publicKey.toBase58(),
+    pool: pool.pubkey,
+    tokens: tokensRaw.toString(),
+    slippageBps,
+    minOutRaw: q.minOut.toString(),
+    unwrap: p.args.unwrap ?? true,
+  });
+  assertPairedFloor(built, q.minOut, "sell");
+  // Exactly the tokens named may leave, fees aside no COOK may, and at least our floor must arrive.
+  const budget: SpendBudget = {
+    native: NATIVE_FEE_ALLOWANCE,
+    tokens: new Map([[pool.tokenMint, tokensRaw]]),
+    receive: { mint: COOK_MINT, min: q.minOut },
+  };
+  const signature = await submitBuilt(built, signer, "paired sell", budget, undefined, {
+    ref: p.args.ref,
+    tokens: String(p.args.shares),
+    minimumCook: rawToUi(q.minOut, COOK_DECIMALS),
+  });
+
+  return {
+    signature,
+    explorerUrl: explorerTxUrl(signature),
+    pool: pool.pubkey,
+    mint: pool.tokenMint,
+    symbol: pool.symbol,
+    sold: { shares: rawToUi(tokensRaw, decs), symbol: pool.symbol },
+    received: { estimate: rawToUi(q.amountOut, COOK_DECIMALS), symbol: COOK_SYMBOL },
+    tradeFee: {
+      amount: rawToUi(q.feeRaw, COOK_DECIMALS),
+      symbol: COOK_SYMBOL,
+      pct: poolTradeFeeBps(pool, cfg) / 100,
+    },
+    remainingShares: rawToUi(held - tokensRaw, decs),
+    paired: pairedInfo(pool, q, decs, slippageBps),
     links: { token: launchpadTokenUrl(pool.tokenMint) },
   };
 }
@@ -2182,6 +3079,19 @@ export async function claimLaunchpad(args: {
 
   const phase = poolPhase(pool, nowSeconds());
   const requested = args.kind && args.kind !== "auto" ? args.kind : null;
+  // A paired launch has no curve shares, no expiry and no settlement: its tokens are in the wallet
+  // from the first buy, and holder rewards are paid out automatically. Only the creator's vest is
+  // ever claimable on it.
+  if (isPairedPool(pool) && requested !== "creator_vest") {
+    const isCreator = pool.creator === claimant;
+    throw new CookieMcpError(
+      "a paired launch has nothing for holders to claim: its tokens are already in the wallet and " +
+        "holder rewards are paid out automatically each day",
+      isCreator
+        ? 'as its creator, pass kind: "creator_vest" to claim your vested COOK after graduation, or use claim_creator_fees'
+        : pairedHoldingAction(pairedPhaseOf(pool)).reason,
+    );
+  }
   const kind = requested ?? resolveClaimKind({ status: phase, expiryMode: pool.expiryMode });
   if (!kind) {
     throw new CookieMcpError(
@@ -2222,7 +3132,7 @@ export async function claimLaunchpad(args: {
     if (BigInt(pool.creatorVestClaimed) >= BigInt(pool.creatorVestAmount)) {
       throw new CookieMcpError(
         "the whole creator vest has already been claimed",
-        `${rawToUi(pool.creatorVestAmount, decs)} ${pool.symbol} was vested and fully claimed`,
+        `${rawToUi(pool.creatorVestAmount, COOK_DECIMALS)} ${COOK_SYMBOL} was vested and fully claimed`,
       );
     }
   }

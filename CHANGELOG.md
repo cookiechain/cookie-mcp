@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **MomoSwap paired launches.** Every launchpad tool now handles paired launches (Token-2022 tokens with
+  a 1–3% holder tax, paid out to holders daily in a pair asset). New `get_launchpad_pair_assets` lists
+  the pair assets and tax tiers; `deploy_token` takes `pairAsset` + `holderTaxPct`; `launchpad_buy` /
+  `launchpad_sell` trade a paired curve with real tokens and an on-chain minimum (`slippageBps`,
+  default 1%) checked against our own quote; the pool views carry a `paired` block, and
+  `get_launchpad_positions` lists `pairedHoldings` with holder rewards. `claim_launchpad` explains that
+  a paired pool has nothing for holders to claim.
+
 - **Dice Club.** Four tools for provably fair on-chain dice (program `DiCe5Vcp…`,
   [diceclub.cookiebox.app](https://diceclub.cookiebox.app)): `get_dice_table` (rules, bankroll,
   limits, quotes and membership; no key), `roll_dice`, `get_dice_bets` (pending bets, or one bet's
@@ -15,6 +23,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   from the revealed seed before reporting it.
 
 ### Fixed
+
+- **`get_launchpad_pools` no longer fails for `all` / `graduated`.** A paired launch's end time is
+  i64::MAX, which the date formatting threw on (`Invalid time value`), so every listing that included
+  one failed. A launch with no deadline now reports `endsAt: null`.
+- **Creator vesting is reported in COOK.** `get_launchpad_positions` showed a creator's vest as launch
+  tokens with the token's decimals — 1000× too large and in the wrong unit. The program pays the vest
+  in COOK from the raise, so the field is now `unclaimedVestCook` (was `unclaimedVestTokens`).
 
 - **`add_liquidity` works on Cookiebox DAMM v2 pools whose token charges a Token-2022 transfer fee.**
   It used to fail with `ExceededSlippage` (6002): the program checks the deposit limits against the

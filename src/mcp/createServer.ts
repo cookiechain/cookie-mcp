@@ -82,6 +82,7 @@ import {
 } from "../core/domains";
 import {
   deployToken,
+  getLaunchpadPairAssets,
   claimCreatorFees,
   claimLaunchpad,
   getLaunchpadPools,
@@ -1245,6 +1246,8 @@ export function createServer(): McpServer {
         "`ended` means the launch window closed but nobody has settled the pool on-chain yet, so it is " +
         "neither tradeable nor claimable — filter for it explicitly, or use `all`, since a `live` filter " +
         "may or may not include such pools depending on the launchpad's deployed version. " +
+        "PAIRED launches carry a `paired` block (holder tax %, the pair asset holders are paid in, and " +
+        "a phase: live / soon / migrating / graduated) and have no deadline (`endsAt` null). " +
         "Read-only — no key needed.",
       inputSchema: {
         status: z
@@ -1274,6 +1277,8 @@ export function createServer(): McpServer {
         "created the launch. Pass `quoteCook` to preview how many tokens a buy of that size would get. " +
         "A `status` of `ended` means trading closed but the pool is not settled on-chain yet — nothing can " +
         "be traded, and only a Fair-mode refund can be claimed (the claim settles the pool itself). " +
+        "For a PAIRED launch there is no curve position: `holding` is the wallet's real token balance " +
+        "(and what selling it back to the curve would pay), and `quote` is net of the holder tax. " +
         "Read-only.",
       inputSchema: {
         ref: z.string().min(32).max(44).describe(POOL_REF),
@@ -1296,7 +1301,9 @@ export function createServer(): McpServer {
         "tokens. Per position: shares, COOK invested vs withdrawn, what a live curve would pay to sell " +
         "now, and the `action` if something is outstanding (unclaimed tokens after graduation, an " +
         "unclaimed Fair-mode refund, a settlement payout). Also lists launches this wallet created that " +
-        "have unclaimed creator fees or vesting. Use this to answer 'what do I hold / what can I claim'. " +
+        "have unclaimed creator fees or vesting (the vest is paid in COOK). PAIRED launches are listed " +
+        "under `pairedHoldings` (real Token-2022 tokens, with any holder rewards waiting and the recent " +
+        "payouts — paid automatically, nothing to claim). Use this to answer 'what do I hold / what can I claim'. " +
         "Reads only: pass `owner` for any wallet, or omit it to use COOKIE_PRIVATE_KEY's.",
       inputSchema: {
         owner: z
@@ -1311,6 +1318,20 @@ export function createServer(): McpServer {
       },
     },
     tool(async (a: { owner?: string; includeClosed?: boolean }) => getLaunchpadPositions(a)),
+  );
+
+  registerTool(
+    "get_launchpad_pair_assets",
+    {
+      title: "Paired-launch options",
+      description:
+        "What a MomoSwap PAIRED launch may use: the active pair assets (the tokens a paired launch's " +
+        "holders are paid in — e.g. COOK, bCOOK — with mint, decimals and USD price) and the " +
+        "holder-tax tiers in percent (any the current curve refuses are listed as unavailable). Pass " +
+        "one of each to deploy_token as `pairAsset` + `holderTaxPct`. Read-only — no key needed.",
+      inputSchema: {},
+    },
+    tool(async () => getLaunchpadPairAssets()),
   );
 
   registerTool(
@@ -1332,8 +1353,13 @@ export function createServer(): McpServer {
         "in `momo`). Set `devBuyCook` (or `devBuyPctOfTotalSupply` for a share of the supply) to make " +
         "your own buy the atomic first trade. `maxCostCook` caps what the launch may cost (fee + dev " +
         "buy) and is required with devBuyPctOfTotalSupply; without it a creation fee above 2000 COOK " +
-        "is refused. Requires " +
-        "COOKIE_PRIVATE_KEY.",
+        "is refused. " +
+        "PAIRED LAUNCH: pass `pairAsset` (mint or symbol) and `holderTaxPct` (a tier from " +
+        "get_launchpad_pair_assets) to launch a Token-2022 token whose every transfer withholds that " +
+        "tax, which the launchpad sells and pays to holders daily in the pair asset. A paired launch " +
+        "has no deadline, expiry mode, anti-snipe window or wallet cap (passing those is refused); it " +
+        "graduates when the raise hits the target, and buyers hold real tokens from the first buy. " +
+        "Requires COOKIE_PRIVATE_KEY.",
       inputSchema: {
         name: z.string().min(1).max(32).describe("token name, max 32 chars"),
         symbol: z.string().min(1).max(10).describe("ticker, max 10 chars (upper-cased)"),
@@ -1424,6 +1450,22 @@ export function createServer(): McpServer {
             "the most this launch may cost in COOK (creation fee + dev buy); refused before any spend " +
               "when the launchpad's numbers exceed it. Required with devBuyPctOfTotalSupply",
           ),
+        pairAsset: z
+          .string()
+          .min(1)
+          .max(44)
+          .optional()
+          .describe(
+            "PAIRED launch: the asset holders are paid in — a mint or symbol from get_launchpad_pair_assets (e.g. COOK, bCOOK). Requires holderTaxPct",
+          ),
+        holderTaxPct: z
+          .number()
+          .positive()
+          .max(10)
+          .optional()
+          .describe(
+            "PAIRED launch: the holder tax on every transfer, in percent — one of the launchpad's tiers (e.g. 1, 2, 3)",
+          ),
         loginSignature: z
           .object({ message: z.string().min(1), signature: z.string().min(1) })
           .optional()
@@ -1454,6 +1496,9 @@ export function createServer(): McpServer {
         devBuyCook?: string | number;
         devBuyPctOfTotalSupply?: number;
         noLogo?: boolean;
+        maxCostCook?: string | number;
+        pairAsset?: string;
+        holderTaxPct?: number;
         loginSignature?: { message: string; signature: string };
       }) => deployToken(a),
     ),
@@ -1469,6 +1514,9 @@ export function createServer(): McpServer {
         "not show in get_balance and trade cannot swap them — exit with launchpad_sell, or claim the " +
         "real token with claim_launchpad after the pool graduates. There is no slippage parameter (the " +
         "program has no min-out), so the fill can move if others trade first. A 1% trade fee applies. " +
+        "PAIRED launches differ: you receive REAL Token-2022 tokens (in get_balance), net of the " +
+        "holder tax; the buy carries an on-chain minimum (`slippageBps`, default 1%) checked against " +
+        "our own quote; and a buy that reaches the graduation target is charged only what it used. " +
         "Simulates before sending. Requires COOKIE_PRIVATE_KEY.",
       inputSchema: {
         ref: z.string().min(32).max(44).describe(POOL_REF),
@@ -1481,10 +1529,24 @@ export function createServer(): McpServer {
           .max(44)
           .optional()
           .describe("optional referrer wallet that earns the referral fee share (not your own)"),
+        slippageBps: z
+          .number()
+          .int()
+          .min(0)
+          .max(5000)
+          .optional()
+          .describe(
+            "PAIRED launches only: slippage tolerance in bps for the on-chain minimum (default 100 = 1%)",
+          ),
       },
     },
-    tool(async (a: { ref: string; amountCook: string | number; referrer?: string }) =>
-      launchpadBuy(a),
+    tool(
+      async (a: {
+        ref: string;
+        amountCook: string | number;
+        referrer?: string;
+        slippageBps?: number;
+      }) => launchpadBuy(a),
     ),
   );
 
@@ -1495,8 +1557,10 @@ export function createServer(): McpServer {
       description:
         "Sell curve shares back to a launchpad bonding curve for COOK (unwrapped to native COOK by " +
         "default). Only works while the pool is live and only for shares bought via launchpad_buy — a " +
-        "graduated token's SPL balance is sold with `trade` instead. A 1% trade fee applies. Simulates " +
-        "before sending. Requires COOKIE_PRIVATE_KEY.",
+        "graduated token's SPL balance is sold with `trade` instead. A 1% trade fee applies. " +
+        "PAIRED launches: sells REAL tokens from your wallet (`shares` = the token amount); the holder " +
+        "tax comes off them on the way into the pool, and the sell carries an on-chain minimum " +
+        "(`slippageBps`, default 1%). Simulates before sending. Requires COOKIE_PRIVATE_KEY.",
       inputSchema: {
         ref: z.string().min(32).max(44).describe(POOL_REF),
         shares: z
@@ -1506,9 +1570,21 @@ export function createServer(): McpServer {
           .boolean()
           .optional()
           .describe("unwrap the proceeds to native COOK (default true)"),
+        slippageBps: z
+          .number()
+          .int()
+          .min(0)
+          .max(5000)
+          .optional()
+          .describe(
+            "PAIRED launches only: slippage tolerance in bps for the on-chain minimum (default 100 = 1%)",
+          ),
       },
     },
-    tool(async (a: { ref: string; shares: string | number; unwrap?: boolean }) => launchpadSell(a)),
+    tool(
+      async (a: { ref: string; shares: string | number; unwrap?: boolean; slippageBps?: number }) =>
+        launchpadSell(a),
+    ),
   );
 
   registerTool(
@@ -1521,7 +1597,9 @@ export function createServer(): McpServer {
         "expired in jackpot/survivor mode → your Merkle payout (the proof is fetched for you). A fair " +
         "refund works even on an `ended` pool that has not been settled on-chain yet — the claim settles " +
         "it too; the other modes have to wait for the expiry transition. Creators can pass " +
-        "kind=creator_vest to claim their vested allocation after graduation. Dead-mode expiries have " +
+        "kind=creator_vest to claim their vested allocation (paid in COOK) after graduation. A PAIRED " +
+        "launch has nothing for holders to claim (tokens are in the wallet, holder rewards are paid " +
+        "automatically) — only its creator's vest. Dead-mode expiries have " +
         "no holder payout. Simulates before sending, so a claim that cannot land costs nothing. " +
         "Requires COOKIE_PRIVATE_KEY.",
       inputSchema: {

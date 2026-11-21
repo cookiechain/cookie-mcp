@@ -102,6 +102,11 @@ const LAUNCHPAD_ERRORS: Record<number, string> = {
   // freeze the raise forever: `Fair` pools re-open after one hour (a Fair expiry pays holders pro-rata,
   // so little is at stake), every other expiry mode after 30 days.
   6048: "this pool met its graduation target, so it has to graduate rather than expire — the permissionless claim/expiry path only re-opens if it doesn't (one hour after the launch ended for a fair-mode pool, 30 days for any other mode)",
+  // Paired launches (anchor #125), appended after 6062.
+  6063: "paired launches are not configured on the launchpad yet",
+  6064: "that pair asset is not active on the launchpad's allowlist",
+  6065: "that holder-tax rate is not one of the launchpad's tiers (or its graduation seed would be capped)",
+  6066: "this paired launch has reached its graduation target — it is migrating to its market",
 };
 
 /**

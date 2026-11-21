@@ -52,6 +52,7 @@ const EXPECTED_TOOLS = [
   "get_launchpad_pools",
   "get_launchpad_token",
   "get_launchpad_positions",
+  "get_launchpad_pair_assets",
   "deploy_token",
   "launchpad_buy",
   "launchpad_sell",

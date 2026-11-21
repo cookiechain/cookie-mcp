@@ -48,7 +48,8 @@ It is a community project for the whole Cookie Chain ecosystem.
   better, or a stop-loss that sells at market once the rate falls to a trigger — filled by a keeper
   across every routable Cookie Chain market.
 - **Launch tokens** on the [MomoSwap launchpad](https://momoswap.fun) — create a token on a COOK
-  bonding curve, buy / sell the curve, claim after graduation, and sweep your creator fees.
+  bonding curve (standard, or a paired launch whose holder tax is paid out to holders), buy / sell the
+  curve, claim after graduation, and sweep your creator fees.
 - **Launch and mint NFT collections** on the [MomoSwap NFT launchpad](https://momoswap.fun/nft) —
   launch a fixed-supply drop from a folder of images, mint items off its COOK bonding curve, sell them
   back while it is live, redeem the floor after graduation, and claim a creator's proceeds.
@@ -392,6 +393,28 @@ per 100 launches. Pass `owner` for any wallet, or omit it for your own.
 A pre-graduation token also has no DEX pool at all, so `get_quote` / `trade` would just report "no
 route". They now recognise that case and point at the launchpad tools instead, and `get_token_info`
 adds a `launchpad` field when a mint shows no price or liquidity because it is still on a curve.
+
+**Paired launches** (MomoSwap's holder-reward tokens). A paired launch mints a **Token-2022** token
+whose every transfer — buys and sells included — withholds a holder tax (1–3%); the launchpad sells
+the harvested tax and pays it to holders daily in a chosen **pair asset** (COOK, bCOOK, …). It has no
+deadline, expiry mode, anti-snipe window or wallet cap, and graduates to a market when the raise hits
+the target. Every launchpad tool handles them:
+
+- `get_launchpad_pair_assets` (no key) lists the pair assets and the tax tiers; `deploy_token` with
+  `pairAsset` + `holderTaxPct` launches one (a dev buy is bundled and its delivery, net of tax, is held
+  to our own quote of the launch curve).
+- `launchpad_buy` / `launchpad_sell` trade a paired curve with **real tokens** (they show in
+  `get_balance`; there are no curve shares). The tax comes off the tokens a buyer receives and off the
+  tokens a seller sends in. Both carry an on-chain minimum: `slippageBps` (default 1%) off our own
+  quote of the curve (a port of the program's math, pinned to trades recorded from the program
+  itself), which the build must carry. A buy that reaches the graduation target is charged only what
+  it used.
+- `get_launchpad_pools` / `get_launchpad_token` show a `paired` block (tax, pair asset, phase:
+  `live` / `soon` / `migrating` / `graduated`); `get_launchpad_positions` lists paired tokens under
+  `pairedHoldings` with any holder rewards waiting and the recent payouts. Rewards are paid out
+  automatically, so there is nothing to claim; only the creator's vest is claimable on a paired pool.
+- Once graduated, a paired token trades with `trade` / `get_quote` like any other. While it is
+  `migrating` (target hit, market not seeded yet) nothing can trade it, and the tools say so.
 
 **NFT launchpad** ([MomoSwap NFT drops](https://momoswap.fun/nft), program `momoDc2L…`): fixed-supply
 collections minted off a COOK bonding curve. `get_nft_drops` and `get_nft_drop` need no key; the rest

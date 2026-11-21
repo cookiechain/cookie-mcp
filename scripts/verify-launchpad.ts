@@ -79,7 +79,7 @@ async function main() {
   for (const c of port.created.slice(0, 5)) {
     console.log(
       `      created ${c.symbol.padEnd(10)} unclaimed fees ${c.unclaimedFeesCook} COOK` +
-        (c.unclaimedVestTokens ? `, vest ${c.unclaimedVestTokens} ${c.symbol}` : "") +
+        (c.unclaimedVestCook ? `, vest ${c.unclaimedVestCook} COOK` : "") +
         (c.actions.length ? ` → ${c.actions.map((a) => a.tool).join(" + ")}` : ""),
     );
   }

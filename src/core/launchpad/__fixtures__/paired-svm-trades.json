@@ -1,0 +1,395 @@
+{
+  "source": "anchor-launchpad-momoswap tests/svm/tests/paired.rs harness (litesvm, cookie_launchpad.so built from main @ #125 with platform-tools v1.53), probe test run 2026-11-09 for momoswap-backend #245. Each case is the pool state read right before the trade and the PairedBought/PairedSold event it emitted.",
+  "cases": [
+    {
+      "tag": "default-100-buy1",
+      "side": "buy",
+      "taxBps": 100,
+      "state": {
+        "virtualPaymentReserve": "30000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "0",
+        "paymentRaisedNet": "0",
+        "tradeFeeBps": 75,
+        "graduationTarget": "10000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "offered": "1000000000",
+        "paymentIn": "1000000000",
+        "netPayment": "992500000",
+        "tokensOut": "34361619746712",
+        "tokensReceived": "34018003549244"
+      }
+    },
+    {
+      "tag": "default-100-buy2",
+      "side": "buy",
+      "taxBps": 100,
+      "state": {
+        "virtualPaymentReserve": "30000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "34361619746712",
+        "paymentRaisedNet": "992500000",
+        "tradeFeeBps": 75,
+        "graduationTarget": "10000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "offered": "2345678901",
+        "paymentIn": "2345678901",
+        "netPayment": "2328086310",
+        "tokensOut": "72568944964289",
+        "tokensReceived": "71843255514646"
+      }
+    },
+    {
+      "tag": "default-100-sell1",
+      "side": "sell",
+      "taxBps": 100,
+      "state": {
+        "virtualPaymentReserve": "30000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "106930564711001",
+        "paymentRaisedNet": "3320586310",
+        "tradeFeeBps": 75,
+        "graduationTarget": "10000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "tokensIn": "35287086354637",
+        "tokensReceived": "34934215491090",
+        "paymentOut": "1154139975",
+        "fee": "8721460"
+      }
+    },
+    {
+      "tag": "default-100-cross",
+      "side": "buy",
+      "taxBps": 100,
+      "state": {
+        "virtualPaymentReserve": "30000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "71996349219911",
+        "paymentRaisedNet": "2157724875",
+        "tradeFeeBps": 75,
+        "graduationTarget": "10000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "offered": "50000000000",
+        "paymentIn": "7901536649",
+        "netPayment": "7842275125",
+        "tokensOut": "196253650763671",
+        "tokensReceived": "194291114256034"
+      }
+    },
+    {
+      "tag": "default-100-sell2",
+      "side": "sell",
+      "taxBps": 100,
+      "state": {
+        "virtualPaymentReserve": "30000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "268249999983582",
+        "paymentRaisedNet": "10000000000",
+        "tradeFeeBps": 75,
+        "graduationTarget": "10000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "tokensIn": "26486528696528",
+        "tokensReceived": "26221663409562",
+        "paymentOut": "1252750344",
+        "fee": "9466627"
+      }
+    },
+    {
+      "tag": "default-200-buy1",
+      "side": "buy",
+      "taxBps": 200,
+      "state": {
+        "virtualPaymentReserve": "30000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "0",
+        "paymentRaisedNet": "0",
+        "tradeFeeBps": 75,
+        "graduationTarget": "10000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "offered": "1000000000",
+        "paymentIn": "1000000000",
+        "netPayment": "992500000",
+        "tokensOut": "34361619746712",
+        "tokensReceived": "33674387351777"
+      }
+    },
+    {
+      "tag": "default-200-buy2",
+      "side": "buy",
+      "taxBps": 200,
+      "state": {
+        "virtualPaymentReserve": "30000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "34361619746712",
+        "paymentRaisedNet": "992500000",
+        "tradeFeeBps": 75,
+        "graduationTarget": "10000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "offered": "2345678901",
+        "paymentIn": "2345678901",
+        "netPayment": "2328086310",
+        "tokensOut": "72568944964289",
+        "tokensReceived": "71117566065003"
+      }
+    },
+    {
+      "tag": "default-200-sell1",
+      "side": "sell",
+      "taxBps": 200,
+      "state": {
+        "virtualPaymentReserve": "30000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "106930564711001",
+        "paymentRaisedNet": "3320586310",
+        "tradeFeeBps": 75,
+        "graduationTarget": "10000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "tokensIn": "34930651138933",
+        "tokensReceived": "34232038116154",
+        "paymentOut": "1131735656",
+        "fee": "8552158"
+      }
+    },
+    {
+      "tag": "default-200-cross",
+      "side": "buy",
+      "taxBps": 200,
+      "state": {
+        "virtualPaymentReserve": "30000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "72698526594847",
+        "paymentRaisedNet": "2180298496",
+        "tradeFeeBps": 75,
+        "graduationTarget": "10000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "offered": "50000000000",
+        "paymentIn": "7878792447",
+        "netPayment": "7819701504",
+        "tokensOut": "195551473400992",
+        "tokensReceived": "191640443932972"
+      }
+    },
+    {
+      "tag": "default-200-sell2",
+      "side": "sell",
+      "taxBps": 200,
+      "state": {
+        "virtualPaymentReserve": "30000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "268249999995839",
+        "paymentRaisedNet": "10000000000",
+        "tradeFeeBps": 75,
+        "graduationTarget": "10000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "tokensIn": "26150174621081",
+        "tokensReceived": "25627171128659",
+        "paymentOut": "1225224789",
+        "fee": "9258625"
+      }
+    },
+    {
+      "tag": "default-300-buy1",
+      "side": "buy",
+      "taxBps": 300,
+      "state": {
+        "virtualPaymentReserve": "30000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "0",
+        "paymentRaisedNet": "0",
+        "tradeFeeBps": 75,
+        "graduationTarget": "10000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "offered": "1000000000",
+        "paymentIn": "1000000000",
+        "netPayment": "992500000",
+        "tokensOut": "34361619746712",
+        "tokensReceived": "33330771154310"
+      }
+    },
+    {
+      "tag": "default-300-buy2",
+      "side": "buy",
+      "taxBps": 300,
+      "state": {
+        "virtualPaymentReserve": "30000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "34361619746712",
+        "paymentRaisedNet": "992500000",
+        "tradeFeeBps": 75,
+        "graduationTarget": "10000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "offered": "2345678901",
+        "paymentIn": "2345678901",
+        "netPayment": "2328086310",
+        "tokensOut": "72568944964289",
+        "tokensReceived": "70391876615360"
+      }
+    },
+    {
+      "tag": "default-300-sell1",
+      "side": "sell",
+      "taxBps": 300,
+      "state": {
+        "virtualPaymentReserve": "30000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "106930564711001",
+        "paymentRaisedNet": "3320586310",
+        "tradeFeeBps": 75,
+        "graduationTarget": "10000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "tokensIn": "34574215923230",
+        "tokensReceived": "33536989445533",
+        "paymentOut": "1109527793",
+        "fee": "8384340"
+      }
+    },
+    {
+      "tag": "default-300-cross",
+      "side": "buy",
+      "taxBps": 300,
+      "state": {
+        "virtualPaymentReserve": "30000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "73393575265468",
+        "paymentRaisedNet": "2202674177",
+        "tradeFeeBps": 75,
+        "graduationTarget": "10000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "offered": "50000000000",
+        "paymentIn": "7856247680",
+        "netPayment": "7797325823",
+        "tokensOut": "194856424710481",
+        "tokensReceived": "189010731969166"
+      }
+    },
+    {
+      "tag": "default-300-sell2",
+      "side": "sell",
+      "taxBps": 300,
+      "state": {
+        "virtualPaymentReserve": "30000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "268249999975949",
+        "paymentRaisedNet": "10000000000",
+        "tradeFeeBps": 75,
+        "graduationTarget": "10000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "tokensIn": "25815916381560",
+        "tokensReceived": "25041438890113",
+        "paymentOut": "1198066258",
+        "fee": "9053397"
+      }
+    },
+    {
+      "tag": "live-100-dust",
+      "side": "buy",
+      "taxBps": 100,
+      "state": {
+        "virtualPaymentReserve": "360000000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "788970588235293",
+        "paymentRaisedNet": "999999999999996",
+        "tradeFeeBps": 100,
+        "graduationTarget": "1000000000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "offered": "1000000000",
+        "paymentIn": "10",
+        "netPayment": "10",
+        "tokensOut": "2",
+        "tokensReceived": "1"
+      }
+    },
+    {
+      "tag": "live-200-dust",
+      "side": "buy",
+      "taxBps": 200,
+      "state": {
+        "virtualPaymentReserve": "360000000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "788970588235293",
+        "paymentRaisedNet": "999999999999996",
+        "tradeFeeBps": 100,
+        "graduationTarget": "1000000000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "offered": "1000000000",
+        "paymentIn": "10",
+        "netPayment": "10",
+        "tokensOut": "2",
+        "tokensReceived": "1"
+      }
+    },
+    {
+      "tag": "live-300-dust",
+      "side": "buy",
+      "taxBps": 300,
+      "state": {
+        "virtualPaymentReserve": "360000000000000",
+        "virtualTokenReserve": "1073000000000000",
+        "tokensSold": "788970588235293",
+        "paymentRaisedNet": "999999999999996",
+        "tradeFeeBps": 100,
+        "graduationTarget": "1000000000000000",
+        "saleTokenSupply": "800000000000000",
+        "minBuy": "1000"
+      },
+      "onChain": {
+        "offered": "1000000000",
+        "paymentIn": "10",
+        "netPayment": "10",
+        "tokensOut": "2",
+        "tokensReceived": "1"
+      }
+    }
+  ]
+}
