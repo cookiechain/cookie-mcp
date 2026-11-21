@@ -41,6 +41,7 @@ import {
   openDca,
 } from "../core/dca";
 import { getZipOrders, MIN_STEP_MAX, startZip, stopZip } from "../core/zip";
+import { getDiceBets, getDiceTable, MAX_WAIT_SECONDS, refundDiceBet, rollDice } from "../core/dice";
 import { CLMM_FEE_TIER_TICK_SPACING } from "../core/liquidity/clmm";
 import { getStakeInfo, stake, unstake } from "../core/stake";
 import {
@@ -1012,6 +1013,131 @@ export function createServer(): McpServer {
       },
     },
     tool(async (a: { position?: string; pool?: string }) => stopZip(a)),
+  );
+
+  registerTool(
+    "get_dice_table",
+    {
+      title: "Dice Club table",
+      description:
+        "Dice Club (provably fair on-chain dice, program `DiCe5Vcp…`): the house's live rules and " +
+        "limits — edge, minimum stake, chance range, free bankroll, the largest stake it takes at " +
+        "common chances, how many bets wait for the keeper (the table closes at 10), and the seed-" +
+        "chain commitment. Pass `chance` (win chance in %, e.g. 50) to quote it, plus `amount` " +
+        "(COOK) to check a specific bet. Members only: names the NFT collection a bettor must hold " +
+        "(Cookie Chads) and, for `wallet` (default: yours), whether it holds one. No key needed.",
+      inputSchema: {
+        wallet: z
+          .string()
+          .min(3)
+          .max(64)
+          .optional()
+          .describe("address or .cook name to check membership and balance for; default: yours"),
+        chance: z
+          .union([z.string(), z.number()])
+          .optional()
+          .describe("win chance in percent (0.01–98.99, at most two decimals) to quote"),
+        amount: z
+          .union([z.string(), z.number()])
+          .optional()
+          .describe("stake in COOK; with `chance`, checks whether the table takes this bet"),
+      },
+    },
+    tool(async (a: { wallet?: string; chance?: string | number; amount?: string | number }) =>
+      getDiceTable(a),
+    ),
+  );
+  registerTool(
+    "roll_dice",
+    {
+      title: "Roll dice (Dice Club)",
+      description:
+        "Bet `amount` COOK at Dice Club: win if the roll (0.00–99.99) lands under `chance` %. A " +
+        "win pays stake × (100 − edge) / chance (1% edge: 50% → 1.98x, 10% → 9.9x); a loss " +
+        "loses the stake. Gambling with real COOK — only roll when the user asked to. The house's " +
+        "keeper settles the bet within seconds by revealing the next seed of a chain it committed " +
+        "to up front; this server generates the client seed that goes into the roll (random, or " +
+        "`clientSeed`), waits for the settle and re-derives the roll from the revealed seed " +
+        "(`proof.verified`, plus a link to the site's verifier). Returns `won` / `lost` with the " +
+        "net, or `pending` if the keeper is slower than `waitSeconds` (check later with " +
+        "get_dice_bets). Members only: the wallet must hold a verified Cookie Chads NFT. Refused " +
+        "before sending when the stake is under the minimum, over the bankroll cap at that " +
+        "chance, the table is paused or full, or the wallet can't cover it (bet account rent " +
+        "~0.002 COOK, refunded at settle)." +
+        SIGNING_NOTE,
+      inputSchema: {
+        amount: z.union([z.string(), z.number()]).describe("stake in COOK"),
+        chance: z
+          .union([z.string(), z.number()])
+          .describe("win chance in percent, e.g. 50 (0.01–98.99, at most two decimals)"),
+        clientSeed: z
+          .string()
+          .min(1)
+          .max(256)
+          .optional()
+          .describe("your own seed: 64 hex chars, or any text (hashed); default: random"),
+        waitSeconds: z
+          .number()
+          .int()
+          .min(0)
+          .max(MAX_WAIT_SECONDS)
+          .optional()
+          .describe(
+            "how long to wait for the keeper to settle (default 45; 0 = return once placed)",
+          ),
+      },
+    },
+    tool(
+      async (a: {
+        amount: string | number;
+        chance: string | number;
+        clientSeed?: string;
+        waitSeconds?: number;
+      }) => rollDice(a),
+    ),
+  );
+  registerTool(
+    "get_dice_bets",
+    {
+      title: "Dice Club bets",
+      description:
+        "A wallet's Dice Club bets (yours by default). With `nonce` (from roll_dice): that bet — " +
+        "still pending, or its result re-verified from the revealed seed (roll, won/lost, paid, " +
+        "proof). Without: every pending bet, with how many bets are ahead of it and whether it is " +
+        "refundable (the keeper missed its ~24h deadline — refund_dice_bet). Results older than " +
+        "~11 days are past the RPC's history. No key needed.",
+      inputSchema: {
+        wallet: z
+          .string()
+          .min(3)
+          .max(64)
+          .optional()
+          .describe("address or .cook name; default: yours"),
+        nonce: z
+          .union([z.string(), z.number()])
+          .optional()
+          .describe("the bet's nonce, as roll_dice returned it"),
+      },
+    },
+    tool(async (a: { wallet?: string; nonce?: string | number }) => getDiceBets(a)),
+  );
+  registerTool(
+    "refund_dice_bet",
+    {
+      title: "Refund an overdue Dice Club bet",
+      description:
+        "Take back the stake of one of your Dice Club bets that the house's keeper failed to " +
+        "settle by its deadline (~24h after placing): the program refunds the stake (and the bet " +
+        "account's rent), no roll. Only the oldest unsettled bet on the table can be refunded, " +
+        "and only once past its deadline — both are checked before sending. Simulates first." +
+        SIGNING_NOTE,
+      inputSchema: {
+        nonce: z
+          .union([z.string(), z.number()])
+          .describe("the bet's nonce (get_dice_bets lists your pending bets)"),
+      },
+    },
+    tool(async (a: { nonce: string | number }) => refundDiceBet(a)),
   );
 
   registerTool(

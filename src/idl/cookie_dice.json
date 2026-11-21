@@ -1,0 +1,1211 @@
+{
+  "address": "DiCe5VcpAHGZCz8pMfVSRRDtvQL6adcdYh5p34DEu1j",
+  "metadata": {
+    "name": "cookie_dice",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Provably fair on-chain dice"
+  },
+  "instructions": [
+    {
+      "name": "accept_authority",
+      "docs": ["Step 2: the nominee signs, proving the key exists and is held, and takes over."],
+      "discriminator": [107, 86, 198, 91, 33, 12, 107, 160],
+      "accounts": [
+        {
+          "name": "new_authority",
+          "signer": true
+        },
+        {
+          "name": "house",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [104, 111, 117, 115, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pending",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112, 101, 110, 100, 105, 110, 103, 95, 97, 117, 116, 104, 111, 114, 105, 116, 121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_to",
+          "writable": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "configure_gate",
+      "docs": ["Create or change the Chads Club gate. Authority only."],
+      "discriminator": [93, 216, 75, 234, 6, 126, 104, 207],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": ["house"]
+        },
+        {
+          "name": "house",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [104, 111, 117, 115, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "gate",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [103, 97, 116, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "collection",
+          "type": "pubkey"
+        },
+        {
+          "name": "enabled",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "expire_bet",
+      "docs": [
+        "Refund a bet the operator never settled. Permissionless, after the bet's deadline.",
+        "",
+        "Returns exactly the stake — no winnings, no loss — so a keeper outage costs the house",
+        "nothing and pays nobody. See the trust-model note at the top of this file."
+      ],
+      "discriminator": [179, 43, 160, 55, 113, 199, 6, 155],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": ["Anyone may crank an overdue bet; the payout goes to the player regardless."],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "house",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [104, 111, 117, 115, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true
+        },
+        {
+          "name": "bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [98, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.player",
+                "account": "Bet"
+              },
+              {
+                "kind": "account",
+                "path": "bet.nonce",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "fund_vault",
+      "discriminator": [26, 33, 207, 242, 119, 108, 134, 73],
+      "accounts": [
+        {
+          "name": "funder",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              }
+            ]
+          }
+        },
+        {
+          "name": "house",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [104, 111, 117, 115, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "initialize_house",
+      "discriminator": [180, 46, 86, 125, 135, 107, 214, 28],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "operator"
+        },
+        {
+          "name": "treasury"
+        },
+        {
+          "name": "house",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [104, 111, 117, 115, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "HouseParams"
+            }
+          }
+        },
+        {
+          "name": "seed_commitment",
+          "type": {
+            "array": ["u8", 32]
+          }
+        }
+      ]
+    },
+    {
+      "name": "place_bet",
+      "docs": [
+        "Place a bet. Wins when the eventual roll is strictly below `target`.",
+        "",
+        "With the gate on, `pass_token` / `pass_metadata` must prove the player holds a verified",
+        "Chads NFT (see `gate.rs`). Only placement is gated: settling and expiring a bet that was",
+        "placed must never depend on the player still holding the NFT."
+      ],
+      "discriminator": [222, 62, 67, 220, 63, 166, 126, 33],
+      "accounts": [
+        {
+          "name": "player",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "house",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [104, 111, 117, 115, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              }
+            ]
+          }
+        },
+        {
+          "name": "bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [98, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              },
+              {
+                "kind": "account",
+                "path": "house.next_nonce",
+                "account": "House"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "gate",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [103, 97, 116, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pass_token",
+          "optional": true
+        },
+        {
+          "name": "pass_metadata",
+          "optional": true
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        },
+        {
+          "name": "target",
+          "type": "u16"
+        },
+        {
+          "name": "client_seed",
+          "type": {
+            "array": ["u8", 32]
+          }
+        }
+      ]
+    },
+    {
+      "name": "propose_authority",
+      "docs": [
+        "Step 1 of handing the house to a new authority (e.g. a multisig): name it. Nothing",
+        "changes until that key accepts; calling again replaces the nominee, and naming the",
+        "current authority cancels."
+      ],
+      "discriminator": [20, 148, 236, 198, 76, 119, 99, 142],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": ["house"]
+        },
+        {
+          "name": "house",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [104, 111, 117, 115, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pending",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112, 101, 110, 100, 105, 110, 103, 95, 97, 117, 116, 104, 111, 114, 105, 116, 121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_authority",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "rotate_seed_chain",
+      "docs": [
+        "Publish a fresh chain commitment once the old chain is exhausted.",
+        "",
+        "Only legal with nothing in flight, so no pending bet can have its commitment swapped",
+        "out from under it."
+      ],
+      "discriminator": [104, 88, 4, 213, 210, 63, 54, 220],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": ["house"]
+        },
+        {
+          "name": "house",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [104, 111, 117, 115, 101]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_commitment",
+          "type": {
+            "array": ["u8", 32]
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_paused",
+      "docs": ["Stop taking new bets. Pending bets still settle and expire normally."],
+      "discriminator": [91, 60, 125, 192, 176, 225, 166, 218],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": ["house"]
+        },
+        {
+          "name": "house",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [104, 111, 117, 115, 101]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "paused",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "set_roles",
+      "discriminator": [119, 86, 129, 161, 55, 23, 250, 12],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": ["house"]
+        },
+        {
+          "name": "house",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [104, 111, 117, 115, 101]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "operator",
+          "type": "pubkey"
+        },
+        {
+          "name": "treasury",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "settle_bet",
+      "docs": ["Reveal the next seed and resolve the head of the queue."],
+      "discriminator": [115, 55, 234, 177, 227, 4, 10, 67],
+      "accounts": [
+        {
+          "name": "operator",
+          "writable": true,
+          "signer": true,
+          "relations": ["house"]
+        },
+        {
+          "name": "house",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [104, 111, 117, 115, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              }
+            ]
+          }
+        },
+        {
+          "name": "player",
+          "writable": true
+        },
+        {
+          "name": "bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [98, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.player",
+                "account": "Bet"
+              },
+              {
+                "kind": "account",
+                "path": "bet.nonce",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "server_seed",
+          "type": {
+            "array": ["u8", 32]
+          }
+        }
+      ]
+    },
+    {
+      "name": "update_house",
+      "docs": ["Change odds, limits and roles. Live bets keep the payout they were placed at."],
+      "discriminator": [13, 153, 166, 250, 48, 39, 227, 200],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": ["house"]
+        },
+        {
+          "name": "house",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [104, 111, 117, 115, 101]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "HouseParams"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "withdraw_vault",
+      "docs": [
+        "Withdraw house profit to the treasury. Never touches reserved liability or the rent floor."
+      ],
+      "discriminator": [135, 7, 237, 120, 149, 94, 95, 7],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": ["house"]
+        },
+        {
+          "name": "house",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [104, 111, 117, 115, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "writable": true,
+          "relations": ["house"]
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Bet",
+      "discriminator": [147, 23, 35, 59, 15, 75, 155, 32]
+    },
+    {
+      "name": "Gate",
+      "discriminator": [13, 25, 212, 153, 150, 57, 225, 171]
+    },
+    {
+      "name": "House",
+      "discriminator": [21, 145, 94, 109, 254, 199, 210, 151]
+    },
+    {
+      "name": "PendingAuthority",
+      "discriminator": [108, 91, 208, 174, 216, 189, 207, 93]
+    }
+  ],
+  "events": [
+    {
+      "name": "AuthorityChanged",
+      "discriminator": [31, 19, 174, 152, 4, 82, 215, 226]
+    },
+    {
+      "name": "BetResolved",
+      "discriminator": [133, 89, 89, 125, 4, 219, 82, 137]
+    },
+    {
+      "name": "GateConfigured",
+      "discriminator": [8, 177, 227, 194, 97, 103, 191, 247]
+    },
+    {
+      "name": "SeedChainRotated",
+      "discriminator": [230, 16, 228, 69, 195, 182, 113, 58]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "HousePaused",
+      "msg": "The house is paused and is not taking bets"
+    },
+    {
+      "code": 6001,
+      "name": "StakeBelowMinimum",
+      "msg": "Stake is below the house minimum"
+    },
+    {
+      "code": 6002,
+      "name": "TargetOutOfRange",
+      "msg": "Target is outside the payable range"
+    },
+    {
+      "code": 6003,
+      "name": "ExceedsBankroll",
+      "msg": "Bet would win more than the bankroll cap allows"
+    },
+    {
+      "code": 6004,
+      "name": "OutOfOrderSettlement",
+      "msg": "Bets must be resolved in the order they were placed"
+    },
+    {
+      "code": 6005,
+      "name": "SeedCommitmentMismatch",
+      "msg": "Revealed seed does not hash to the published commitment"
+    },
+    {
+      "code": 6006,
+      "name": "TimeoutNotReached",
+      "msg": "Bet has not reached its settlement deadline yet"
+    },
+    {
+      "code": 6007,
+      "name": "BetsPending",
+      "msg": "Cannot rotate the seed chain while bets are pending"
+    },
+    {
+      "code": 6008,
+      "name": "VaultUnderfunded",
+      "msg": "Vault cannot cover pending liability after this withdrawal"
+    },
+    {
+      "code": 6009,
+      "name": "InvalidHouseParams",
+      "msg": "House parameters are invalid"
+    },
+    {
+      "code": 6010,
+      "name": "MathOverflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6011,
+      "name": "NotAClubMember",
+      "msg": "Only Chads Club members can place bets: hold a verified Cookie Chads NFT"
+    },
+    {
+      "code": 6012,
+      "name": "TableStalled",
+      "msg": "The table is paused until the house settles the bets already waiting"
+    },
+    {
+      "code": 6013,
+      "name": "SettleDeadlinePassed",
+      "msg": "This bet is past its deadline and can only be refunded"
+    },
+    {
+      "code": 6014,
+      "name": "NotTheNominee",
+      "msg": "Only the key named by propose_authority can accept the house"
+    }
+  ],
+  "types": [
+    {
+      "name": "AuthorityChanged",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "previous",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_authority",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Bet",
+      "docs": [
+        "One pending bet, at PDA `[\"bet\", player, nonce_le]`. Closed on resolution, rent to the player."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "payout",
+            "docs": [
+              "Locked in at placement so a later parameter change cannot re-price a live bet."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "target",
+            "type": "u16"
+          },
+          {
+            "name": "client_seed",
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "placement_commitment",
+            "docs": [
+              "The chain head when this bet was placed. Proves the seed pre-dated the bet, but only via",
+              "the intervening reveals: the reveal itself hashes to the *previous reveal*, published in",
+              "the `BetResolved` event as `commitment`."
+            ],
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "deadline_slot",
+            "docs": [
+              "Slot after which anyone may `expire_bet` (a stake refund). Frozen at placement."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BetResolved",
+      "docs": [
+        "Emitted on every resolution. Carries the full proof so an indexer never has to reconstruct",
+        "it: `sha256(server_seed) == commitment`, then re-derive the roll."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "target",
+            "type": "u16"
+          },
+          {
+            "name": "payout",
+            "docs": [
+              "Lamports paid to the player: the payout on a win, `0` on a loss, the stake on an",
+              "expiry refund (`expired: true`, `won: false`)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "client_seed",
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "commitment",
+            "docs": ["What `sha256(server_seed)` must equal — the chain head at settle time."],
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "placement_commitment",
+            "docs": [
+              "Chain head at placement. Walk reveals from here to `commitment` to prove the seed pre-dated",
+              "the bet."
+            ],
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "server_seed",
+            "docs": [
+              "All zeroes when the bet expired unsettled — no seed was ever revealed for it."
+            ],
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "seed_index",
+            "docs": ["Index of the seed this bet consumed (0-based). Expiries consume none."],
+            "type": "u64"
+          },
+          {
+            "name": "roll",
+            "type": "u64"
+          },
+          {
+            "name": "won",
+            "type": "bool"
+          },
+          {
+            "name": "expired",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Gate",
+      "docs": [
+        "Chads Club gate, at PDA `[\"gate\"]`. A separate account rather than new `House` fields: the",
+        "house is already live at a fixed size, and this needs no realloc or migration."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "docs": ["Verified Metaplex collection a bettor must hold an item of (Cookie Chads)."],
+            "type": "pubkey"
+          },
+          {
+            "name": "enabled",
+            "docs": ["Off = anyone may bet, as before the gate existed."],
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GateConfigured",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "collection",
+            "type": "pubkey"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "House",
+      "docs": ["Global house state. One per deployment, at PDA `[\"house\"]`."],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "docs": [
+              "Can change parameters, fund and withdraw. Should be a multisig in production; hand it",
+              "over with `propose_authority` + `accept_authority`."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "docs": [
+              "Signs `settle_bet`. Kept hot, so the *key* is deliberately powerless beyond revealing",
+              "seeds in order — it cannot move funds or change the odds. The seed chain it reveals from",
+              "is another matter: whoever reads that file knows every future roll and can bet to win,",
+              "so guard it like the bankroll."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "treasury",
+            "docs": ["Destination for withdrawn profit."],
+            "type": "pubkey"
+          },
+          {
+            "name": "seed_commitment",
+            "docs": [
+              "`sha256` of the next seed the operator must reveal. The entire future sequence is",
+              "pinned to this one value; see `fairness.rs`."
+            ],
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "seed_index",
+            "docs": [
+              "How many seeds have been revealed. Recorded on each settled bet so a player can walk",
+              "the chain even across expiries, which consume a nonce but no seed."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "next_nonce",
+            "docs": ["Next nonce to hand out at placement."],
+            "type": "u64"
+          },
+          {
+            "name": "settled_nonce",
+            "docs": [
+              "Next nonce that must be resolved. Settlement is strictly FIFO: without that, an",
+              "operator holding the whole chain could compute every pending bet's outcome under the",
+              "next seed and hand it to whichever player it wanted to lose."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "locked_liability",
+            "docs": [
+              "Sum of full payouts (stake + profit) across unresolved bets — everything the vault owes",
+              "players right now. `vault − locked_liability − rent` is the house's own free bankroll.",
+              "(Before 2026-11-15 this held only `payout − stake`, which counted pending stakes as free.)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "edge_bps",
+            "docs": ["House edge in basis points."],
+            "type": "u16"
+          },
+          {
+            "name": "max_payout_bps",
+            "docs": ["Cap on one bet's profit as a share of the free bankroll, in basis points."],
+            "type": "u16"
+          },
+          {
+            "name": "min_bet",
+            "docs": ["Minimum stake in lamports."],
+            "type": "u64"
+          },
+          {
+            "name": "settle_timeout_slots",
+            "docs": [
+              "Slots after placement before anyone may refund an unsettled bet (`expire_bet`)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "total_bets",
+            "type": "u64"
+          },
+          {
+            "name": "total_wagered",
+            "type": "u128"
+          },
+          {
+            "name": "total_paid",
+            "type": "u128"
+          },
+          {
+            "name": "expired_count",
+            "docs": [
+              "Bets the operator failed to settle in time and that were refunded. Permanent, public",
+              "reputation counter."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "vault_bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "HouseParams",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "edge_bps",
+            "type": "u16"
+          },
+          {
+            "name": "max_payout_bps",
+            "type": "u16"
+          },
+          {
+            "name": "min_bet",
+            "type": "u64"
+          },
+          {
+            "name": "settle_timeout_slots",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PendingAuthority",
+      "docs": [
+        "The key nominated to take over the house, at PDA `[\"pending_authority\"]`. Exists only",
+        "between `propose_authority` and `accept_authority`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SeedChainRotated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "previous_commitment",
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "new_commitment",
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "seed_index",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}

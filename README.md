@@ -61,6 +61,8 @@ It is a community project for the whole Cookie Chain ecosystem.
   accept offers (Cookie Chain's Metaplex Auction House marketplace).
 - **Bridge** COOK, SOL — and any token added to the bridge later — 1:1 between Cookie Chain and
   Solana mainnet over [Hyperlane](https://hyperlane.cookiescan.io).
+- **Roll dice** at [Dice Club](https://diceclub.cookiebox.app) — provably fair on-chain dice for
+  Cookie Chads holders; every roll is re-derived from the revealed seed before it is reported.
 - **Own a name** — register, transfer, and resolve `.cook` names on the
   [CookOven](https://book.cookoven.xyz) name service, and use them anywhere an address is expected
   (`transfer to: "bot.cook"`).
@@ -452,6 +454,31 @@ in the same transaction, which is what the program demands.
 > liquidator). Pass a lower floor explicitly to accept more risk. Interest accrues per slot, so a loan
 > left alone drifts toward that line; `get_lending_position` projects it to now. Repay works even
 > while the protocol is paused; supplier withdrawals are limited by the reserve's available liquidity.
+
+**Dice Club** ([diceclub.cookiebox.app](https://diceclub.cookiebox.app), program `DiCe5Vcp…`):
+provably fair on-chain dice. Pick a win chance, stake COOK, win if the roll (0.00–99.99) lands under
+it; a win pays `stake × (100 − edge) / chance` (1% edge: 50% → 1.98x, 10% → 9.9x), so the expected
+return is the same at every chance. `get_dice_table` (no key) shows the live rules and limits — edge,
+minimum stake, free bankroll, the largest stake the house takes at common chances (one bet may win at
+most 1% of the free bankroll), the pending queue — and quotes a `chance` / `amount`; `get_dice_bets`
+(no key) lists a wallet's pending bets or, by `nonce`, one bet's verified result. `roll_dice` and
+`refund_dice_bet` need a signer.
+
+- **Members only.** While the program's gate is on, only a wallet holding a verified NFT of the
+  gate's collection (Cookie Chads) may bet. The collection is read from the gate account, the pass
+  (token account + metadata) is found in the wallet and checked exactly as the program checks it, and
+  a non-member is refused before anything is signed.
+- **Fairness.** The house commits to a reverse SHA-256 seed chain up front, bets settle strictly in
+  placement order, and the player's client seed goes into every roll — `roll_dice` generates it here
+  (random, or `clientSeed`), so the house cannot know a roll before the bet lands. `roll_dice` waits
+  for the house's keeper (`waitSeconds`, default 45), then re-derives the roll from the revealed seed:
+  `proof.verified` means the seed opens the commitment and the roll, outcome and payout all recompute
+  (a link to the site's verifier comes with it). A slow keeper returns `pending` — check later with
+  `get_dice_bets`.
+- **Refunds.** A bet the keeper fails to settle within the deadline (~24h) can only be refunded:
+  `refund_dice_bet` returns the stake once the bet is past its deadline and first in line. Each bet
+  also pays ~0.002 COOK of account rent, returned when it settles. At 10 waiting bets the table
+  closes until the keeper catches up.
 
 **Bridge** (need `COOKIE_PRIVATE_KEY`): `bridge` moves a token 1:1 between Cookie Chain and Solana
 mainnet over the [Hyperlane](https://hyperlane.cookiescan.io) warp routes (`token` = a symbol or mint,

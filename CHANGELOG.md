@@ -4,6 +4,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 # Unreleased
 
+### Added
+
+- **Dice Club.** Four tools for provably fair on-chain dice (program `DiCe5Vcp…`,
+  [diceclub.cookiebox.app](https://diceclub.cookiebox.app)): `get_dice_table` (rules, bankroll,
+  limits, quotes and membership; no key), `roll_dice`, `get_dice_bets` (pending bets, or one bet's
+  verified result by nonce; no key) and `refund_dice_bet`. `roll_dice` generates the client seed
+  locally, refuses a bet the program would refuse (stake, chance, bankroll cap, full or paused table,
+  no Cookie Chads pass, balance) before signing, waits for the house's keeper and re-derives the roll
+  from the revealed seed before reporting it.
+
 ### Fixed
 
 - **`add_liquidity` works on Cookiebox DAMM v2 pools whose token charges a Token-2022 transfer fee.**

@@ -89,6 +89,10 @@ export const COOKOVEN_MARKET_URL =
 export const EXPLORER_URL =
   process.env.COOKIE_EXPLORER_URL?.trim().replace(/\/$/, "") || "https://cookiescan.io";
 
+/** Dice Club's site — its fairness page re-verifies a roll from the link `roll_dice` returns. */
+export const DICE_CLUB_SITE_URL =
+  process.env.DICE_CLUB_SITE_URL?.trim().replace(/\/$/, "") || "https://diceclub.cookiebox.app";
+
 export const DEFAULT_SLIPPAGE_BPS =
   Number.parseInt(process.env.COOKIE_SLIPPAGE_BPS ?? "", 10) || 500;
 
@@ -135,6 +139,9 @@ export const PROGRAM_IDS = {
   // Cookiebox Zip (src/idl/zip.json): trailing range orders on CLMM positions. One deployment,
   // not overridable — the IDL's own `address` is checked against this at load.
   zip: "ZiPzPbbMhmUxi6XrRGN6d9qHAKtpWRpGR6orR2y1wEC",
+  // Dice Club (src/idl/cookie_dice.json): provably fair on-chain dice, settled by the house's keeper.
+  // One deployment, not overridable — the IDL's own `address` is checked against this at load.
+  dice: "DiCe5VcpAHGZCz8pMfVSRRDtvQL6adcdYh5p34DEu1j",
 } as const;
 
 /**

@@ -23,6 +23,8 @@ src/
     dca.ts             #   Cookiebox DCA schedules (separate program, same build-verify-sign shape)
     zip/           #   Cookiebox Zip: trailing range orders on CLMM positions — decision (keeper rules, pure)
                        #   + program (PDAs, decoders, owner-signed enable/disable) + index (the three tools)
+    dice/              #   Dice Club: math (payout/bankroll/roll, mirrors the program) + program (PDAs,
+                       #   decoders, place/expire ixs, BetResolved parser) + club (NFT-gate pass) + index
     launchpad/         #   MomoSwap launchpad: api (HTTP client) + curve (quote math) + positions (PDAs)
                        #   + program (which deployment: PDA scope + error-code build)
     nftLaunchpad/      #   MomoSwap NFT drops: api + verify (builds held to the vendored IDL) + curve
