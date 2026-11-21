@@ -8,7 +8,6 @@
 // Ported from cookiedice `src/solana/diceClient.ts` + `src/history/betHistory.ts`.
 import {
   AnchorProvider,
-  BN,
   BorshCoder,
   EventParser,
   Program as AnchorProgram,
@@ -23,6 +22,7 @@ import {
   Transaction,
   type Connection,
 } from "@solana/web3.js";
+import BN from "bn.js";
 import bs58 from "bs58";
 
 import { PROGRAM_IDS } from "../config";

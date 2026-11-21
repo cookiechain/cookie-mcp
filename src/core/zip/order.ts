@@ -6,7 +6,7 @@
 //
 // In pool terms (price = B per A): selling A is a range above the pool price (the position holds
 // only A); selling B is a range below it (holds only B), at the reciprocal prices.
-import { BN } from "@coral-xyz/anchor";
+import BN from "bn.js";
 import { Percentage } from "@orca-so/common-sdk";
 import {
   IGNORE_CACHE,

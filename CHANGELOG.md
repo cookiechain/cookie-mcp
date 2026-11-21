@@ -4,6 +4,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 # Unreleased
 
+### Fixed
+
+- **The server starts on Node 22 again.** 0.9.0 and 0.10.0 crash at startup on Node 22, the minimum
+  version the package declares, with "does not provide an export named 'BN'": Node 22 cannot load
+  `BN` from Anchor's CommonJS build, while newer Node versions can. `BN` now comes from `bn.js`, and a
+  lint rule refuses the old import.
+
 # [0.10.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.10.0)
 
 _November 21, 2026_

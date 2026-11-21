@@ -1,4 +1,4 @@
-import { BN } from "@coral-xyz/anchor";
+import BN from "bn.js";
 import { PriceMath } from "@orca-so/whirlpools-sdk";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import Decimal from "decimal.js";

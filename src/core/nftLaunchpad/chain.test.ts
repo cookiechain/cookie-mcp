@@ -1,4 +1,5 @@
-import { BN, BorshAccountsCoder, type Idl } from "@coral-xyz/anchor";
+import { BorshAccountsCoder, type Idl } from "@coral-xyz/anchor";
+import BN from "bn.js";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 

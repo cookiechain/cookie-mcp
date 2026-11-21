@@ -28,6 +28,22 @@ export default tseslint.config(
         },
       ],
       "@typescript-eslint/no-explicit-any": "off",
+      // @coral-xyz/anchor is CommonJS: Node 22's ESM loader cannot see `BN` among its named exports,
+      // so `import { BN } from "@coral-xyz/anchor"` crashes the published server at startup on
+      // Node 22 (the minimum we support) while passing on newer Node. Shipped in 0.9.0 and 0.10.0.
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@coral-xyz/anchor",
+              importNames: ["BN"],
+              allowTypeImports: true,
+              message: 'Import BN from "bn.js" — Node 22 cannot load it from anchor (CommonJS).',
+            },
+          ],
+        },
+      ],
       "prefer-const": "warn",
     },
   },
