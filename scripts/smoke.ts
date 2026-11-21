@@ -56,6 +56,7 @@ const EXPECTED_TOOLS = [
   "deploy_token",
   "launchpad_buy",
   "launchpad_sell",
+  "transfer_launchpad_shares",
   "claim_launchpad",
   "claim_creator_fees",
   "get_nft_drops",

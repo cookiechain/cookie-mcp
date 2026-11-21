@@ -2,7 +2,14 @@
 import { COOK_MINT, COOK_SYMBOL, explorerTokenUrl } from "./config";
 import { CookieMcpError } from "./errors";
 import { fetchToken, fetchTokens, fetchCookPriceUsd, type CookiescanToken } from "./cookiescan";
-import { launchpadTokenIdentity, type LaunchpadTokenIdentity } from "./launchpad";
+import {
+  launchpadRouteMessage,
+  launchpadTokenIdentity,
+  mapPoolView,
+  poolPhase,
+  type LaunchpadTokenIdentity,
+} from "./launchpad";
+import { fetchLaunchpadConfig, fetchPools, type LaunchpadPool } from "./launchpad/api";
 
 export interface TokenInfo {
   mint: string;
@@ -165,14 +172,28 @@ export interface TokenSearchResult {
   volume24h: number | null;
   holderCount: number | null;
   explorerUrl: string;
+  /**
+   * Present on a MomoSwap launchpad token the Cookiescan registry does not list yet — a launch still on
+   * its curve has no DEX pool, so the registry has not indexed it. Trade it with the launchpad tools.
+   */
+  launchpad?: { pool: string; status: string; note: string };
 }
 
 // Match a token against a lowercased query, best-match-first. 0 = no match. Symbol/name exact beats
 // prefix beats substring; a full-mint match is treated as exact, a mint prefix ranks with prefixes.
 function tokenMatchScore(t: CookiescanToken, q: string): number {
-  const sym = (t.metadata?.symbol ?? "").toLowerCase();
-  const name = (t.metadata?.name ?? "").toLowerCase();
-  const mint = t.mint.toLowerCase();
+  return matchScore(t.metadata?.symbol, t.metadata?.name, t.mint, q);
+}
+
+function matchScore(
+  symbol: string | null | undefined,
+  tokenName: string | null | undefined,
+  tokenMint: string,
+  q: string,
+): number {
+  const sym = (symbol ?? "").toLowerCase();
+  const name = (tokenName ?? "").toLowerCase();
+  const mint = tokenMint.toLowerCase();
   if (mint === q) return 100;
   if (sym === q) return 95;
   if (name === q) return 90;
@@ -226,6 +247,92 @@ export function searchTokenRegistry(
     .map((x) => toSearchResult(x.t, cookPriceUsd));
 }
 
+/**
+ * Rank launchpad launches against a query (pure), skipping mints the registry already returned. Only
+ * launches the registry cannot know yet are worth adding: ones still on (or before) their curve, or
+ * stuck between curve and market. A graduated token is in the registry like any other.
+ */
+export function searchLaunchpadPools(
+  pools: LaunchpadPool[],
+  query: string,
+  exclude: ReadonlySet<string>,
+  tokenDecimals: number,
+  nowSec = Math.floor(Date.now() / 1000),
+): { score: number; result: TokenSearchResult }[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const out: { score: number; result: TokenSearchResult }[] = [];
+  for (const p of pools) {
+    if (exclude.has(p.tokenMint)) continue;
+    const score = matchScore(p.symbol, p.name, p.tokenMint, q);
+    if (score === 0) continue;
+    const status = poolPhase(p, nowSec);
+    const msg = launchpadRouteMessage({ ...p, status });
+    if (!msg) continue; // graduated: the registry's to describe
+    const view = mapPoolView(p, tokenDecimals, undefined, nowSec);
+    out.push({
+      score,
+      result: {
+        mint: p.tokenMint,
+        symbol: p.symbol || null,
+        name: p.name || null,
+        priceUsd: null,
+        priceCook: view.priceCook,
+        liquidityCook: null,
+        liquidityUsd: null,
+        volume24h: null,
+        holderCount: Number(p.participantCount) || null,
+        explorerUrl: explorerTokenUrl(p.tokenMint),
+        launchpad: { pool: p.pubkey, status: view.paired?.phase ?? status, note: msg.hint },
+      },
+    });
+  }
+  return out.sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Merge launchpad matches into registry results (pure). A registry token that is a launch with no
+ * market yet gets the `launchpad` field (the registry lists such mints at 0 liquidity, with no reason);
+ * a launch the registry does not list is added. Ordered by match quality, a registry result winning a
+ * tie.
+ */
+export function mergeLaunchpadMatches(
+  registry: TokenSearchResult[],
+  launchpad: { score: number; result: TokenSearchResult }[],
+  q: string,
+): TokenSearchResult[] {
+  const byMint = new Map(launchpad.map((m) => [m.result.mint, m.result]));
+  const listed = new Set(registry.map((r) => r.mint));
+  return [
+    ...registry.map((r, i) => {
+      const lpHit = byMint.get(r.mint)?.launchpad;
+      return {
+        score: matchScore(r.symbol, r.name, r.mint, q),
+        i,
+        result: lpHit ? { ...r, launchpad: lpHit } : r,
+      };
+    }),
+    ...launchpad
+      .filter((m) => !listed.has(m.result.mint))
+      .map((m, i) => ({ score: m.score, i: registry.length + i, result: m.result })),
+  ]
+    .sort((a, b) => b.score - a.score || a.i - b.i)
+    .map((x) => x.result);
+}
+
+/** Launchpad matches for a query, or [] — the launchpad must never be able to break a registry search. */
+async function launchpadMatches(
+  query: string,
+  exclude: ReadonlySet<string>,
+): Promise<{ score: number; result: TokenSearchResult }[]> {
+  try {
+    const [cfg, pools] = await Promise.all([fetchLaunchpadConfig(), fetchPools("all")]);
+    return searchLaunchpadPools(pools, query, exclude, cfg.defaultTokenDecimals);
+  } catch {
+    return [];
+  }
+}
+
 /** Resolve a token name/ticker/mint-prefix to candidate mints via the Cookiescan registry. */
 export async function searchTokens(
   query: string,
@@ -233,7 +340,12 @@ export async function searchTokens(
 ): Promise<{ query: string; count: number; results: TokenSearchResult[]; note?: string }> {
   const bounded = Math.min(Math.max(limit, 1), 50);
   const [tokens, cookPriceUsd] = await Promise.all([fetchTokens(), fetchCookPriceUsd()]);
-  const results = searchTokenRegistry(tokens, query, bounded, cookPriceUsd);
+  const registry = searchTokenRegistry(tokens, query, bounded, cookPriceUsd);
+  // A fresh launch is not in the registry until it has a market — ask the launchpad too, and merge
+  // by match quality (a registry token wins a tie: it has a market).
+  const q = query.trim().toLowerCase();
+  const lp = await launchpadMatches(query, new Set());
+  const results = mergeLaunchpadMatches(registry, lp, q).slice(0, bounded);
   const seen = new Set<string>();
   let ambiguous = false;
   for (const r of results) {
@@ -242,11 +354,14 @@ export async function searchTokens(
     if (seen.has(s)) ambiguous = true;
     seen.add(s);
   }
+  const onCurve = results.some((r) => r.launchpad);
   const note =
     results.length === 0
       ? "no tokens matched — try a shorter query or a partial symbol/name"
       : ambiguous
         ? "multiple tokens share a symbol; compare liquidity/volume/holders and confirm the mint before trading"
-        : undefined;
+        : onCurve
+          ? "results with `launchpad` are MomoSwap launches with no DEX market (on their curve, migrating, or expired) — `trade` cannot reach them; follow each one's launchpad.note"
+          : undefined;
   return { query, count: results.length, results, note };
 }

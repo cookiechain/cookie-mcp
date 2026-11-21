@@ -90,6 +90,7 @@ import {
   getLaunchpadToken,
   launchpadBuy,
   launchpadSell,
+  transferLaunchpadShares,
   type ClaimKind,
   type ExpiryMode,
   type PoolStatus,
@@ -292,7 +293,9 @@ export function createServer(): McpServer {
         "candidates (most liquid first) with mint, price, liquidity, 24h volume, and holders. Use this " +
         "FIRST whenever the user names a token but you don't have its mint, then pass the chosen mint to " +
         "get_token_info / get_quote / trade. Multiple tokens can share a symbol — compare liquidity and " +
-        "confirm the mint before trading. No wallet needed.",
+        "confirm the mint before trading. Also searches the MomoSwap launchpad: a launch still on its " +
+        "curve (no DEX market yet, so not in the registry) comes back with a `launchpad` field — use " +
+        "get_launchpad_token / launchpad_buy for it, not trade. No wallet needed.",
       inputSchema: {
         query: z.string().min(1).describe('token name, ticker, or mint prefix, e.g. "cookhouse"'),
         limit: z.number().int().min(1).max(50).optional().describe("max results (default 20)"),
@@ -1584,6 +1587,45 @@ export function createServer(): McpServer {
     tool(
       async (a: { ref: string; shares: string | number; unwrap?: boolean; slippageBps?: number }) =>
         launchpadSell(a),
+    ),
+  );
+
+  registerTool(
+    "transfer_launchpad_shares",
+    {
+      title: "Send launchpad curve shares",
+      description:
+        "Send pre-graduation curve shares of a MomoSwap launch to another wallet (address or .cook " +
+        "name) — `transfer` cannot, because shares are program-tracked positions, not tokens. The cost " +
+        "basis moves with them pro rata (it counts toward the recipient's per-wallet cap). Only while " +
+        "the launch is live and past its first-minute anti-snipe window; a first send to a wallet with " +
+        "no position must be at least a minimum buy's worth; the sender pays the recipient position's " +
+        "rent. IRREVERSIBLE: a recipient never used on chain (what a mistyped address looks like) is " +
+        "refused unless `allowUnusedRecipient: true`. The launchpad builds the transaction; it is " +
+        "checked instruction by instruction to be exactly this transfer, then simulated. Paired " +
+        "launches have no shares (send their tokens with transfer)." +
+        SIGNING_NOTE,
+      inputSchema: {
+        ref: z.string().min(32).max(44).describe(POOL_REF),
+        to: z.string().min(3).max(64).describe("recipient wallet address or .cook name"),
+        shares: z
+          .union([z.number().positive(), z.string()])
+          .describe("how many shares to send, as a UI token amount"),
+        allowUnusedRecipient: z
+          .boolean()
+          .optional()
+          .describe(
+            "send even though the recipient has never been used on chain — only after confirming the address",
+          ),
+      },
+    },
+    tool(
+      async (a: {
+        ref: string;
+        to: string;
+        shares: string | number;
+        allowUnusedRecipient?: boolean;
+      }) => transferLaunchpadShares(a),
     ),
   );
 

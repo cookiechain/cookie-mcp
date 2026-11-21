@@ -1,6 +1,15 @@
 import { describe, it, expect } from "vitest";
 
-import { launchpadOnlyTokenInfo, looksUnpriced, mapTokenInfo, searchTokenRegistry } from "./token";
+import {
+  launchpadOnlyTokenInfo,
+  looksUnpriced,
+  mapTokenInfo,
+  mergeLaunchpadMatches,
+  searchLaunchpadPools,
+  searchTokenRegistry,
+  type TokenSearchResult,
+} from "./token";
+import type { LaunchpadPool } from "./launchpad/api";
 import type { CookiescanToken } from "./cookiescan";
 
 const token: CookiescanToken = {
@@ -185,5 +194,86 @@ describe("searchTokenRegistry", () => {
   it("returns [] for a blank query or no match", () => {
     expect(searchTokenRegistry(registry, "   ", 10)).toEqual([]);
     expect(searchTokenRegistry(registry, "nonexistenttoken", 10)).toEqual([]);
+  });
+});
+
+describe("launchpad matches in search_tokens", () => {
+  const pool = (over: Partial<LaunchpadPool>): LaunchpadPool =>
+    ({
+      pubkey: "Pool1111111111111111111111111111111111111111",
+      creator: "11111111111111111111111111111111",
+      name: "Fresh Launch",
+      symbol: "FRESH",
+      tokenMint: "Fresh11111111111111111111111111111111111momo",
+      launchTs: 1_000,
+      endTs: 100_000,
+      expiryMode: "fair",
+      state: "open",
+      status: "live",
+      minBuy: "0",
+      maxBuyPerWallet: "0",
+      saleTokenSupply: "800000000000000",
+      virtualPaymentReserve: "30000000000000",
+      virtualTokenReserve: "1073000000000000",
+      tokensSold: "0",
+      paymentRaisedNet: "0",
+      graduationTarget: "1000000000000000",
+      participantCount: "3",
+      antiSnipe: false,
+      ...over,
+    }) as LaunchpadPool;
+  const registryHit = (mint: string, symbol: string): TokenSearchResult => ({
+    mint,
+    symbol,
+    name: symbol,
+    priceUsd: null,
+    priceCook: null,
+    liquidityCook: 0,
+    liquidityUsd: null,
+    volume24h: null,
+    holderCount: null,
+    explorerUrl: "",
+  });
+
+  it("finds a live launch by symbol, pointing at the launchpad tools", () => {
+    const [hit] = searchLaunchpadPools([pool({})], "fresh", new Set(), 6, 2_000);
+    expect(hit?.result.launchpad).toMatchObject({ status: "live" });
+    expect(hit?.result.launchpad?.note).toMatch(/launchpad_buy/);
+  });
+
+  it("leaves graduated launches to the registry", () => {
+    expect(
+      searchLaunchpadPools([pool({ status: "graduated" })], "fresh", new Set(), 6, 2_000),
+    ).toEqual([]);
+  });
+
+  it("annotates a registry token that is still a launch, and adds one the registry lacks", () => {
+    const lp = searchLaunchpadPools(
+      [
+        pool({}),
+        pool({ symbol: "FRESHER", tokenMint: "Other1111111111111111111111111111111111momo" }),
+      ],
+      "fresh",
+      new Set(),
+      6,
+      2_000,
+    );
+    const merged = mergeLaunchpadMatches([registryHit(pool({}).tokenMint, "FRESH")], lp, "fresh");
+    expect(merged.map((r) => r.symbol)).toEqual(["FRESH", "FRESHER"]);
+    expect(merged[0]?.launchpad?.status).toBe("live");
+    expect(merged[1]?.launchpad).toBeDefined();
+  });
+
+  it("keeps registry order for non-launch tokens and ranks by match quality", () => {
+    const lp = searchLaunchpadPools(
+      [pool({ symbol: "XFRESH", name: "x" })],
+      "fresh",
+      new Set(),
+      6,
+      2_000,
+    );
+    const merged = mergeLaunchpadMatches([registryHit("Reg1", "FRESH")], lp, "fresh");
+    expect(merged.map((r) => r.symbol)).toEqual(["FRESH", "XFRESH"]);
+    expect(merged[0]?.launchpad).toBeUndefined();
   });
 });

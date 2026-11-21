@@ -102,6 +102,10 @@ const LAUNCHPAD_ERRORS: Record<number, string> = {
   // freeze the raise forever: `Fair` pools re-open after one hour (a Fair expiry pays holders pro-rata,
   // so little is at stake), every other expiry mode after 30 days.
   6048: "this pool met its graduation target, so it has to graduate rather than expire — the permissionless claim/expiry path only re-opens if it doesn't (one hour after the launch ended for a fair-mode pool, 30 days for any other mode)",
+  // Share transfers (`transfer.rs`).
+  6060: "that recipient cannot receive shares: it must be another wallet, not the sender, a program or a program-owned account",
+  6061: "shares cannot be transferred during the launch's anti-snipe window",
+  6062: "a first transfer to a wallet that holds no position must be at least a minimum buy's worth of shares",
   // Paired launches (anchor #125), appended after 6062.
   6063: "paired launches are not configured on the launchpad yet",
   6064: "that pair asset is not active on the launchpad's allowlist",

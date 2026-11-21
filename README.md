@@ -384,6 +384,14 @@ and `claim_creator_fees` sweeps the creator's share of trading fees from a launc
 > appear in `get_balance` and `trade` cannot route them. Exit with `launchpad_sell`, or claim the real
 > token with `claim_launchpad` once the pool graduates; from then on it trades like any other token.
 
+Shares can be **sent to another wallet** with `transfer_launchpad_shares` (address or `.cook` name):
+`transfer` cannot move them, because they are positions, not tokens. Only while the launch is live and
+past its first-minute anti-snipe window; a first send to a wallet with no position must be at least a
+minimum buy's worth, and the cost basis moves with the shares (it counts toward the recipient's
+per-wallet cap). A recipient never used on chain — what a mistyped address looks like — is refused
+unless `allowUnusedRecipient: true`, since shares sent there never come back. The launchpad builds the
+transaction, and it is held instruction by instruction to exactly that transfer before signing.
+
 Because those shares are invisible to `get_balance`, **`get_launchpad_positions`** is the portfolio
 view: every launch a wallet has a position in, what it is worth on a live curve, and what is unclaimed
 (tokens after graduation, a Fair-mode refund, a settlement payout, creator fees or vesting). It reads
@@ -391,8 +399,9 @@ the `UserPosition` accounts straight from the chain in batches, so it costs abou
 per 100 launches. Pass `owner` for any wallet, or omit it for your own.
 
 A pre-graduation token also has no DEX pool at all, so `get_quote` / `trade` would just report "no
-route". They now recognise that case and point at the launchpad tools instead, and `get_token_info`
-adds a `launchpad` field when a mint shows no price or liquidity because it is still on a curve.
+route". They now recognise that case and point at the launchpad tools instead, and `get_token_info` and
+`search_tokens` add a `launchpad` field when a mint shows no price or liquidity because it is still on a
+curve (or expired on one). `search_tokens` also finds launches the Cookiescan registry has not listed.
 
 **Paired launches** (MomoSwap's holder-reward tokens). A paired launch mints a **Token-2022** token
 whose every transfer — buys and sells included — withholds a holder tax (1–3%); the launchpad sells

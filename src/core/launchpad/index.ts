@@ -64,6 +64,7 @@ import {
   buildCreatePoolTx,
   buildSellPairedTx,
   buildSellTx,
+  buildTransferSharesTx,
   fetchHolderRewards,
   fetchLaunchpadConfig,
   fetchPairAssets,
@@ -97,6 +98,8 @@ import {
 import { poolFeeShareBps, poolTradeFeeBps } from "./fees";
 import {
   decodeTokenAmount,
+  decodeUserPosition,
+  userPositionPda,
   fetchCreatorFeeVaults,
   fetchPoolPrograms,
   fetchPositionsForPools,
@@ -114,6 +117,7 @@ import {
   type PairedQuote,
 } from "./paired";
 import { launchpadErrorMessage, launchpadProgramIdFromTx } from "./program";
+import { transferSharesRefusal, verifyTransferSharesTx } from "./shareTransfer";
 import { launchpadSessionToken, resetLaunchpadSession } from "./session";
 
 const MIN_DURATION_SECS = 60;
@@ -2970,6 +2974,181 @@ async function launchpadSellPaired(p: {
     },
     remainingShares: rawToUi(held - tokensRaw, decs),
     paired: pairedInfo(pool, q, decs, slippageBps),
+    links: { token: launchpadTokenUrl(pool.tokenMint) },
+  };
+}
+
+// --- share transfers ----------------------------------------------------------------------------
+
+export interface TransferSharesResult {
+  signature: string;
+  explorerUrl: string;
+  pool: string;
+  mint: string;
+  symbol: string;
+  to: string;
+  toName?: string;
+  sent: { shares: string; symbol: string };
+  /** COOK of cost basis that moved with the shares (it counts toward the recipient's wallet cap). */
+  costBasisMovedCook: string | null;
+  remainingShares: string;
+  /** True when this transfer opened the recipient's position (its rent was paid by this wallet). */
+  createdRecipientPosition: boolean;
+  links: { token: string };
+}
+
+/**
+ * Send curve shares to another wallet (`transfer_shares`). Checked here first against the chain the
+ * way the program will check it, built by the launchpad API, then held instruction by instruction to
+ * exactly this transfer before signing (shares are program state, which the spend guard cannot see).
+ */
+export async function transferLaunchpadShares(args: {
+  ref: string;
+  to: string;
+  shares: string | number;
+  allowUnusedRecipient?: boolean;
+}): Promise<TransferSharesResult> {
+  const signer = requireSigner();
+  const sender = signer.publicKey;
+  const [cfg, pool] = await Promise.all([fetchLaunchpadConfig(), resolvePool(args.ref)]);
+  if (isPairedPool(pool)) {
+    throw new CookieMcpError(
+      "a paired launch has no curve shares — its holdings are real tokens",
+      `send them with transfer (mint ${pool.tokenMint}); note the ${taxPct(pool.taxBps ?? 0)} holder tax comes off what the recipient receives`,
+    );
+  }
+  const phase = poolPhase(pool, nowSeconds());
+  if (phase !== "live" && phase !== "upcoming") {
+    throw new CookieMcpError(
+      `shares can only be sent while the launch is live; this one is ${phase}`,
+      phase === "graduated"
+        ? "claim the real token with claim_launchpad, then send it with transfer"
+        : "an ended or expired launch's shares can only be settled with claim_launchpad",
+    );
+  }
+  const resolved = await resolveWallet(args.to, "recipient");
+  const recipient = resolved.pubkey;
+  if (recipient.equals(sender)) {
+    throw new CookieMcpError("you cannot send shares to yourself", "pass another wallet as `to`");
+  }
+  const decs = await tokenDecimals(pool, cfg);
+  let sharesRaw: bigint;
+  try {
+    sharesRaw = uiToRaw(args.shares, decs);
+  } catch {
+    throw new CookieMcpError(
+      `invalid shares "${args.shares}"`,
+      `pass a positive amount with at most ${decs} decimals`,
+    );
+  }
+  if (sharesRaw <= 0n)
+    throw new CookieMcpError("shares must be greater than 0", "pass a positive amount");
+
+  // Positions are PDAs of the deployment that owns the pool — read it, never assume it.
+  const conn = getConnection();
+  const poolPk = new PublicKey(pool.pubkey);
+  const programId =
+    (await fetchPoolPrograms(conn, [pool.pubkey])).get(pool.pubkey) ??
+    new PublicKey(PROGRAM_IDS.momoswapLaunchpad);
+  const [senderInfo, recipientPosInfo, recipientInfo] = await conn.getMultipleAccountsInfo(
+    [
+      userPositionPda(poolPk, sender, programId),
+      userPositionPda(poolPk, recipient, programId),
+      recipient,
+    ],
+    "confirmed",
+  );
+  const own = (i: typeof senderInfo) =>
+    i && i.owner.equals(programId) ? decodeUserPosition(i.data) : null;
+  const senderPos = own(senderInfo);
+  const recipientPos = own(recipientPosInfo);
+  // A min_buy purchase's worth at the current price — only when this transfer creates the position.
+  const minBuy = BigInt(pool.minBuy);
+  let newHolderMin: bigint | null = null;
+  if (!recipientPos && minBuy > 0n) {
+    try {
+      const out = estimateBuy(pool, minBuy, poolTradeFeeBps(pool, cfg)).tokensOutRaw;
+      newHolderMin = out > 0n ? out : null;
+    } catch {
+      newHolderMin = null;
+    }
+  }
+  const refusal = transferSharesRefusal({
+    now: nowSeconds(),
+    launchTs: pool.launchTs,
+    endTs: pool.endTs,
+    antiSnipe: pool.antiSnipe,
+    senderShares: senderPos ? BigInt(senderPos.shares) : 0n,
+    shares: sharesRaw,
+    recipientAccount:
+      recipientInfo && recipientInfo.lamports > 0
+        ? { owner: recipientInfo.owner, executable: recipientInfo.executable }
+        : null,
+    recipientOnCurve: PublicKey.isOnCurve(recipient.toBytes()),
+    recipientHasPosition: recipientPos !== null,
+    newHolderMinShares: newHolderMin,
+    allowUnusedRecipient: args.allowUnusedRecipient === true,
+    fmt: (raw) => `${rawToUi(raw, decs)} ${pool.symbol}`,
+  });
+  if (refusal) throw refusal;
+
+  const built = await buildTransferSharesTx({
+    wallet: sender.toBase58(),
+    pool: pool.pubkey,
+    recipient: recipient.toBase58(),
+    shares: sharesRaw.toString(),
+  });
+  let tx: Transaction | VersionedTransaction;
+  try {
+    tx = deserializeBuilt(built);
+  } catch {
+    throw new CookieMcpError(
+      "the launchpad returned a malformed transfer",
+      "retry; nothing was sent",
+    );
+  }
+  const wrong =
+    tx instanceof VersionedTransaction
+      ? "it is a versioned transaction, which this transfer never needs"
+      : verifyTransferSharesTx(tx, {
+          programId,
+          sender,
+          recipient,
+          pool: poolPk,
+          shares: sharesRaw,
+        });
+  if (wrong) {
+    throw new CookieMcpError(
+      `refusing this share transfer: ${wrong}`,
+      "nothing was signed or sent; retry — report it if it persists",
+    );
+  }
+  // Only fees and the recipient position's rent may leave the wallet (well inside the fee allowance).
+  const signature = await submitBuilt(
+    built,
+    signer,
+    "share transfer",
+    nativeBudget(0n),
+    undefined,
+    {
+      ref: args.ref,
+      to: recipient.toBase58(),
+      shares: rawToUi(sharesRaw, decs),
+    },
+  );
+
+  return {
+    signature,
+    explorerUrl: explorerTxUrl(signature),
+    pool: pool.pubkey,
+    mint: pool.tokenMint,
+    symbol: pool.symbol,
+    to: recipient.toBase58(),
+    ...(resolved.name ? { toName: resolved.name } : {}),
+    sent: { shares: rawToUi(sharesRaw, decs), symbol: pool.symbol },
+    costBasisMovedCook: built.paymentInMoved ? rawToUi(built.paymentInMoved, COOK_DECIMALS) : null,
+    remainingShares: rawToUi(BigInt(senderPos!.shares) - sharesRaw, decs),
+    createdRecipientPosition: recipientPos === null,
     links: { token: launchpadTokenUrl(pool.tokenMint) },
   };
 }

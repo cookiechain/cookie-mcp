@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Dice Club.** Four tools for provably fair on-chain dice (program `DiCe5Vcp…`,
+  [diceclub.cookiebox.app](https://diceclub.cookiebox.app)): `get_dice_table` (rules, bankroll,
+  limits, quotes and membership; no key), `roll_dice`, `get_dice_bets` (pending bets, or one bet's
+  verified result by nonce; no key) and `refund_dice_bet`. `roll_dice` generates the client seed
+  locally, refuses a bet the program would refuse (stake, chance, bankroll cap, full or paused table,
+  no Cookie Chads pass, balance) before signing, waits for the house's keeper and re-derives the roll
+  from the revealed seed before reporting it.
+
 - **MomoSwap paired launches.** Every launchpad tool now handles paired launches (Token-2022 tokens with
   a 1–3% holder tax, paid out to holders daily in a pair asset). New `get_launchpad_pair_assets` lists
   the pair assets and tax tiers; `deploy_token` takes `pairAsset` + `holderTaxPct`; `launchpad_buy` /
@@ -14,13 +22,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `get_launchpad_positions` lists `pairedHoldings` with holder rewards. `claim_launchpad` explains that
   a paired pool has nothing for holders to claim.
 
-- **Dice Club.** Four tools for provably fair on-chain dice (program `DiCe5Vcp…`,
-  [diceclub.cookiebox.app](https://diceclub.cookiebox.app)): `get_dice_table` (rules, bankroll,
-  limits, quotes and membership; no key), `roll_dice`, `get_dice_bets` (pending bets, or one bet's
-  verified result by nonce; no key) and `refund_dice_bet`. `roll_dice` generates the client seed
-  locally, refuses a bet the program would refuse (stake, chance, bankroll cap, full or paused table,
-  no Cookie Chads pass, balance) before signing, waits for the house's keeper and re-derives the roll
-  from the revealed seed before reporting it.
+- **`transfer_launchpad_shares`** sends pre-graduation curve shares of a MomoSwap launch to another
+  wallet (address or `.cook` name), which `transfer` cannot. The program's refusals are checked first
+  (live launch, anti-snipe window, balance, recipient, first-send minimum), a never-used recipient is
+  refused unless `allowUnusedRecipient: true`, and the launchpad's build is verified instruction by
+  instruction to be exactly that transfer before signing.
+- **`search_tokens` covers the MomoSwap launchpad.** A launch the Cookiescan registry has not listed
+  is found too, and a launch with no market (on its curve, migrating or expired) carries a `launchpad`
+  field saying why it shows no liquidity and which tool reaches it.
 
 ### Fixed
 

@@ -366,6 +366,26 @@ export async function buildCreatePoolTx(body: {
   return post<BuiltTx>("/tx/create-pool", body, "launch build", UPLOAD_TIMEOUT_MS);
 }
 
+/**
+ * `transfer_shares`: send curve shares to another wallet. The API checks the transfer against the chain
+ * first and answers 400 with a stable code (e.g. "not_open", "below_minimum") when the program would
+ * refuse it. `paymentInMoved` is the cost basis (raw COOK) that moves with the shares.
+ */
+export async function buildTransferSharesTx(body: {
+  wallet: string;
+  pool: string;
+  recipient: string;
+  shares: string;
+}): Promise<
+  BuiltTx & {
+    paymentInMoved?: string;
+    recipientExists?: boolean;
+    minSharesForNewHolder?: string | null;
+  }
+> {
+  return post("/tx/transfer-shares", body, "share transfer build");
+}
+
 /** One pair asset a paired launch may name (the on-chain allowlist, active entries only). */
 export interface PairAsset {
   mint: string;
