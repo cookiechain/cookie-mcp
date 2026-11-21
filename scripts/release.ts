@@ -13,9 +13,11 @@
  *   7. npm publish, then `npm view` + a pinned `npx -y cookie-mcp@X.Y.Z` boot from an empty dir
  *   8. MCP Registry publish, then confirm the registry serves the version
  *
- * Requires MCP_GITHUB_TOKEN: a classic GitHub PAT with `read:org` from an owner of the cookiechain
- * org. `mcp-publisher login github`'s device flow can't see an org that restricts OAuth apps, so it
- * only grants `io.github.<user>/*` and the publish 403s. Set it without leaving it in history:
+ * Requires MCP_GITHUB_TOKEN: ONE classic GitHub PAT, from an owner of the cookiechain org, with
+ * `repo` (the GitHub release is created through the REST API with it — no `gh`, whose own login may
+ * be another account) and `read:org` (the MCP Registry: `mcp-publisher login github`'s device flow
+ * can't see an org that restricts OAuth apps, so it only grants `io.github.<user>/*` and the publish
+ * 403s). Preflight checks that the token can push to the repo. Set it without leaving it in history:
  *   read -s MCP_GITHUB_TOKEN && export MCP_GITHUB_TOKEN
  *
  * Re-running with the same explicit version resumes: every step checks whether it already happened
@@ -24,14 +26,13 @@
  * nothing. Nothing leaves the machine until you confirm (or pass `--yes`).
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 
 const PKG = "cookie-mcp";
 const MCP_NAME = "io.github.cookiechain/cookie-mcp";
 const REPO_URL = "https://github.com/cookiechain/cookie-mcp";
+const REPO_API = "https://api.github.com/repos/cookiechain/cookie-mcp";
 const REGISTRY = "https://registry.modelcontextprotocol.io/v0.1/servers";
 const BRANCH = "main";
 const RELEASE_FILES = ["package.json", "server.json", "CHANGELOG.md", "src/version.ts"];
@@ -58,6 +59,30 @@ const fail = (msg: string): never => {
 const step = (title: string) => console.log(`\n▶ ${title}`);
 const skip = (why: string) => console.log(`  ↷ skipped: ${why}`);
 const ok = (msg: string) => console.log(`  ✓ ${msg}`);
+
+/**
+ * GitHub REST with MCP_GITHUB_TOKEN. The token is only ever sent as the Authorization header — never
+ * printed, never put on a command line.
+ */
+async function github(
+  url: string,
+  init: { method?: string; body?: unknown } = {},
+): Promise<{ status: number; data: any }> {
+  const token = process.env.MCP_GITHUB_TOKEN?.trim();
+  if (!token) fail("MCP_GITHUB_TOKEN is not set");
+  const res = await fetch(url, {
+    method: init.method ?? "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": `${PKG}-release`,
+      ...(init.body !== undefined ? { "Content-Type": "application/json" } : {}),
+    },
+    ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+  });
+  return { status: res.status, data: await res.json().catch(() => null) };
+}
 
 /** Run a command with inherited stdio; throw on non-zero exit. */
 function run(cmd: string, args: string[]) {
@@ -165,7 +190,7 @@ function originHasRelease(version: string): boolean {
   );
 }
 
-function preflight(version: string) {
+async function preflight(version: string) {
   step("Preflight");
   const branch = capture("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
   if (branch !== BRANCH) fail(`on branch ${branch}; releases are cut from ${BRANCH}`);
@@ -204,8 +229,28 @@ function preflight(version: string) {
 
   // Logins only matter for the publish half, so a dry run reports them instead of stopping.
   const needLogin = (msg: string) => (dryRun ? console.log(`  ⚠ ${msg}`) : fail(msg));
-  if (probe("gh", ["auth", "status"]) === null)
-    needLogin("gh is not logged in — run `gh auth login`");
+  if (!process.env.MCP_GITHUB_TOKEN?.trim()) {
+    needLogin(
+      "MCP_GITHUB_TOKEN is not set — a classic GitHub PAT with `repo` + `read:org` from an owner of " +
+        "the cookiechain org. Run `read -s MCP_GITHUB_TOKEN && export MCP_GITHUB_TOKEN`, then re-run",
+    );
+  } else {
+    // The same token creates the GitHub release, so it must be able to write to the repo.
+    const [user, repo] = await Promise.all([
+      github("https://api.github.com/user"),
+      github(REPO_API),
+    ]);
+    if (user.status !== 200) {
+      needLogin(`MCP_GITHUB_TOKEN is not a valid GitHub token (GET /user → ${user.status})`);
+    } else if (repo.status !== 200 || repo.data?.permissions?.push !== true) {
+      needLogin(
+        `MCP_GITHUB_TOKEN (${user.data.login}) cannot write to ${REPO_URL} — it needs the \`repo\` scope ` +
+          "and push access",
+      );
+    } else {
+      ok(`GitHub token: ${user.data.login}, can push to cookiechain/cookie-mcp`);
+    }
+  }
   if (probe("mcp-publisher", ["--help"]) === null) {
     fail("mcp-publisher missing — `brew install mcp-publisher`");
   }
@@ -319,29 +364,35 @@ function pushRelease(version: string) {
   ok(`origin/${BRANCH} is at ${tagCommit.slice(0, 7)} (${tag})`);
 }
 
-function githubRelease(version: string) {
+async function githubRelease(version: string) {
   step("GitHub release");
   const tag = `v${version}`;
-  if (probe("gh", ["release", "view", tag, "--json", "tagName"]) !== null) {
-    return skip(`${tag} exists`);
+  const existing = await github(`${REPO_API}/releases/tags/${tag}`);
+  if (existing.status === 200) return skip(`${tag} exists: ${existing.data.html_url}`);
+  if (existing.status !== 404) fail(`GitHub: GET release ${tag} → ${existing.status}`);
+  // The tag is on origin (pushRelease checked it); an unknown tag would make GitHub create one at the
+  // default branch's head instead, so confirm it first rather than let that happen silently.
+  const ref = await github(`${REPO_API}/git/ref/tags/${tag}`);
+  if (ref.status !== 200) fail(`GitHub does not see tag ${tag} (GET ref → ${ref.status})`);
+  const created = await github(`${REPO_API}/releases`, {
+    method: "POST",
+    body: {
+      tag_name: tag,
+      name: version,
+      body: releaseNotes(readFileSync("CHANGELOG.md", "utf8"), version),
+      draft: false,
+      prerelease: false,
+    },
+  });
+  if (created.status !== 201) {
+    fail(
+      `GitHub: create release ${tag} → ${created.status} ${created.data?.message ?? ""}`.trim() +
+        (created.status === 403 || created.status === 404
+          ? " — MCP_GITHUB_TOKEN needs the `repo` scope and push access to the repo"
+          : ""),
+    );
   }
-  const dir = mkdtempSync(join(tmpdir(), "cookie-mcp-release-"));
-  const notes = join(dir, "notes.md");
-  writeFileSync(notes, releaseNotes(readFileSync("CHANGELOG.md", "utf8"), version) + "\n");
-  try {
-    run("gh", [
-      "release",
-      "create",
-      tag,
-      "--title",
-      version,
-      "--notes-file",
-      notes,
-      "--verify-tag",
-    ]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  ok(`created ${created.data.html_url}`);
 }
 
 async function npmPublish(version: string) {
@@ -394,14 +445,8 @@ async function registryPublish(version: string) {
 // ── main ───────────────────────────────────────────────────────────────────────────────────────
 
 async function main() {
-  if (!process.env.MCP_GITHUB_TOKEN) {
-    fail(
-      "MCP_GITHUB_TOKEN is not set — the MCP Registry publish needs a classic GitHub PAT with " +
-        "`read:org`. Run `read -s MCP_GITHUB_TOKEN && export MCP_GITHUB_TOKEN`, then re-run",
-    );
-  }
   const version = resolveVersion();
-  preflight(version);
+  await preflight(version);
   bumpVersion(version);
   updateChangelog(version);
   gate();
@@ -420,7 +465,7 @@ async function main() {
     `Push v${version} to origin/${BRANCH}, create the GitHub release and publish to npm + MCP Registry?`,
   );
   pushRelease(version);
-  githubRelease(version);
+  await githubRelease(version);
   await npmPublish(version);
   await registryPublish(version);
 

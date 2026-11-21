@@ -757,8 +757,11 @@ commits and tags locally, shows the release notes and asks once, then pushes the
 `main`, creates the GitHub release and publishes to npm and the registry. Finished steps are
 detected and skipped, so a failed run resumes with the same command. `--dry-run` runs the
 preflight, gate and tarball check without changing anything, and `--yes` skips the confirmation
-before pushing and publishing. It refuses to start without `MCP_GITHUB_TOKEN`, a classic PAT with `read:org`
-(see step 7); `read -s MCP_GITHUB_TOKEN && export MCP_GITHUB_TOKEN` keeps it out of shell history.
+before pushing and publishing. It needs one token, `MCP_GITHUB_TOKEN`: a classic PAT from an owner
+of the GitHub org with `repo` (the GitHub release is created through the REST API with it — the `gh`
+CLI is not used) and `read:org` (the registry, see step 7). Preflight checks that it can push to the
+repo, and refuses to publish without it (a dry run only warns);
+`read -s MCP_GITHUB_TOKEN && export MCP_GITHUB_TOKEN` keeps it out of shell history.
 
 1. **Bump the version in four places**, all to the same string: `package.json` `version`,
    `src/version.ts` (the version the MCP handshake reports), and `server.json` both top-level
