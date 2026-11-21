@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`add_liquidity` works on Cookiebox DAMM v2 pools whose token charges a Token-2022 transfer fee.**
+  It used to fail with `ExceededSlippage` (6002): the program checks the deposit limits against the
+  amount debited with the fee on top. `amountA` / `amountB` are now the most that leaves the wallet,
+  and the fee comes out of them, so the pool receives slightly less than the amount named.
 - **`get_wallet_nfts` lists every NFT the wallet holds.** It used to return Baked Bazaar's per-wallet
   view, which can miss most of a wallet (8 of 175 for one holder). The holdings now come from the
   chain (each classic-token account holding one unit of a 0-decimal mint that has Metaplex metadata),

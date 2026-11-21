@@ -36,6 +36,7 @@ import {
 } from "@solana/spl-token";
 
 import cpAmmIdl from "../../idl/cp_amm.json" with { type: "json" };
+import { netOfTransferFee, type TransferFeeRate } from "../transferFee";
 
 export const CP_AMM_PROGRAM_ID = new PublicKey("DAMMjDCEFTDkt7ywazZS8GoaLtjb3HaJo3pLbf64xrPY");
 
@@ -146,6 +147,20 @@ function wrapNativeIxs(
     SystemProgram.transfer({ fromPubkey: owner, toPubkey: ata, lamports }),
     createSyncNativeInstruction(ata),
   ];
+}
+
+/**
+ * Sizes one side of an add_liquidity from the wallet budget `max`. The program debits the
+ * transfer-fee-INCLUDED amount and compares THAT with the threshold, so a threshold equal to the
+ * pool-side deposit reverts with ExceededSlippage (6002) on any Token-2022 transfer-fee mint.
+ * Liquidity is therefore sized from what arrives in the vault and the threshold stays at the budget:
+ * the wallet never pays more than the amount it named. Identity without a fee.
+ */
+export function addLiquidityBudget(
+  max: bigint,
+  rate: TransferFeeRate | null | undefined,
+): { deposit: bigint; threshold: bigint } {
+  return { deposit: netOfTransferFee(max, rate), threshold: max };
 }
 
 interface AddLiquidityBuild {

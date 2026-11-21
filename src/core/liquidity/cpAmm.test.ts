@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { PublicKey } from "@solana/web3.js";
 
 import {
+  addLiquidityBudget,
   CP_AMM_PROGRAM_ID,
   DAMM_CREATE_CONFIG,
   derivePoolAuthority,
@@ -50,5 +51,46 @@ describe("PDA derivation (golden)", () => {
     expect(derivePositionNftAccount(NFT).toBase58()).toBe(
       "GqypixwUkEssVFJGanScbfyMAVtoE52EH2xj6pHrVo1A",
     );
+  });
+});
+
+/** Port of SPL Token-2022 `calculate_inverse_fee` — the fee-included debit add_liquidity checks. */
+function onChainFeeIncluded(deposit: bigint, bps: bigint, maxFee: bigint): bigint {
+  if (deposit === 0n) return 0n;
+  if (bps === 10_000n) return deposit + maxFee;
+  const raw = (deposit * 10_000n + (10_000n - bps) - 1n) / (10_000n - bps);
+  return raw - deposit >= maxFee ? deposit + maxFee : raw;
+}
+
+describe("addLiquidityBudget", () => {
+  it("is the identity without a transfer fee", () => {
+    expect(addLiquidityBudget(1_000_000_000n, null)).toEqual({
+      deposit: 1_000_000_000n,
+      threshold: 1_000_000_000n,
+    });
+  });
+
+  it("sizes the deposit from what arrives, so a 3% fee mint stays inside the threshold (6002)", () => {
+    const rate = { bps: 300, maxFee: 1_000_000_000_000n };
+    const { deposit, threshold } = addLiquidityBudget(1_000_000_000n, rate);
+    expect(deposit).toBe(970_000_000n);
+    expect(threshold).toBe(1_000_000_000n);
+    // The un-adjusted deposit (= the budget) is what reverted: its debit exceeds the threshold.
+    expect(onChainFeeIncluded(threshold, 300n, rate.maxFee)).toBeGreaterThan(threshold);
+    expect(onChainFeeIncluded(deposit, 300n, rate.maxFee)).toBeLessThanOrEqual(threshold);
+  });
+
+  it("holds for capped, tiny and 100% fees", () => {
+    for (const [bps, maxFee] of [
+      [1, 1_000_000_000_000n],
+      [300, 5_000n],
+      [9_999, 1_000_000_000_000n],
+      [10_000, 5_000n],
+    ] as const) {
+      for (const max of [1n, 97n, 9_999n, 1_000_000_000n, 123_456_789_012n]) {
+        const { deposit, threshold } = addLiquidityBudget(max, { bps, maxFee });
+        expect(onChainFeeIncluded(deposit, BigInt(bps), maxFee)).toBeLessThanOrEqual(threshold);
+      }
+    }
   });
 });

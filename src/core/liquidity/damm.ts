@@ -5,6 +5,7 @@
 // program id, which fails on the fork (ConstraintSeeds), so we build those instructions ourselves via
 // the Cookie anchor Program with Cookie-derived accounts (see ./cpAmm.ts). All ops are live-verified on
 // Cookie Chain. Simulate-before-send on every op.
+import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import { Keypair, PublicKey, type Connection } from "@solana/web3.js";
 import BN from "bn.js";
 
@@ -13,8 +14,10 @@ import { CookieMcpError } from "../errors";
 import { getConnection } from "../rpc";
 import { requireSigner } from "../wallet";
 import { uiToRaw } from "../format";
+import { fetchMintPrograms, mintProgramOf, type TransferFeeRate } from "../transferFee";
 import { signSendConfirm, LP_NOTE } from "./send";
 import {
+  addLiquidityBudget,
   buildCpAmmDeps,
   buildCreatePositionAndAddLiquidityTx,
   buildCreatePoolTx,
@@ -99,6 +102,21 @@ async function loadPool(conn: Connection, poolStr: string): Promise<PoolCtx> {
   };
 }
 
+/** Each side's active Token-2022 transfer fee — one extra read, and only when a side is Token-2022. */
+async function poolTransferFees(
+  conn: Connection,
+  ctx: PoolCtx,
+): Promise<{ a: TransferFeeRate | null; b: TransferFeeRate | null }> {
+  if (![ctx.aProgram, ctx.bProgram].some((p) => p.equals(TOKEN_2022_PROGRAM_ID))) {
+    return { a: null, b: null };
+  }
+  const programs = await fetchMintPrograms(conn, [ctx.state.tokenAMint, ctx.state.tokenBMint]);
+  return {
+    a: mintProgramOf(programs, ctx.state.tokenAMint).transferFee,
+    b: mintProgramOf(programs, ctx.state.tokenBMint).transferFee,
+  };
+}
+
 export interface LpResult {
   signature: string;
   pool: string;
@@ -125,9 +143,14 @@ export async function addLiquidity(args: {
   const maxA = args.amountA != null ? uiToRaw(args.amountA, ctx.aDecimals) : 0n;
   const maxB = args.amountB != null ? uiToRaw(args.amountB, ctx.bDecimals) : 0n;
 
+  // amountA / amountB are what may leave the wallet; a transfer fee comes out of them.
+  const fees = await poolTransferFees(conn, ctx);
+  const a = addLiquidityBudget(maxA, fees.a);
+  const b = addLiquidityBudget(maxB, fees.b);
+
   const liquidityDelta = ctx.deps.cpAmm.getLiquidityDelta({
-    maxAmountTokenA: new BN(maxA.toString()),
-    maxAmountTokenB: new BN(maxB.toString()),
+    maxAmountTokenA: new BN(a.deposit.toString()),
+    maxAmountTokenB: new BN(b.deposit.toString()),
     sqrtPrice: ctx.state.sqrtPrice,
     sqrtMinPrice: ctx.state.sqrtMinPrice,
     sqrtMaxPrice: ctx.state.sqrtMaxPrice,
@@ -147,10 +170,10 @@ export async function addLiquidity(args: {
     liquidityDelta,
     maxAmountTokenA: new BN(maxA.toString()),
     maxAmountTokenB: new BN(maxB.toString()),
-    // Thresholds are the MAX each side may cost (upward slippage bound); the deposit for liquidityDelta
-    // is ≤ these by construction.
-    tokenAAmountThreshold: new BN(maxA.toString()),
-    tokenBAmountThreshold: new BN(maxB.toString()),
+    // Thresholds are the MAX each side may cost, transfer fee included (upward slippage bound); the
+    // debit for liquidityDelta is ≤ these by construction.
+    tokenAAmountThreshold: new BN(a.threshold.toString()),
+    tokenBAmountThreshold: new BN(b.threshold.toString()),
   });
 
   const signature = await signSendConfirm(conn, tx, signer, [positionNft], "add_liquidity");

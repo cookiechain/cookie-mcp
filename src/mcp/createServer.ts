@@ -1889,11 +1889,15 @@ export function createServer(): McpServer {
         amountA: z
           .union([z.number().positive(), z.string()])
           .optional()
-          .describe("UI amount of token A"),
+          .describe(
+            "UI amount of token A — the most that leaves the wallet, transfer fee included",
+          ),
         amountB: z
           .union([z.number().positive(), z.string()])
           .optional()
-          .describe("UI amount of token B"),
+          .describe(
+            "UI amount of token B — the most that leaves the wallet, transfer fee included",
+          ),
       },
     },
     tool(async (a: { poolPk: string; amountA?: string | number; amountB?: string | number }) =>
